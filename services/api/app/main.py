@@ -1,16 +1,26 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from .routes import router
+from .db.session import init_db
 
 app = FastAPI(title="MoveInRange API", version="0.1.0", openapi_url="/api/v1/openapi.json")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8081"],
+    allow_origins=[
+        "http://localhost:3200",
+        "http://127.0.0.1:3200",
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def startup():
+    init_db()
 
 @app.middleware("http")
 async def correlation_id(request: Request, call_next):

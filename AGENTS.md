@@ -11,3 +11,6 @@ Future agents must preserve these boundaries:
 - Maintain English and Turkish localization paths.
 - Keep tests for safety, planning, diabetes context, import idempotency, authorization, offline outbox, and accessibility.
 - Work on feature branches and open draft PRs into main; do not merge automatically.
+- Preserve canonical local service URLs: `API_BASE_URL=http://localhost:8200` and `ADMIN_BASE_URL=http://localhost:3200`.
+- Keep core mobile workflows API-backed: auth, onboarding profile, readiness, plans, exercises, sessions, glucose, insights, and offline-event sync.
+- Do not reintroduce the previous API/admin development port defaults; `tests/config.test.mjs` guards this.
