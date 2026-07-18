@@ -1,0 +1,50 @@
+# dependencies
+node_modules/
+.npm/
+.npm-cache/
+.pnpm-store/
+
+# Python
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+
+# env and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.keystore
+google-services.json
+GoogleService-Info.plist
+
+# build outputs
+dist/
+build/
+.next/
+.expo/
+coverage/
+htmlcov/
+*.tsbuildinfo
+
+# databases and generated health exports
+*.sqlite
+*.db
+*.dump
+exports/
+deletion-reports/
+
+# licensed exercise media is intentionally external
+apps/mobile/assets/exercise-media/
+services/api/media/
+
+# local tooling
+.DS_Store
+.idea/
+.vscode/

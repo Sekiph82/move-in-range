@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@moveinrange/shared-types": ["packages/shared-types/src/index.ts"],
+      "@moveinrange/health-rules": ["packages/health-rules/src/index.ts"],
+      "@moveinrange/exercise-domain": ["packages/exercise-domain/src/index.ts"],
+      "@moveinrange/design-tokens": ["packages/design-tokens/src/index.ts"]
+    }
+  }
+}
