@@ -1,0 +1,27 @@
+{
+  "name": "@moveinrange/admin",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test ../../tests/admin.test.mjs"
+  },
+  "dependencies": {
+    "@moveinrange/design-tokens": "0.1.0",
+    "@moveinrange/health-rules": "0.1.0",
+    "@moveinrange/shared-types": "0.1.0",
+    "next": "^15.3.2",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-hook-form": "^7.56.4",
+    "zod": "^3.25.28"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "@types/react": "^19.0.14",
+    "@types/react-dom": "^19.0.9",
+    "typescript": "^5.8.3"
+  }
+}

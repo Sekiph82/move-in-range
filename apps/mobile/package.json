@@ -1,0 +1,41 @@
+{
+  "name": "@moveinrange/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test ../../tests/mobile.test.mjs"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^14.1.0",
+    "@hookform/resolvers": "^5.0.1",
+    "@moveinrange/design-tokens": "0.1.0",
+    "@moveinrange/health-rules": "0.1.0",
+    "@moveinrange/shared-types": "0.1.0",
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "@tanstack/react-query": "^5.76.1",
+    "expo": "^53.0.9",
+    "expo-haptics": "^14.1.4",
+    "expo-localization": "^16.1.5",
+    "expo-notifications": "^0.31.2",
+    "expo-router": "^5.0.7",
+    "expo-secure-store": "^14.2.3",
+    "expo-speech": "^13.1.7",
+    "expo-sqlite": "^15.2.10",
+    "expo-keep-awake": "^14.1.4",
+    "react": "19.0.0",
+    "react-hook-form": "^7.56.4",
+    "react-native": "0.79.2",
+    "react-native-safe-area-context": "^5.4.0",
+    "react-native-svg": "^15.11.2",
+    "zod": "^3.25.28"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.14",
+    "typescript": "^5.8.3"
+  }
+}
