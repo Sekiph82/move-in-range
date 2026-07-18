@@ -1,4 +1,13 @@
-import { existsSync } from "node:fs";
-const migration = "services/api/alembic/versions/20260718_0001_initial.py";
-if (!existsSync(migration)) throw new Error("Initial migration is missing");
-console.log("Migration validation: initial Alembic migration present.");
+import { spawnSync } from "node:child_process";
+
+const result = spawnSync("python", ["-m", "alembic", "upgrade", "head"], {
+  cwd: "services/api",
+  stdio: "inherit",
+  env: process.env
+});
+
+if (result.error) {
+  console.error(result.error.message);
+  process.exit(1);
+}
+process.exit(result.status ?? 1);
