@@ -1,9 +1,32 @@
-import { MedicalSafetyPolicyEngine, conditionPolicies } from "@moveinrange/health-rules";
-
 const roles = ["super_admin", "clinical_reviewer", "exercise_reviewer", "content_editor", "support", "analyst"];
+const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8200").replace(/\/api\/v1\/?$/, "");
 
-export default function AdminHome() {
-  const policyCount = conditionPolicies.length;
+async function readApi(path: string, role = "super_admin") {
+  try {
+    const response = await fetch(`${apiBase}/api/v1${path}`, {
+      cache: "no-store",
+      headers: { "x-admin-role": role }
+    });
+    if (!response.ok) return { error: `API returned ${response.status}` };
+    return response.json();
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "API unavailable" };
+  }
+}
+
+export default async function AdminHome() {
+  const [policies, exercises, audit, simulation] = await Promise.all([
+    readApi("/admin/policies", "clinical_reviewer"),
+    readApi("/admin/exercises", "exercise_reviewer"),
+    readApi("/admin/audit-logs", "support"),
+    fetch(`${apiBase}/api/v1/admin/policy-simulator`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "content-type": "application/json", "x-admin-role": "clinical_reviewer" },
+      body: JSON.stringify({ energy: 2, sleep_quality: 3, pain: 7, available_minutes: 10, stress: 3 })
+    }).then((response) => response.ok ? response.json() : { error: `API returned ${response.status}` }).catch((error) => ({ error: error instanceof Error ? error.message : "API unavailable" }))
+  ]);
+
   return (
     <div className="shell">
       <nav className="nav" aria-label="Admin navigation">
@@ -12,50 +35,16 @@ export default function AdminHome() {
       </nav>
       <main className="main">
         <h2>Administration</h2>
-        <p>Draft clinical policy and exercise safety review workspace. Published policy changes require authorized clinical review.</p>
+        <p>Functional MVP administration reads real API data when the local FastAPI service is running on {apiBase}.</p>
         <section className="grid">
           <article className="card"><h3>Roles</h3><p>{roles.join(", ")}</p></article>
-          <article className="card"><h3>Policies</h3><p>{policyCount} draft rules in versioned configuration.</p></article>
-          <article className="card"><h3>Simulator</h3><PolicySimulator /></article>
+          <article className="card" id="Policies"><h3>Policies</h3><pre>{JSON.stringify(policies, null, 2)}</pre></article>
+          <article className="card" id="Exercise Review"><h3>Exercise Review</h3><p>{exercises.items?.length ?? 0} exercises loaded for review.</p><pre>{JSON.stringify((exercises.items ?? []).slice(0, 3), null, 2)}</pre></article>
+          <article className="card" id="Simulator"><h3>Simulator</h3><pre>{JSON.stringify(simulation, null, 2)}</pre></article>
+          <article className="card" id="Audit Logs"><h3>Audit Logs</h3><pre>{JSON.stringify(audit, null, 2)}</pre></article>
           <article className="card"><h3>Safety Boundary</h3><p>No insulin dose calculation, medication recommendation, diagnosis, or clinician-plan override.</p></article>
         </section>
       </main>
     </div>
   );
-}
-
-function PolicySimulator() {
-  const decision = new MedicalSafetyPolicyEngine().evaluate({
-    userId: "synthetic",
-    preferredName: "Synthetic",
-    units: "metric",
-    country: "US",
-    timezone: "America/New_York",
-    language: "en",
-    conditions: ["cardiac_rehabilitation_support"],
-    clinicianRestrictions: [],
-    sensitivities: {},
-    equipment: ["body weight"],
-    environment: "home",
-    activityLevel: "beginner",
-    preferredTrainingDays: ["Mon"],
-    dailyAvailableMinutes: 10,
-    goals: ["mobility"],
-    medicalClearance: "clinician_supervised",
-    consentAccepted: true
-  }, {
-    energy: 3,
-    sleepQuality: 3,
-    pain: 1,
-    newInjury: false,
-    dizziness: false,
-    chestDiscomfort: false,
-    unusualShortnessOfBreath: false,
-    illness: false,
-    recentFall: false,
-    availableMinutes: 10,
-    desiredSessionType: "mobility",
-    stress: 1
-  });
-  return <pre>{JSON.stringify({ action: decision.action, triggeredRules: decision.triggeredRuleIds }, null, 2)}</pre>;
 }

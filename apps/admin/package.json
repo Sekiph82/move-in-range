@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H localhost -p 3200",
     "build": "next build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test ../../tests/admin.test.mjs"

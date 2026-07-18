@@ -1,29 +1,33 @@
-import { ScrollView, Text, View, Pressable } from "react-native";
-import { DailyPlanningEngine, MedicalSafetyPolicyEngine } from "@moveinrange/health-rules";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "../../src/api";
 import { useTheme } from "../../src/theme";
-import { demoExercises, demoProfile, demoReadiness } from "../../src/mockData";
 
 export default function InsightsScreen() {
   const theme = useTheme();
-  const safety = new MedicalSafetyPolicyEngine().evaluate(demoProfile, demoReadiness, demoProfile.diabetes);
-  const plan = new DailyPlanningEngine().generate(demoProfile, demoReadiness, demoExercises, demoProfile.dailyAvailableMinutes);
+  const insights = useQuery({ queryKey: ["insights"], queryFn: () => apiFetch<any>("/insights/summary") });
+  const data = insights.data;
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Insights</Text>
-      <Text style={{ color: theme.muted, fontSize: 16 }}>Move safely. Learn your range.</Text>
+      <Text style={{ color: theme.muted, fontSize: 16 }}>Stored movement and glucose context, without treatment advice.</Text>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 8 }}>
-        <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>Safety status</Text>
-        <Text style={{ color: theme.primary, fontSize: 16 }}>{safety.action}</Text>
-        <Text style={{ color: theme.muted }}>{safety.explanation}</Text>
+        <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>Movement</Text>
+        <Text style={{ color: theme.text }}>Sessions completed: {data?.sessions_completed ?? 0}</Text>
+        <Text style={{ color: theme.text }}>Planned minutes: {data?.planned_minutes ?? 0}</Text>
+        <Text style={{ color: theme.text }}>Completed minutes: {data?.completed_minutes ?? 0}</Text>
+        <Text style={{ color: theme.text }}>Weekly completion: {Math.round((data?.weekly_completion_rate ?? 0) * 100)}%</Text>
+        <Text style={{ color: theme.text }}>Pain reports: {data?.pain_report_count ?? 0}</Text>
+        <Text style={{ color: theme.text }}>Substitutions: {data?.substitution_count ?? 0}</Text>
       </View>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 8 }}>
-        <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>{plan.totalMinutes}-minute controlled session</Text>
-        {plan.items.map((item) => (
-          <Text key={item.exerciseId} style={{ color: theme.text }}>{item.block}: {item.name} · {Math.round(item.durationSeconds / 60)} min</Text>
-        ))}
+        <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>Glucose context</Text>
+        <Text style={{ color: theme.text }}>Status: {data?.glucose?.status ?? "INSUFFICIENT_DATA"}</Text>
+        <Text style={{ color: theme.text }}>Samples: {data?.glucose?.sample_count ?? 0}</Text>
+        <Text style={{ color: theme.muted }}>{data?.glucose?.disclaimer ?? "This is not an insulin or treatment recommendation."}</Text>
       </View>
-      <Pressable accessibilityLabel="Start guided workout" style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.primary }}>
-        <Text style={{ color: theme.surface, fontWeight: "700" }}>Start guided workout</Text>
+      <Pressable accessibilityLabel="Refresh insights" onPress={() => insights.refetch()} style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.primary }}>
+        <Text style={{ color: theme.surface, fontWeight: "700" }}>{insights.isFetching ? "Refreshing..." : "Refresh insights"}</Text>
       </Pressable>
     </ScrollView>
   );

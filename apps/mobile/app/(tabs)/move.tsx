@@ -1,30 +1,37 @@
-import { ScrollView, Text, View, Pressable } from "react-native";
-import { DailyPlanningEngine, MedicalSafetyPolicyEngine } from "@moveinrange/health-rules";
+import { useState } from "react";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "../../src/api";
 import { useTheme } from "../../src/theme";
-import { demoExercises, demoProfile, demoReadiness } from "../../src/mockData";
 
 export default function MoveScreen() {
   const theme = useTheme();
-  const safety = new MedicalSafetyPolicyEngine().evaluate(demoProfile, demoReadiness, demoProfile.diabetes);
-  const plan = new DailyPlanningEngine().generate(demoProfile, demoReadiness, demoExercises, demoProfile.dailyAvailableMinutes);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<string | undefined>();
+  const exercises = useQuery({ queryKey: ["exercises", query], queryFn: () => apiFetch<any>(`/exercises?q=${encodeURIComponent(query)}&language=tr&page_size=15`) });
+  const detail = useQuery({ queryKey: ["exercise", selected], enabled: Boolean(selected), queryFn: () => apiFetch<any>(`/exercises/${selected}?language=tr`) });
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Move</Text>
-      <Text style={{ color: theme.muted, fontSize: 16 }}>Move safely. Learn your range.</Text>
-      <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 8 }}>
-        <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>Safety status</Text>
-        <Text style={{ color: theme.primary, fontSize: 16 }}>{safety.action}</Text>
-        <Text style={{ color: theme.muted }}>{safety.explanation}</Text>
-      </View>
-      <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 8 }}>
-        <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>{plan.totalMinutes}-minute controlled session</Text>
-        {plan.items.map((item) => (
-          <Text key={item.exerciseId} style={{ color: theme.text }}>{item.block}: {item.name} · {Math.round(item.durationSeconds / 60)} min</Text>
+      <TextInput accessibilityLabel="Search exercises" value={query} onChangeText={setQuery} placeholder="Search exercises" placeholderTextColor={theme.muted} style={{ minHeight: 48, borderColor: theme.border, borderWidth: 1, color: theme.text, padding: 12, borderRadius: 8 }} />
+      <View style={{ gap: 8 }}>
+        {exercises.isLoading ? <Text style={{ color: theme.muted }}>Loading exercises...</Text> : null}
+        {exercises.data?.items?.map((exercise: any) => (
+          <Pressable key={exercise.id} accessibilityLabel={`Open ${exercise.name}`} onPress={() => setSelected(exercise.id)} style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 14 }}>
+            <Text style={{ color: theme.text, fontWeight: "700" }}>{exercise.name}</Text>
+            <Text style={{ color: theme.muted }}>{exercise.body_part} - {exercise.equipment} - {exercise.target}</Text>
+          </Pressable>
         ))}
+        {exercises.data?.items?.length === 0 ? <Text style={{ color: theme.muted }}>No exercises matched that search.</Text> : null}
       </View>
-      <Pressable accessibilityLabel="Start guided workout" style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.primary }}>
-        <Text style={{ color: theme.surface, fontWeight: "700" }}>Start guided workout</Text>
-      </Pressable>
+      {detail.data ? (
+        <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 8 }}>
+          <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>{detail.data.name}</Text>
+          <Text style={{ color: theme.muted }}>{detail.data.instruction}</Text>
+          {detail.data.instruction_steps.map((step: string, index: number) => <Text key={step} style={{ color: theme.text }}>{index + 1}. {step}</Text>)}
+          <Text style={{ color: theme.muted }}>Attribution: {detail.data.media?.attribution || "No committed media; external license required."}</Text>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
