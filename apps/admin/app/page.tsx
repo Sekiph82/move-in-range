@@ -1,11 +1,14 @@
 const roles = ["super_admin", "clinical_reviewer", "exercise_reviewer", "content_editor", "support", "analyst"];
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8200").replace(/\/api\/v1\/?$/, "");
+const adminEmail = process.env.ADMIN_LOCAL_EMAIL ?? "admin@moveinrange.local";
+const adminPassword = process.env.ADMIN_LOCAL_PASSWORD ?? "MoveInRangeAdminLocal!";
 
-async function readApi(path: string, role = "super_admin") {
+async function readApi(path: string, token: string | null) {
   try {
+    if (!token) return { error: "Admin sign-in unavailable" };
     const response = await fetch(`${apiBase}/api/v1${path}`, {
       cache: "no-store",
-      headers: { "x-admin-role": role }
+      headers: { authorization: `Bearer ${token}` }
     });
     if (!response.ok) return { error: `API returned ${response.status}` };
     return response.json();
@@ -14,15 +17,32 @@ async function readApi(path: string, role = "super_admin") {
   }
 }
 
+async function adminToken() {
+  try {
+    const response = await fetch(`${apiBase}/api/v1/admin/auth/login`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: adminEmail, password: adminPassword })
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload.access_token as string;
+  } catch {
+    return null;
+  }
+}
+
 export default async function AdminHome() {
+  const token = await adminToken();
   const [policies, exercises, audit, simulation] = await Promise.all([
-    readApi("/admin/policies", "clinical_reviewer"),
-    readApi("/admin/exercises", "exercise_reviewer"),
-    readApi("/admin/audit-logs", "support"),
+    readApi("/admin/policies", token),
+    readApi("/admin/exercises", token),
+    readApi("/admin/audit-logs", token),
     fetch(`${apiBase}/api/v1/admin/policy-simulator`, {
       method: "POST",
       cache: "no-store",
-      headers: { "content-type": "application/json", "x-admin-role": "clinical_reviewer" },
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ energy: 2, sleep_quality: 3, pain: 7, available_minutes: 10, stress: 3 })
     }).then((response) => response.ok ? response.json() : { error: `API returned ${response.status}` }).catch((error) => ({ error: error instanceof Error ? error.message : "API unavailable" }))
   ]);

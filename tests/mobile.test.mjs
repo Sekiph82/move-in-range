@@ -2,6 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox.ts");
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
+const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
+
+function mirToken(exp) {
+  const body = btoa(JSON.stringify({ exp })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `mir.${body}.signature`;
+}
 
 test("offline queue never silently discards pending health records", () => {
   const outbox = new OfflineOutbox();
@@ -15,4 +21,58 @@ test("pain flow pauses and offers substitution or stop", () => {
   const action = player.reportPain("knee", 5);
   assert.equal(player.isPaused, true);
   assert.equal(action, "offer_approved_substitution");
+});
+
+test("workout timer excludes paused time and resumes from accumulated elapsed seconds", () => {
+  let now = 0;
+  const player = new GuidedWorkoutPlayerState(() => now);
+  now = 2500;
+  assert.equal(player.elapsedSeconds, 2);
+  player.pause();
+  now = 10000;
+  assert.equal(player.elapsedSeconds, 2);
+  assert.equal(player.resume(), true);
+  now = 12500;
+  assert.equal(player.elapsedSeconds, 4);
+});
+
+test("symptom flow invalidates active timer until a new readiness flow starts", () => {
+  let now = 0;
+  const player = new GuidedWorkoutPlayerState(() => now);
+  now = 3000;
+  const action = player.reportSymptoms(["dizziness"]);
+  assert.equal(action, "stop_and_show_safety_flow");
+  assert.equal(player.timerInvalidated, true);
+  assert.equal(player.elapsedSeconds, 3);
+  now = 15000;
+  assert.equal(player.resume(), false);
+  assert.equal(player.elapsedSeconds, 3);
+});
+
+test("token store restores valid access tokens and rejects expired or invalid stored values", async () => {
+  const values = new Map();
+  const store = new TokenStore({
+    getItem: async (key) => values.get(key) ?? null,
+    setItem: async (key, value) => values.set(key, value),
+    deleteItem: async (key) => values.delete(key)
+  });
+  await store.save({ access_token: mirToken(200), refresh_token: "refresh-one" });
+  assert.equal(await store.loadAccessToken(100_000), values.get("access_token"));
+  assert.equal(await store.loadRefreshToken(), "refresh-one");
+  await store.save({ access_token: mirToken(50), refresh_token: "refresh-two" });
+  assert.equal(await store.loadAccessToken(100_000), null);
+  await store.save({ access_token: "not-a-token", refresh_token: "refresh-three" });
+  assert.equal(await store.loadAccessToken(100_000), null);
+  await store.clear();
+  assert.equal(await store.loadRefreshToken(), null);
+});
+
+test("token store treats corrupted storage as signed out", async () => {
+  const store = new TokenStore({
+    getItem: async () => { throw new Error("corrupt"); },
+    setItem: async () => { throw new Error("corrupt"); },
+    deleteItem: async () => {}
+  });
+  assert.equal(await store.loadAccessToken(), null);
+  assert.equal(await store.loadRefreshToken(), null);
 });
