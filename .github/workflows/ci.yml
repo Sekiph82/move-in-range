@@ -47,4 +47,4 @@ jobs:
       - run: pytest services/api/tests
       - run: npm run build
       - run: npm run db:migrate
-      - run: npm run import:exercises
+      - run: npm run import:exercises -- tests/fixtures/exercises.sample.json
