@@ -40,6 +40,15 @@ npm.cmd run mobile
 
 The API binds to `0.0.0.0:8200`. The admin app runs on `http://localhost:3200`.
 
+The admin console signs in server-side with:
+
+```env
+LOCAL_ADMIN_EMAIL=admin@moveinrange.local
+LOCAL_ADMIN_PASSWORD=MoveInRangeAdminLocal!
+```
+
+Do not expose these values through `NEXT_PUBLIC_*`. Production must set a long random `AUTH_SECRET`, explicit `CORS_ORIGINS`, and real admin credentials.
+
 ## Dataset Import
 
 Relative path:
@@ -70,6 +79,7 @@ Use these only for local development.
 ## Verification
 
 ```powershell
+npm.cmd install
 npm.cmd run format:check
 npm.cmd run lint
 npm.cmd run typecheck
@@ -83,8 +93,40 @@ npm.cmd run security:check
 npm.cmd audit
 ```
 
+Authoritative PostgreSQL validation uses a PostgreSQL database, not SQLite:
+
+```powershell
+docker compose down -v
+docker compose up -d postgres redis
+$env:DATABASE_URL="postgresql+psycopg://moveinrange:moveinrange@localhost:5432/moveinrange"
+$env:TEST_DATABASE_URL="postgresql+psycopg://moveinrange:moveinrange@localhost:5432/moveinrange"
+npm.cmd run db:migrate
+npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
+python -m pytest services/api/tests
+```
+
+CI uses the dedicated database `moveinrange_test` and the PostgreSQL integration test fails if `TEST_DATABASE_URL` points to SQLite.
+
 ## Applications
 
 - `apps/mobile`: Expo Router mobile MVP with API-backed profile, readiness, plans, exercise library, guided workout actions, glucose logging, insights, and offline outbox helpers.
 - `apps/admin`: Next.js admin console that reads policy, exercise, audit, and simulator data from the API when it is running.
 - `services/api`: FastAPI backend with local auth, SQLAlchemy persistence, exercise import, safety, planning, sessions, glucose, insights, and admin endpoints.
+
+## Mobile Device URLs
+
+Android emulator:
+
+```powershell
+$env:EXPO_PUBLIC_API_BASE_URL="http://10.0.2.2:8200"
+npm.cmd run mobile
+```
+
+Physical device on Expo Go:
+
+```powershell
+$env:EXPO_PUBLIC_API_BASE_URL="http://<windows-lan-ip>:8200"
+npm.cmd run mobile
+```
+
+Allow Windows Firewall inbound access to port `8200`. `localhost` on a physical device points at the device, not the Windows API host.

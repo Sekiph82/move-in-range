@@ -108,6 +108,9 @@ class OfflineEvent(TimestampMixin, Base):
     idempotency_key: Mapped[str] = mapped_column(String(120), index=True)
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     status: Mapped[str] = mapped_column(String(40), default="accepted")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (UniqueConstraint("user_id", "idempotency_key"),)
 

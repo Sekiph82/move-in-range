@@ -1,11 +1,11 @@
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
-from .auth import create_token, hash_password, token_hash, verify_password
+from .auth import create_token, hash_password, password_needs_upgrade, revoke_access_token, token_hash, verify_password
 from .db.models import (
     AuditLog,
     Exercise,
@@ -24,9 +24,12 @@ from .db.models import (
 )
 from .db.session import get_db
 from .security import require_admin_role, require_user
+from .settings import get_settings
 from .services.safety import EMERGENCY_MESSAGE, evaluate_safety
 
 router = APIRouter()
+_rate_limits: dict[str, list[datetime]] = {}
+ADMIN_ROLES = {"super_admin", "clinical_reviewer", "exercise_reviewer", "content_editor", "support", "analyst"}
 
 CONDITIONS = [
     "type_1_diabetes",
@@ -150,7 +153,8 @@ def health():
 
 
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
-def register(payload: Credentials, db: Session = Depends(get_db)):
+def register(payload: Credentials, request: Request, db: Session = Depends(get_db)):
+    _rate_limit(f"register:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
     email = payload.email.strip().lower()
     if db.query(User).filter(User.email == email).one_or_none():
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "email_exists"})
@@ -170,10 +174,13 @@ def register(payload: Credentials, db: Session = Depends(get_db)):
 
 
 @router.post("/auth/login")
-def login(payload: Credentials, db: Session = Depends(get_db)):
+def login(payload: Credentials, request: Request, db: Session = Depends(get_db)):
+    _rate_limit(f"login:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
     user = db.query(User).filter(User.email == payload.email.strip().lower()).one_or_none()
     if not user or not user.password_hash or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_credentials"})
+    if password_needs_upgrade(user.password_hash):
+        user.password_hash = hash_password(payload.password)
     refresh = create_token(user.id, "refresh")
     user.refresh_token_hash = token_hash(refresh)
     db.add(AuditLog(actor_id=user.id, action="auth.login", target_type="user", target_id=user.id, redacted_payload={}))
@@ -182,7 +189,8 @@ def login(payload: Credentials, db: Session = Depends(get_db)):
 
 
 @router.post("/auth/refresh")
-def refresh(payload: RefreshPayload, db: Session = Depends(get_db)):
+def refresh(payload: RefreshPayload, request: Request, db: Session = Depends(get_db)):
+    _rate_limit(f"refresh:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
     from .auth import decode_token
 
     decoded = decode_token(payload.refresh_token, "refresh")
@@ -195,9 +203,62 @@ def refresh(payload: RefreshPayload, db: Session = Depends(get_db)):
     return _auth_response(user, next_refresh)
 
 
+@router.post("/auth/logout")
+def logout(authorization: str | None = Header(default=None), user: User = Depends(require_user), db: Session = Depends(get_db)):
+    if authorization and authorization.startswith("Bearer "):
+        revoke_access_token(authorization.removeprefix("Bearer ").strip())
+    user.refresh_token_hash = None
+    db.add(AuditLog(actor_id=user.id, action="auth.logout", target_type="user", target_id=user.id, redacted_payload={}))
+    db.commit()
+    return {"logged_out": True}
+
+
 @router.get("/auth/me")
 def me(user: User = Depends(require_user)):
     return _user_payload(user)
+
+
+@router.post("/admin/auth/login")
+def admin_login(payload: Credentials, request: Request, db: Session = Depends(get_db)):
+    _rate_limit(f"admin-login:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
+    settings = get_settings()
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).one_or_none()
+    if not user and email == settings.local_admin_email and payload.password == settings.local_admin_password:
+        user = User(
+            id="adm_" + secrets.token_hex(12),
+            email=email,
+            password_hash=hash_password(payload.password),
+            auth_provider="local",
+            role="super_admin",
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    if not user or user.role not in ADMIN_ROLES or not user.password_hash or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_admin_credentials"})
+    if password_needs_upgrade(user.password_hash):
+        user.password_hash = hash_password(payload.password)
+    refresh = create_token(user.id, "refresh")
+    user.refresh_token_hash = token_hash(refresh)
+    db.add(AuditLog(actor_id=user.id, action="admin.auth.login", target_type="admin", target_id=user.id, redacted_payload={"role": user.role}))
+    db.commit()
+    return _auth_response(user, refresh)
+
+
+@router.get("/admin/auth/me")
+def admin_me(admin: User = Depends(require_admin_role("admin"))):
+    return {"admin": _user_payload(admin)}
+
+
+@router.post("/admin/auth/logout")
+def admin_logout(authorization: str | None = Header(default=None), admin: User = Depends(require_admin_role("admin")), db: Session = Depends(get_db)):
+    if authorization and authorization.startswith("Bearer "):
+        revoke_access_token(authorization.removeprefix("Bearer ").strip())
+    admin.refresh_token_hash = None
+    db.add(AuditLog(actor_id=admin.id, action="admin.auth.logout", target_type="admin", target_id=admin.id, redacted_payload={}))
+    db.commit()
+    return {"logged_out": True}
 
 
 @router.get("/profile")
@@ -258,13 +319,16 @@ def equipment(db: Session = Depends(get_db)):
 
 @router.post("/readiness-checks", status_code=status.HTTP_201_CREATED)
 def create_readiness(payload: ReadinessPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    _rate_limit(f"readiness:{user.id}", get_settings().auth_rate_limit * 3)
     decision = evaluate_safety(payload.model_dump())
+    created_at = datetime.now(UTC)
     check = ReadinessCheck(
         id="rdn_" + secrets.token_hex(12),
         user_id=user.id,
         payload=payload.model_dump(),
-        decision={**decision, "timestamp": datetime.now(UTC).isoformat()},
+        decision={**decision, "timestamp": created_at.isoformat()},
         available_minutes=payload.available_minutes,
+        created_at=created_at,
     )
     db.add(check)
     db.add(_safety_decision_log(user.id, decision, payload.model_dump()))
@@ -351,6 +415,7 @@ def favorite(exercise_id: str, user: User = Depends(require_user), db: Session =
 
 @router.post("/plans/daily/generate", status_code=status.HTTP_201_CREATED)
 def generate_daily(payload: ReadinessPayload | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    _rate_limit(f"daily-plan:{user.id}", get_settings().auth_rate_limit * 2)
     readiness = payload or _latest_or_default_readiness(user.id, db)
     decision = evaluate_safety(readiness.model_dump())
     if decision["action"] == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
@@ -376,21 +441,30 @@ def legacy_daily_plan(payload: ReadinessPayload, user: User = Depends(require_us
 @router.post("/plans/weekly/generate", status_code=status.HTTP_201_CREATED)
 def generate_weekly(user: User = Depends(require_user), db: Session = Depends(get_db)):
     readiness = _latest_or_default_readiness(user.id, db)
-    daily = _daily_plan_payload(user.id, readiness.model_dump(), evaluate_safety(readiness.model_dump()), db)
+    decision = evaluate_safety(readiness.model_dump())
+    daily = _daily_plan_payload(user.id, readiness.model_dump(), decision, db)
+    profile = _profile_for(user.id, db)
+    preferred_days = (profile.health_payload or {}).get("preferred_training_days", ["Mon", "Wed", "Fri"])
     days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    payload = {
-        "id": "week_" + secrets.token_hex(8),
-        "days": [
+    previous_was_movement = False
+    schedule = []
+    for day in days:
+        planned_movement = day in preferred_days and not previous_was_movement and decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"
+        status_value = "planned" if planned_movement else "recovery"
+        schedule.append(
             {
                 "day": day,
-                "session_type": "movement" if day in {"Mon", "Wed", "Fri"} else "recovery",
-                "planned_duration": daily["total_minutes"] if day in {"Mon", "Wed", "Fri"} else 0,
-                "intensity": "low" if day in {"Tue", "Thu", "Sun"} else daily["intensity"],
-                "status": "planned" if day in {"Mon", "Wed", "Fri"} else "recovery",
-                "safety_modified": daily["safety_decision"]["action"] != "READY",
+                "session_type": "movement" if planned_movement else "recovery",
+                "planned_duration": daily["total_minutes"] if planned_movement else 0,
+                "intensity": "low" if decision["action"] != "READY" or not planned_movement else daily["intensity"],
+                "status": status_value,
+                "safety_modified": decision["action"] != "READY",
             }
-            for day in days
-        ],
+        )
+        previous_was_movement = planned_movement
+    payload = {
+        "id": "week_" + secrets.token_hex(8),
+        "days": schedule,
         "explanation": "Weekly plan spaces movement days with recovery days and keeps intensity conservative after safety modifications.",
     }
     db.add(Plan(id=payload["id"], user_id=user.id, plan_type="weekly", payload=payload, safety_action=daily["safety_decision"]["action"]))
@@ -406,18 +480,32 @@ def current_weekly(user: User = Depends(require_user), db: Session = Depends(get
 
 @router.post("/plans/monthly/generate", status_code=status.HTTP_201_CREATED)
 def generate_monthly(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    readiness = _latest_or_default_readiness(user.id, db)
+    readiness_payload = readiness.model_dump()
+    decision = evaluate_safety(readiness_payload)
+    hold_reason = None
+    if decision["action"] == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
+        hold_reason = "safety-block hold"
+    elif readiness_payload.get("pain", 0) >= 7:
+        hold_reason = "pain hold"
+    elif decision["action"] in {"DELAY_AND_RECHECK", "LOW_INTENSITY_ONLY", "FOLLOW_CLINICIAN_PLAN"}:
+        hold_reason = "low-readiness or clinician-restriction hold"
+    phases = [
+        (1, "Adaptation", "Establish routine and comfortable movement range."),
+        (2, "Duration progression", "Add modest duration only if readiness and pain history remain stable."),
+        (3, "Modest intensity or volume progression", "Progress one variable at a time; no simultaneous aggressive increase."),
+        (4, "Recovery and performance review", "Consolidate, review symptoms, and avoid automatic load increase."),
+    ]
     payload = {
         "id": "month_" + secrets.token_hex(8),
         "program_start_date": datetime.now(UTC).date().isoformat(),
         "weeks": [
-            {"week": 1, "phase": "Adaptation", "progression_reason": "Establish routine and comfortable movement range.", "hold": False},
-            {"week": 2, "phase": "Duration progression", "progression_reason": "Add modest duration only if readiness and pain history remain stable.", "hold": False},
-            {"week": 3, "phase": "Modest intensity or volume progression", "progression_reason": "Progress one variable at a time; no simultaneous aggressive increase.", "hold": False},
-            {"week": 4, "phase": "Recovery and performance review", "progression_reason": "Consolidate, review symptoms, and avoid automatic load increase.", "hold": False},
+            {"week": week, "phase": phase, "progression_reason": hold_reason or reason, "hold": hold_reason is not None and week > 1}
+            for week, phase, reason in phases
         ],
         "blocking_rules": ["pain increase", "concerning symptoms", "low readiness", "poor adherence", "clinician restriction", "safety block"],
     }
-    db.add(Plan(id=payload["id"], user_id=user.id, plan_type="monthly", payload=payload, safety_action="READY"))
+    db.add(Plan(id=payload["id"], user_id=user.id, plan_type="monthly", payload=payload, safety_action=decision["action"]))
     db.commit()
     return {"plan": payload}
 
@@ -430,6 +518,9 @@ def current_monthly(user: User = Depends(require_user), db: Session = Depends(ge
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 def start_session(payload: SessionStartPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    latest = db.query(ReadinessCheck).filter(ReadinessCheck.user_id == user.id).order_by(desc(ReadinessCheck.created_at)).first()
+    if latest and latest.decision.get("action") == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "readiness_blocks_workout", "safety_message": latest.decision.get("explanation")})
     if payload.resume:
         existing = db.query(SessionRecord).filter(SessionRecord.user_id == user.id, SessionRecord.status == "in_progress").order_by(desc(SessionRecord.created_at)).first()
         if existing:
@@ -472,7 +563,10 @@ def add_session_event(session_id: str, payload: EventPayload, user: User = Depen
 
 @router.post("/sessions/{session_id}/pain")
 def report_pain(session_id: str, payload: dict[str, Any], user: User = Depends(require_user), db: Session = Depends(get_db)):
+    _get_session(session_id, user.id, db)
     severity = int(payload.get("severity", 0))
+    if severity < 0 or severity > 10 or not payload.get("location"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_pain_report"})
     action = "stop" if severity >= 7 else "offer_approved_substitution"
     event = EventPayload(event_type="pain_report", idempotency_key=payload.get("idempotency_key"), payload={**payload, "action": action})
     return {**add_session_event(session_id, event, user, db), "action": action}
@@ -482,6 +576,7 @@ def report_pain(session_id: str, payload: dict[str, Any], user: User = Depends(r
 def report_symptoms(session_id: str, payload: dict[str, Any], user: User = Depends(require_user), db: Session = Depends(get_db)):
     session = _get_session(session_id, user.id, db)
     session.status = "stopped_for_symptoms"
+    session.payload = {**(session.payload or {}), "requires_new_readiness": True, "active_timer_invalidated": True}
     event = EventPayload(event_type="symptom_report", idempotency_key=payload.get("idempotency_key"), payload={**payload, "safety_message": EMERGENCY_MESSAGE})
     result = add_session_event(session_id, event, user, db)
     db.commit()
@@ -491,6 +586,8 @@ def report_symptoms(session_id: str, payload: dict[str, Any], user: User = Depen
 @router.post("/sessions/{session_id}/complete")
 def complete_session(session_id: str, payload: dict[str, Any], user: User = Depends(require_user), db: Session = Depends(get_db)):
     session = _get_session(session_id, user.id, db)
+    if session.status == "stopped_for_symptoms":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "session_stopped_for_symptoms", "safety_message": EMERGENCY_MESSAGE})
     session.status = "completed" if payload.get("completed", True) else "partial"
     session.payload = {**(session.payload or {}), "completion": payload}
     db.add(AuditLog(actor_id=user.id, action="session.complete", target_type="session", target_id=session.id, redacted_payload={"status": session.status}))
@@ -500,6 +597,9 @@ def complete_session(session_id: str, payload: dict[str, Any], user: User = Depe
 
 @router.post("/glucose", status_code=status.HTTP_201_CREATED)
 def glucose(payload: GlucosePayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    _rate_limit(f"glucose:{user.id}", get_settings().auth_rate_limit * 5)
+    if payload.session_id:
+        _get_session(payload.session_id, user.id, db)
     canonical = round(payload.value * 18.0182) if payload.unit == "mmol/L" else round(payload.value)
     entry = GlucoseEntry(
         id="glu_" + secrets.token_hex(12),
@@ -523,14 +623,29 @@ def legacy_glucose(payload: GlucosePayload, user: User = Depends(require_user), 
 
 @router.post("/offline-events", status_code=status.HTTP_201_CREATED)
 def offline_event(payload: EventPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    _rate_limit(f"offline-events:{user.id}", get_settings().auth_rate_limit * 10)
+    allowed_events = {"readiness", "workout_progress", "pain_report", "symptom_report", "session_completion", "glucose", "post_workout_feedback"}
+    if payload.event_type not in allowed_events:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_offline_event_type"})
     key = payload.idempotency_key or secrets.token_hex(12)
     existing = db.query(OfflineEvent).filter(OfflineEvent.user_id == user.id, OfflineEvent.idempotency_key == key).one_or_none()
     if existing:
-        return {"event": {"id": existing.id, "status": existing.status}, "duplicate": True}
-    event = OfflineEvent(id="off_" + secrets.token_hex(12), user_id=user.id, idempotency_key=key, event_type=payload.event_type, payload=payload.payload)
+        return {"event": _offline_payload(existing), "duplicate": True}
+    status_value = "failed" if payload.payload.get("failed") else "accepted"
+    event = OfflineEvent(
+        id="off_" + secrets.token_hex(12),
+        user_id=user.id,
+        idempotency_key=key,
+        event_type=payload.event_type,
+        status=status_value,
+        retry_count=int(payload.payload.get("retry_count", 0)),
+        last_error=payload.payload.get("last_error"),
+        processed_at=datetime.now(UTC) if status_value == "accepted" else None,
+        payload=payload.payload,
+    )
     db.add(event)
     db.commit()
-    return {"event": {"id": event.id, "status": event.status}, "duplicate": False}
+    return {"event": _offline_payload(event), "duplicate": False}
 
 
 @router.get("/insights/summary")
@@ -569,7 +684,7 @@ def insights(user: User = Depends(require_user), db: Session = Depends(get_db)):
 
 @router.get("/admin/policies")
 def policies(admin=Depends(require_admin_role("clinical_reviewer"))):
-    return {"admin": admin["id"], "policies": [{"version": "draft-2026-07-18", "status": "draft", "clinical_review_state": "draft"}]}
+    return {"admin": admin.id, "policies": [{"version": "draft-2026-07-18", "status": "draft", "clinical_review_state": "draft"}]}
 
 
 @router.get("/admin/exercises")
@@ -584,13 +699,27 @@ def audit_logs(admin=Depends(require_admin_role("support")), db: Session = Depen
 
 
 @router.post("/admin/policy-simulator")
-def policy_simulator(payload: ReadinessPayload, admin=Depends(require_admin_role("clinical_reviewer"))):
+def policy_simulator(payload: ReadinessPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    _rate_limit(f"admin-simulator:{admin.id}", get_settings().auth_rate_limit * 3)
     decision = evaluate_safety(payload.model_dump())
-    return {"admin": admin["id"], "decision": decision, "rejected_exercises": [], "generated_plan_allowed": decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"}
+    db.add(AuditLog(actor_id=admin.id, action="admin.policy.simulate", target_type="policy", target_id=decision["policy_version"], redacted_payload={"action": decision["action"]}))
+    db.commit()
+    return {"admin": admin.id, "decision": decision, "rejected_exercises": [], "generated_plan_allowed": decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"}
 
 
 def _auth_response(user: User, refresh: str) -> dict[str, Any]:
     return {"user": _user_payload(user), "access_token": create_token(user.id), "refresh_token": refresh, "token_type": "bearer"}
+
+
+def _rate_limit(key: str, limit: int) -> None:
+    settings = get_settings()
+    now = datetime.now(UTC)
+    window_start = now - timedelta(seconds=settings.rate_limit_window_seconds)
+    hits = [hit for hit in _rate_limits.get(key, []) if hit >= window_start]
+    if len(hits) >= limit:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail={"code": "rate_limited"})
+    hits.append(now)
+    _rate_limits[key] = hits
 
 
 def _user_payload(user: User) -> dict[str, Any]:
@@ -752,6 +881,16 @@ def _event_payload(event: SessionEvent) -> dict[str, Any]:
 
 def _glucose_payload(entry: GlucoseEntry) -> dict[str, Any]:
     return {"id": entry.id, "value": entry.value, "unit": entry.unit, "canonical_mg_dl": entry.canonical_mg_dl, "timing": entry.timing, "created_at": entry.created_at.isoformat() if entry.created_at else None}
+
+
+def _offline_payload(event: OfflineEvent) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "status": event.status,
+        "retry_count": event.retry_count,
+        "last_error": event.last_error,
+        "processed_at": event.processed_at.isoformat() if event.processed_at else None,
+    }
 
 
 def _safety_decision_log(user_id: str, decision: dict[str, Any], inputs: dict[str, Any]):

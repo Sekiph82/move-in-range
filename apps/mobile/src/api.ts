@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { TokenStore } from "./storage/tokenStore";
 
 const configuredBase = process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:8200";
 export const API_BASE_URL = configuredBase.replace(/\/api\/v1\/?$/, "");
@@ -6,34 +7,40 @@ const API_V1 = `${API_BASE_URL}/api/v1`;
 const demoEmail = "demo@moveinrange.local";
 const demoPassword = "MoveInRangeLocalDemo!";
 
-let memoryToken: string | null = null;
-let memoryRefreshToken: string | null = null;
+const memoryTokens: Record<string, string | null> = { access_token: null, refresh_token: null };
 
-async function secureGet(key: string) {
-  try {
-    return await SecureStore.getItemAsync(key);
-  } catch {
-    return key === "access_token" ? memoryToken : memoryRefreshToken;
+const tokenStore = new TokenStore({
+  async getItem(key: string) {
+    try {
+      return await SecureStore.getItemAsync(key);
+    } catch {
+      return memoryTokens[key] ?? null;
+    }
+  },
+  async setItem(key: string, value: string) {
+    memoryTokens[key] = value;
+    try {
+      await SecureStore.setItemAsync(key, value);
+    } catch {
+      // Unsupported runtimes use memory only; this is not durable persistence.
+    }
+  },
+  async deleteItem(key: string) {
+    memoryTokens[key] = null;
+    try {
+      await SecureStore.deleteItemAsync(key);
+    } catch {
+      // Unsupported runtimes use memory only; this is not durable persistence.
+    }
   }
-}
-
-async function secureSet(key: string, value: string) {
-  if (key === "access_token") memoryToken = value;
-  if (key === "refresh_token") memoryRefreshToken = value;
-  try {
-    await SecureStore.setItemAsync(key, value);
-  } catch {
-    // In tests or unsupported runtimes the in-memory fallback keeps the session usable.
-  }
-}
+});
 
 async function storeTokens(payload: { access_token: string; refresh_token: string }) {
-  await secureSet("access_token", payload.access_token);
-  await secureSet("refresh_token", payload.refresh_token);
+  await tokenStore.save(payload);
 }
 
 export async function ensureLocalSession() {
-  const existing = await secureGet("access_token");
+  const existing = await tokenStore.loadAccessToken();
   if (existing) return existing;
   const credentials = { email: demoEmail, password: demoPassword };
   let response = await fetch(`${API_V1}/auth/login`, {
@@ -65,7 +72,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     }
   });
   if (response.status === 401) {
-    memoryToken = null;
+    await tokenStore.clear();
     throw new Error("Session expired. Please retry after signing in again.");
   }
   if (!response.ok) {
