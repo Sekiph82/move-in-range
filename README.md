@@ -1,53 +1,90 @@
 # MoveInRange
 
-**Health-aware movement planning**
-Move safely. Learn your range.
+Health-aware movement planning. Move safely. Learn your range.
 
-MoveInRange is a monorepo containing an Expo React Native mobile app, FastAPI backend, Next.js admin console, shared deterministic health-rule packages, exercise import tooling, CI, and safety documentation.
+MoveInRange is a monorepo with an Expo mobile MVP, FastAPI API, Next.js admin console, deterministic safety rules, and exercise dataset import tooling.
 
 MoveInRange does not diagnose, prescribe medication, calculate insulin doses, recommend insulin changes, override clinician restrictions, or provide emergency care.
 
-## Applications
+## Canonical Local URLs
 
-- apps/mobile: Expo Router mobile application with Today, Plan, Move, Insights, and Profile tabs.
-- apps/admin: Next.js App Router administration console for policies, exercise review, simulator, audit logs, and feature flags.
-- services/api: FastAPI backend with versioned /api/v1 routes, SQLAlchemy models, Alembic migration, importer, and tests.
-- packages/health-rules: deterministic medical safety, planning, eligibility, and diabetes context engines.
-- packages/exercise-domain: exercise normalization, classification, search, and substitution helpers.
+```env
+API_BASE_URL=http://localhost:8200
+ADMIN_BASE_URL=http://localhost:3200
+EXPO_PUBLIC_API_BASE_URL=http://localhost:8200
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8200
+```
+
+Android emulator users should set `EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:8200`. Expo Go on a physical device must use the Windows computer LAN IPv4 address, not `localhost`.
 
 ## Windows PowerShell Setup
 
-~~~powershell
-git clone https://github.com/Sekiph82/move-in-range.git
-cd move-in-range
-git checkout codex/initial-moveinrange-platform
+Run from:
+
+```powershell
+cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
 copy .env.example .env
 npm.cmd install
 docker compose up -d postgres redis
 npm.cmd run db:migrate
 npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
 npm.cmd run api
+```
+
+In separate terminals:
+
+```powershell
 npm.cmd run admin
 npm.cmd run mobile
-~~~
+```
 
-PowerShell may block npm.ps1; use npm.cmd.
+The API binds to `0.0.0.0:8200`. The admin app runs on `http://localhost:3200`.
 
-## Requirements
+## Dataset Import
 
-- Node.js 20 or newer. This workspace was inspected with Node v24.14.0.
-- Python 3.12 or newer for the FastAPI service.
-- Docker Desktop for PostgreSQL and Redis.
-- Expo Go or an Android emulator for mobile development. iOS device builds are not available from Windows without Apple tooling.
+Relative path:
 
-## Verification Commands
+```cmd
+npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
+```
 
-~~~powershell
+Absolute path:
+
+```cmd
+npm.cmd run import:exercises -- "C:\Users\sekip\Desktop\MoveInRange-Workspace\exercises-dataset-main\data\exercises.json"
+```
+
+Verified local import: 1,324 exercises, 0 failed rows, 10 instruction locales. Third-party media is not committed; metadata and attribution are retained.
+
+## Local Demo Account
+
+The mobile app can create or reuse a local development account automatically:
+
+```text
+demo@moveinrange.local
+MoveInRangeLocalDemo!
+```
+
+Use these only for local development.
+
+## Verification
+
+```powershell
+npm.cmd run format:check
 npm.cmd run lint
 npm.cmd run typecheck
 npm.cmd run test
 npm.cmd run build
+npm.cmd run db:migrate
 npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
-~~~
+ruff check services/api
+python -m pytest services/api/tests
+npm.cmd run security:check
+npm.cmd audit
+```
 
-See docs/TESTING.md and docs/DEPLOYMENT.md for details.
+## Applications
+
+- `apps/mobile`: Expo Router mobile MVP with API-backed profile, readiness, plans, exercise library, guided workout actions, glucose logging, insights, and offline outbox helpers.
+- `apps/admin`: Next.js admin console that reads policy, exercise, audit, and simulator data from the API when it is running.
+- `services/api`: FastAPI backend with local auth, SQLAlchemy persistence, exercise import, safety, planning, sessions, glucose, insights, and admin endpoints.
