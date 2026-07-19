@@ -21,7 +21,7 @@ type Props = {
 };
 
 const routeMeta: Record<WorkflowKind, RouteMeta> = {
-  auth: { title: "Sign in", subtitle: "A local demo session is created only after you continue." },
+  auth: { title: "Sign in", subtitle: "Create or restore your secure MoveInRange account." },
   onboarding: { title: "Onboarding", subtitle: "Twenty-two focused steps capture context before planning." },
   readiness: { title: "Readiness", subtitle: "A daily safety check gates movement intensity." },
   "quick-session": { title: "Quick session", subtitle: "Create a short plan from available time and constraints." },

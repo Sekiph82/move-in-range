@@ -1,15 +1,96 @@
+import { useMemo, useState } from "react";
+import { View } from "react-native";
+import { router } from "expo-router";
 import { useMutation } from "@tanstack/react-query";
-import { saveProfile } from "../../api";
-import { ActionButton, BodyText, ErrorText, Panel, SecondaryLink } from "../shared/ui";
+import { loginUser, logoutUser, registerUser } from "../../api";
+import { forgotPasswordSchema, loginSchema, registerSchema } from "../validation/schemas";
+import { ActionButton, BodyText, ChoiceChip, ErrorText, Panel, SecondaryLink, TextField } from "../shared/ui";
 
-export function AuthScreen() {
-  const authMutation = useMutation({ mutationFn: () => saveProfile("en") });
+type AuthMode = "login" | "register" | "forgot-password" | "session-expired";
+
+export function AuthScreen({ mode = "login" }: { mode?: AuthMode }) {
+  const [preferredName, setPreferredName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [marketingConsent, setMarketingConsent] = useState(false);
+  const [rememberSession, setRememberSession] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const loginValidation = useMemo(() => loginSchema.safeParse({ email, password, rememberSession }), [email, password, rememberSession]);
+  const registerValidation = useMemo(() => registerSchema.safeParse({ preferredName, email, password, confirmPassword, acceptedTerms, marketingConsent }), [preferredName, email, password, confirmPassword, acceptedTerms, marketingConsent]);
+  const forgotValidation = useMemo(() => forgotPasswordSchema.safeParse({ email }), [email]);
+
+  const login = useMutation({
+    mutationFn: () => loginUser({ email, password }),
+    onSuccess: () => router.replace("/onboarding")
+  });
+  const register = useMutation({
+    mutationFn: () => registerUser({ preferredName, email, password, marketingConsent }),
+    onSuccess: () => router.replace("/onboarding")
+  });
+  const logout = useMutation({ mutationFn: logoutUser, onSuccess: () => router.replace("/auth/login") });
+
+  if (mode === "session-expired") {
+    return (
+      <Panel title="Session expired">
+        <BodyText>Your secure session expired. Sign in again to continue where you left off.</BodyText>
+        <ActionButton label="Sign in again" onPress={() => router.replace("/auth/login")} />
+      </Panel>
+    );
+  }
+
+  if (mode === "forgot-password") {
+    const errors = forgotValidation.success ? [] : forgotValidation.error.issues.map((issue) => issue.message);
+    return (
+      <Panel title="Reset password">
+        <BodyText muted>Enter your email. If the account exists, MoveInRange will start the recovery flow.</BodyText>
+        <TextField label="Email" keyboardType="email-address" value={email} onChangeText={setEmail} />
+        {errors.map((error) => <BodyText key={error} muted>{error}</BodyText>)}
+        <ActionButton label="Continue" disabled={!forgotValidation.success} onPress={() => router.replace("/auth/login")} />
+        <SecondaryLink href="/auth/login" label="Back to sign in" />
+      </Panel>
+    );
+  }
+
+  if (mode === "register") {
+    const errors = registerValidation.success ? [] : registerValidation.error.issues.map((issue) => `${String(issue.path[0] ?? "form")}: ${issue.message}`);
+    return (
+      <Panel title="Create your account">
+        <TextField label="Preferred name" value={preferredName} onChangeText={setPreferredName} />
+        <TextField label="Email" keyboardType="email-address" value={email} onChangeText={setEmail} />
+        <TextField label="Password" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} />
+        <TextField label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry={!showPassword} />
+        <View style={{ gap: 8 }}>
+          <ChoiceChip label={showPassword ? "Hide password" : "Show password"} selected={showPassword} onPress={() => setShowPassword(!showPassword)} />
+          <ChoiceChip label="I accept the terms and wellness limitation" selected={acceptedTerms} onPress={() => setAcceptedTerms(!acceptedTerms)} />
+          <ChoiceChip label="Send me product updates" selected={marketingConsent} onPress={() => setMarketingConsent(!marketingConsent)} />
+        </View>
+        {errors.map((error) => <BodyText key={error} muted>{error}</BodyText>)}
+        <ActionButton label={register.isPending ? "Creating account..." : "Create account"} disabled={!registerValidation.success} onPress={() => register.mutate()} />
+        <SecondaryLink href="/auth/login" label="Already have an account? Sign in" />
+        <ErrorText error={register.error} />
+      </Panel>
+    );
+  }
+
+  const errors = loginValidation.success ? [] : loginValidation.error.issues.map((issue) => `${String(issue.path[0] ?? "form")}: ${issue.message}`);
   return (
-    <Panel title="Demo session">
-      <BodyText muted>The app signs into the local API demo account, then stores tokens in SecureStore when available.</BodyText>
-      <ActionButton label={authMutation.isPending ? "Starting..." : "Start local session"} onPress={() => authMutation.mutate()} />
-      <SecondaryLink href="/onboarding" label="Continue to onboarding" />
-      <ErrorText error={authMutation.error} />
+    <Panel title="Sign in">
+      <TextField label="Email" keyboardType="email-address" value={email} onChangeText={setEmail} />
+      <TextField label="Password" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} />
+      <View style={{ gap: 8 }}>
+        <ChoiceChip label={showPassword ? "Hide password" : "Show password"} selected={showPassword} onPress={() => setShowPassword(!showPassword)} />
+        <ChoiceChip label="Remember this session" selected={rememberSession} onPress={() => setRememberSession(!rememberSession)} />
+      </View>
+      {errors.map((error) => <BodyText key={error} muted>{error}</BodyText>)}
+      <ActionButton label={login.isPending ? "Signing in..." : "Sign in"} disabled={!loginValidation.success} onPress={() => login.mutate()} />
+      <SecondaryLink href="/auth/register" label="Create an account" />
+      <SecondaryLink href="/auth/forgot-password" label="Forgot password?" />
+      {process.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN === "true" ? <BodyText muted>Development-only demo login is enabled for this build.</BodyText> : null}
+      <ActionButton label="Clear saved session" onPress={() => logout.mutate()} />
+      <ErrorText error={login.error ?? logout.error} />
     </Panel>
   );
 }

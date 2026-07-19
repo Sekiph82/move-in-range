@@ -67,7 +67,7 @@ export function LoadingState({ label = "Loading" }: { label?: string }) {
   );
 }
 
-export function TextField({ label, value, onChangeText, keyboardType = "default", multiline = false }: { label: string; value: string; onChangeText: (value: string) => void; keyboardType?: "default" | "number-pad" | "email-address"; multiline?: boolean }) {
+export function TextField({ label, value, onChangeText, keyboardType = "default", multiline = false, secureTextEntry = false }: { label: string; value: string; onChangeText: (value: string) => void; keyboardType?: "default" | "number-pad" | "email-address"; multiline?: boolean; secureTextEntry?: boolean }) {
   const theme = useTheme();
   return (
     <View style={{ gap: 6 }}>
@@ -78,6 +78,7 @@ export function TextField({ label, value, onChangeText, keyboardType = "default"
         value={value}
         onChangeText={onChangeText}
         multiline={multiline}
+        secureTextEntry={secureTextEntry}
         style={{
           minHeight: multiline ? 84 : 48,
           borderColor: theme.border,
