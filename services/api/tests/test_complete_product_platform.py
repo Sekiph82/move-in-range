@@ -97,6 +97,17 @@ def test_complete_product_platform_user_workflow(tmp_path, monkeypatch):
     deletion_job = client.post("/api/v1/privacy/deletion-jobs", headers=headers, json={"payload": {"deletion_type": "selected_health_data"}})
     assert export_job.status_code == 201
     assert deletion_job.status_code == 201
+    download_url = export_job.json()["job"]["download_url"]
+    download = client.get(download_url, headers=headers)
+    assert download.status_code == 200, download.text
+    archive = download.json()["archive"]
+    assert archive["manifest"]["schema"] == "moveinrange.privacy-export.v1"
+    assert "diabetes" in archive
+    assert download.json()["checksum_sha256"] == export_job.json()["job"]["payload"]["checksum_sha256"]
+    listed_exports = client.get("/api/v1/privacy/export-jobs", headers=headers).json()["items"]
+    assert listed_exports[0]["download_available"] is True
+    assert "archive" not in listed_exports[0]["payload"]
+    assert client.get("/api/v1/privacy/deletion-jobs", headers=headers).json()["items"][0]["status"] == "requested"
     assert client.get("/api/v1/privacy/export-jobs", headers=other_headers).json()["items"] == []
 
     caregiver = client.post("/api/v1/caregivers/invite", headers=headers, json={"email": "care@example.test", "scopes": ["session_completion"]})
@@ -126,7 +137,7 @@ def test_platform_service_contracts_are_deterministic():
 
 def test_admin_complete_platform_surfaces(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
-    registered, _ = _register(client, "admin-visible-user@example.test")
+    registered, user_headers = _register(client, "admin-visible-user@example.test")
     _create_admin_user("admin-complete@example.test", "super_admin")
     admin_headers = _admin_headers(client, "admin-complete@example.test")
 
@@ -154,6 +165,12 @@ def test_admin_complete_platform_surfaces(tmp_path, monkeypatch):
         assert patched.status_code == 200, patched.text
 
     assert client.get("/api/v1/admin/system", headers=admin_headers).status_code == 200
+    assert client.post("/api/v1/diabetes/context", headers=user_headers, json={"payload": {"value": 120, "unit": "mg/dL"}}).status_code == 201
+    deletion = client.post("/api/v1/privacy/deletion-jobs", headers=user_headers, json={"payload": {"deletion_type": "selected_health_data"}})
+    processed = client.post(f"/api/v1/admin/privacy-jobs/deletion/{deletion.json()['job']['id']}/process", headers=admin_headers, json={"payload": {"rationale": "test"}})
+    assert processed.status_code == 200, processed.text
+    assert processed.json()["job"]["status"] == "completed"
+    assert processed.json()["job"]["payload"]["deleted_counts"]["diabetes"] == 1
     assert client.get("/api/v1/admin/privacy-jobs", headers=admin_headers).status_code == 200
     assert client.get("/api/v1/admin/import-jobs", headers=admin_headers).status_code == 200
     assert client.get("/api/v1/admin/notifications", headers=admin_headers).status_code == 200

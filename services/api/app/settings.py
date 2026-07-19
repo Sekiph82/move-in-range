@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     auth_rate_limit: int = 20
     service_version: str = "0.1.0-rc"
     enable_development_reset_preview: bool = True
+    product_web_base_url: str = "http://localhost:3210"
+    email_sender: str = "console"
+    email_from: str = "no-reply@moveinrange.local"
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = False
+    smtp_timeout_seconds: int = 10
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -45,6 +54,8 @@ class Settings(BaseSettings):
             raise ValueError("Production CORS origins may not contain wildcard")
         if production and self.local_admin_password == DEFAULT_LOCAL_ADMIN_PASSWORD:
             raise ValueError("Production requires a non-default LOCAL_ADMIN_PASSWORD")
+        if production and self.email_sender == "console":
+            raise ValueError("Production requires a non-console EMAIL_SENDER")
         return self
 
 

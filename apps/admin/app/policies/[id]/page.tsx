@@ -21,9 +21,8 @@ export default async function PolicyDetailPage({ params, searchParams }: { param
       <form className="form-grid" action="/api/admin-session/mutate" method="post">
         <h3>Edit draft</h3>
         <input type="hidden" name="csrf" value={csrf} />
-        <input type="hidden" name="method" value="PATCH" />
-        <input type="hidden" name="path" value={`/admin/policies/${policy.version ?? id}`} />
-        <input type="hidden" name="redirectTo" value={`/policies/${policy.version ?? id}`} />
+        <input type="hidden" name="operation" value="policy_draft_update" />
+        <input type="hidden" name="policy_id" value={policy.version ?? id} />
         <label>Status<select name="status" defaultValue={policy.status ?? "draft"}><option value="draft">Draft</option><option value="submitted">Submitted</option><option value="published">Published</option></select></label>
         <label>Clinical review<select name="clinical_review_state" defaultValue={policy.clinical_review_state ?? "draft"}><option value="draft">Draft</option><option value="submitted">Submitted for review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label>
         <button type="submit">Save policy edit</button>
@@ -32,9 +31,8 @@ export default async function PolicyDetailPage({ params, searchParams }: { param
         <form key={action} className="form-grid" action="/api/admin-session/mutate" method="post">
           <h3>{action}</h3>
           <input type="hidden" name="csrf" value={csrf} />
-          <input type="hidden" name="method" value="POST" />
-          <input type="hidden" name="path" value={`/admin/policies/${policy.version ?? id}/${action}`} />
-          <input type="hidden" name="redirectTo" value={`/policies/${policy.version ?? id}`} />
+          <input type="hidden" name="operation" value={`policy_${action}`} />
+          <input type="hidden" name="policy_id" value={policy.version ?? id} />
           <label>Rationale<input name="rationale" defaultValue={`Closed beta ${action} validation`} /></label>
           <button type="submit">{action}</button>
         </form>

@@ -22,9 +22,8 @@ export default async function ExerciseDetailPage({ params, searchParams }: { par
       <form className="form-grid" action="/api/admin-session/mutate" method="post">
         <h3>Exercise content and safety</h3>
         <input type="hidden" name="csrf" value={csrf} />
-        <input type="hidden" name="method" value="PATCH" />
-        <input type="hidden" name="path" value={`/admin/exercises/${id}`} />
-        <input type="hidden" name="redirectTo" value={`/exercises/${id}`} />
+        <input type="hidden" name="operation" value="exercise_content_update" />
+        <input type="hidden" name="exercise_id" value={id} />
         <label>Turkish title<input name="turkish_title" defaultValue={detail.turkish?.name ?? ""} /></label>
         <label>Turkish instructions<textarea name="turkish_instructions" defaultValue={detail.turkish?.instruction ?? ""} /></label>
         <label>Body part<input name="body_part" defaultValue={exercise.body_part ?? ""} /></label>

@@ -24,8 +24,8 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("requested_ip_hash", sa.String(length=128), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
     op.create_index("ix_password_reset_tokens_user_id", "password_reset_tokens", ["user_id"])
     op.create_index("ix_password_reset_tokens_token_hash", "password_reset_tokens", ["token_hash"], unique=True)

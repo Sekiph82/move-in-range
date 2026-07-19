@@ -48,6 +48,19 @@ services:
       retries: 20
     restart: "no"
 
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/api/v1/info >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    restart: "no"
+
   migrate:
     build:
       context: .
@@ -57,6 +70,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_healthy
     environment:
       ENVIRONMENT: development
       DATABASE_URL: postgresql+psycopg://moveinrange:moveinrange@postgres:5432/moveinrange
@@ -64,6 +79,12 @@ services:
       AUTH_SECRET: docker-local-development-secret
       LOCAL_ADMIN_EMAIL: admin@moveinrange.local
       LOCAL_ADMIN_PASSWORD: MoveInRangeAdminLocal!
+      PRODUCT_WEB_BASE_URL: http://product-web:3210
+      EMAIL_SENDER: smtp
+      EMAIL_FROM: no-reply@moveinrange.local
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      ENABLE_DEVELOPMENT_RESET_PREVIEW: "false"
     command: ["sh", "-c", "cd services/api && python -m alembic upgrade head"]
     restart: "no"
 
@@ -89,7 +110,13 @@ services:
       TOKEN_AUDIENCE: moveinrange-mobile
       LOCAL_ADMIN_EMAIL: admin@moveinrange.local
       LOCAL_ADMIN_PASSWORD: MoveInRangeAdminLocal!
-      CORS_ORIGINS: http://localhost:3200,http://127.0.0.1:3200,http://localhost:8081,http://127.0.0.1:8081
+      PRODUCT_WEB_BASE_URL: http://product-web:3210
+      EMAIL_SENDER: smtp
+      EMAIL_FROM: no-reply@moveinrange.local
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      ENABLE_DEVELOPMENT_RESET_PREVIEW: "false"
+      CORS_ORIGINS: http://localhost:3200,http://127.0.0.1:3200,http://localhost:8081,http://127.0.0.1:8081,http://localhost:3210,http://127.0.0.1:3210,http://product-web:3210
     ports:
       - "8200:8200"
     healthcheck:
@@ -120,6 +147,26 @@ services:
       start_period: 10s
     restart: "no"
 
+  product-web:
+    build:
+      context: .
+      dockerfile: apps/mobile/Dockerfile.web
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      PRODUCT_WEB_PORT: "3210"
+      EXPO_PUBLIC_API_BASE_URL: http://api:8200
+    ports:
+      - "3210:3210"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3210/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+
   tests:
     profiles: ["test"]
     build:
@@ -128,7 +175,11 @@ services:
     depends_on:
       admin:
         condition: service_healthy
+      product-web:
+        condition: service_healthy
       api:
+        condition: service_healthy
+      mailpit:
         condition: service_healthy
       db-init:
         condition: service_completed_successfully
@@ -141,6 +192,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       API_BASE_URL: http://api:8200
       PRODUCT_E2E_API_BASE_URL: http://api:8200
+      PRODUCT_WEB_BASE_URL: http://product-web:3210
+      MAILPIT_BASE_URL: http://mailpit:8025
       ADMIN_BASE_URL: http://admin:3200
       NEXT_PUBLIC_API_BASE_URL: http://api:8200
       EXPO_PUBLIC_API_BASE_URL: http://api:8200
@@ -150,7 +203,12 @@ services:
       AUTH_SECRET: docker-test-secret
       LOCAL_ADMIN_EMAIL: admin@moveinrange.local
       LOCAL_ADMIN_PASSWORD: MoveInRangeAdminLocal!
-      CORS_ORIGINS: http://admin:3200,http://localhost:3200,http://127.0.0.1:3200
+      EMAIL_SENDER: smtp
+      EMAIL_FROM: no-reply@moveinrange.local
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      ENABLE_DEVELOPMENT_RESET_PREVIEW: "false"
+      CORS_ORIGINS: http://admin:3200,http://product-web:3210,http://localhost:3200,http://127.0.0.1:3200,http://localhost:3210,http://127.0.0.1:3210
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
     command:
       - sh

@@ -17,9 +17,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       {firstConnection ? <form className="form-grid" action="/api/admin-session/mutate" method="post">
         <h3>Integration action</h3>
         <input type="hidden" name="csrf" value={csrf} />
-        <input type="hidden" name="method" value="POST" />
-        <input type="hidden" name="path" value={`/admin/integrations/${firstConnection.id}/disable`} />
-        <input type="hidden" name="redirectTo" value="/integrations" />
+        <input type="hidden" name="operation" value="integration_disable" />
+        <input type="hidden" name="connection_id" value={firstConnection.id} />
         <button type="submit" className="danger-button">Disable connection</button>
       </form> : null}
       <DataTable columns={["id", "provider_key", "category", "status"]} rows={integrations.connections ?? []} />

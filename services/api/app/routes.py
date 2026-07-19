@@ -1,3 +1,5 @@
+import hashlib
+import json
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -6,9 +8,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, text
 from sqlalchemy.orm import Session
 from .auth import create_token, decode_token, hash_password, password_needs_upgrade, token_hash, verify_password
+from .email import get_email_sender
 from .db.models import (
     AuditLog,
     AuthRefreshToken,
+    EmailDeliveryAttempt,
     PasswordResetToken,
     AchievementRecord,
     BaselineAssessment,
@@ -405,11 +409,30 @@ def forgot_password(payload: PasswordResetRequestPayload, request: Request, db: 
                 token_hash=token_hash(token),
                 expires_at=datetime.now(UTC) + timedelta(minutes=30),
                 requested_ip_hash=ip_hash,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
         )
-        db.add(AuditLog(actor_id=user.id, action="auth.password_reset.request", target_type="user", target_id=user.id, redacted_payload={"delivery": "development_preview" if _show_reset_preview() else "email_adapter"}))
+        reset_link = f"{get_settings().product_web_base_url.rstrip('/')}/auth/reset-password?token={token}"
+        sender = get_email_sender()
+        result = sender.send_password_reset(user.email or email, reset_link)
+        db.add(
+            EmailDeliveryAttempt(
+                user_id=user.id,
+                recipient_hash=token_hash(email),
+                template="password_reset",
+                provider=result.provider,
+                status=result.status,
+                provider_message_id=result.provider_message_id,
+                error_code=result.error_code,
+                redacted_payload={"expires_minutes": 30, "link_host": get_settings().product_web_base_url.rstrip("/")},
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+        )
+        db.add(AuditLog(actor_id=user.id, action="auth.password_reset.request", target_type="user", target_id=user.id, redacted_payload={"delivery": result.provider, "delivery_status": result.status}))
         if _show_reset_preview():
-            response["development_reset_link"] = f"{get_settings().api_base_url}/auth/reset-password?token={token}"
+            response["development_reset_link"] = reset_link
             response["development_reset_token"] = token
     else:
         db.add(AuditLog(actor_id="system", action="auth.password_reset.request_unknown", target_type="user", target_id="masked", redacted_payload={}))
@@ -1350,17 +1373,50 @@ def create_notification_job(payload: ProductPayload, user: User = Depends(requir
 
 @router.post("/privacy/export-jobs", status_code=status.HTTP_201_CREATED)
 def create_export_job(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    job = DataExportJob(user_id=user.id, status="ready", payload={"format": "json", "contains": ["profile", "plans", "sessions", "glucose", "consents"], "machine_readable": True})
+    token = secrets.token_urlsafe(32)
+    archive = _privacy_export_archive(user, db)
+    expires_at = datetime.now(UTC) + timedelta(hours=24)
+    archive["manifest"]["expires_at"] = expires_at.isoformat()
+    checksum = hashlib.sha256(json.dumps(archive, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    job = DataExportJob(
+        user_id=user.id,
+        status="ready",
+        download_token_hash=token_hash(token),
+        payload={
+            "format": "json",
+            "manifest": archive["manifest"],
+            "checksum_sha256": checksum,
+            "expires_at": expires_at.isoformat(),
+            "secrets_included": False,
+            "download_token_issued": True,
+            "archive": archive,
+        },
+    )
     db.add(job)
     db.add(AuditLog(actor_id=user.id, action="privacy.export.request", target_type="data_export", target_id=user.id, redacted_payload={}))
     db.commit()
-    return {"job": _export_job_payload(job)}
+    exported = _export_job_payload(job)
+    exported["download_url"] = f"/api/v1/privacy/export-jobs/{job.id}/download?token={token}"
+    return {"job": exported}
 
 
 @router.get("/privacy/export-jobs")
 def list_export_jobs(user: User = Depends(require_user), db: Session = Depends(get_db)):
     jobs = db.query(DataExportJob).filter(DataExportJob.user_id == user.id).order_by(desc(DataExportJob.created_at)).all()
     return {"items": [_export_job_payload(job) for job in jobs]}
+
+
+@router.get("/privacy/export-jobs/{job_id}/download")
+def download_export_job(job_id: int, token: str = Query(min_length=24), user: User = Depends(require_user), db: Session = Depends(get_db)):
+    job = db.get(DataExportJob, job_id)
+    if not job or job.user_id != user.id or job.status != "ready" or job.download_token_hash != token_hash(token):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "export_not_found"})
+    expires_at = _optional_datetime((job.payload or {}).get("expires_at"))
+    if expires_at and _as_utc(expires_at) < datetime.now(UTC):
+        raise HTTPException(status.HTTP_410_GONE, detail={"code": "export_expired"})
+    db.add(AuditLog(actor_id=user.id, action="privacy.export.download", target_type="data_export", target_id=str(job.id), redacted_payload={"archive_format": job.archive_format}))
+    db.commit()
+    return {"archive": (job.payload or {}).get("archive"), "checksum_sha256": (job.payload or {}).get("checksum_sha256")}
 
 
 @router.post("/privacy/deletion-jobs", status_code=status.HTTP_201_CREATED)
@@ -1376,6 +1432,12 @@ def create_deletion_job(payload: ProductPayload, user: User = Depends(require_us
     db.add(AuditLog(actor_id=user.id, action="privacy.deletion.request", target_type="deletion_job", target_id=user.id, redacted_payload={"deletion_type": job.deletion_type}))
     db.commit()
     return {"job": _deletion_job_payload(job)}
+
+
+@router.get("/privacy/deletion-jobs")
+def list_deletion_jobs(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    jobs = db.query(DeletionJob).filter(DeletionJob.user_id == user.id).order_by(desc(DeletionJob.created_at)).all()
+    return {"items": [_deletion_job_payload(job) for job in jobs]}
 
 
 @router.post("/caregivers/invite", status_code=status.HTTP_201_CREATED)
@@ -1682,8 +1744,12 @@ def admin_privacy_job_action(kind: str, job_id: int, action: str, payload: Admin
         job = db.get(DeletionJob, job_id)
         if not job:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "privacy_job_not_found"})
-        job.status = "completed" if action == "process" else "requested" if action == "retry" else "failed" if action == "fail" else "cancelled" if action == "cancel" else "approved"
-        job.payload = {**(job.payload or {}), "processed_by": admin.id, "legal_certification": False}
+        if action == "process":
+            job.status = "completed"
+            job.payload = {**(job.payload or {}), "processed_by": admin.id, "legal_certification": False, "deleted_counts": _process_deletion_job(job, db)}
+        else:
+            job.status = "requested" if action == "retry" else "failed" if action == "fail" else "cancelled" if action == "cancel" else "approved"
+            job.payload = {**(job.payload or {}), "processed_by": admin.id, "legal_certification": False}
         result = {"job": _deletion_job_payload(job)}
     else:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_privacy_job_kind"})
@@ -1998,6 +2064,79 @@ def _optional_datetime(value: Any) -> datetime | None:
         return None
 
 
+def _privacy_export_archive(user: User, db: Session) -> dict[str, Any]:
+    profile = db.query(Profile).filter(Profile.user_id == user.id).one_or_none()
+    return {
+        "manifest": {
+            "schema": "moveinrange.privacy-export.v1",
+            "generated_at": datetime.now(UTC).isoformat(),
+            "user_id": user.id,
+            "contains": [
+                "account",
+                "profile",
+                "onboarding",
+                "readiness",
+                "plans",
+                "sessions",
+                "feedback",
+                "diabetes",
+                "consents",
+                "relationships",
+                "provider_metadata",
+                "calendar",
+                "notifications",
+            ],
+            "secrets_included": False,
+            "machine_readable": True,
+        },
+        "account": _user_payload(user),
+        "profile": _profile_payload(user, profile)["profile"] if profile else None,
+        "onboarding": [_onboarding_payload(item) for item in db.query(OnboardingProgress).filter(OnboardingProgress.user_id == user.id).all()],
+        "readiness": [_readiness_payload(item) for item in db.query(ReadinessCheck).filter(ReadinessCheck.user_id == user.id).order_by(ReadinessCheck.created_at).all()],
+        "plans": [
+            {"id": item.id, "plan_type": item.plan_type, "status": item.status, "safety_action": item.safety_action, "payload": item.payload}
+            for item in db.query(Plan).filter(Plan.user_id == user.id).order_by(Plan.created_at).all()
+        ],
+        "sessions": [_session_payload(item) for item in db.query(SessionRecord).filter(SessionRecord.user_id == user.id).order_by(SessionRecord.created_at).all()],
+        "session_events": [_event_payload(item) for item in db.query(SessionEvent).filter(SessionEvent.user_id == user.id).order_by(SessionEvent.created_at).all()],
+        "feedback": [_feedback_payload(item) for item in db.query(ExerciseFeedback).filter(ExerciseFeedback.user_id == user.id).order_by(ExerciseFeedback.created_at).all()],
+        "diabetes": [_diabetes_context_payload(item) for item in db.query(DiabetesContextEntry).filter(DiabetesContextEntry.user_id == user.id).order_by(DiabetesContextEntry.created_at).all()],
+        "glucose": [_glucose_payload(item) for item in db.query(GlucoseEntry).filter(GlucoseEntry.user_id == user.id).order_by(GlucoseEntry.created_at).all()],
+        "consents": [_consent_payload(item) for item in db.query(ConsentRecord).filter(ConsentRecord.user_id == user.id).order_by(ConsentRecord.created_at).all()],
+        "relationships": {
+            "caregivers": [_caregiver_payload(item) for item in db.query(CaregiverRelationship).filter(CaregiverRelationship.user_id == user.id).all()],
+            "professionals": [_professional_payload(item) for item in db.query(ProfessionalRelationship).filter(ProfessionalRelationship.user_id == user.id).all()],
+        },
+        "provider_metadata": [_provider_connection_payload(item) for item in db.query(ProviderConnection).filter(ProviderConnection.user_id == user.id).all()],
+        "calendar": [_calendar_event_payload(item) for item in db.query(CalendarEvent).filter(CalendarEvent.user_id == user.id).order_by(CalendarEvent.event_date).all()],
+        "notifications": {
+            "preferences": [_notification_preference_payload(item) for item in db.query(NotificationPreference).filter(NotificationPreference.user_id == user.id).all()],
+            "jobs": [_notification_job_payload(item) for item in db.query(NotificationJob).filter(NotificationJob.user_id == user.id).all()],
+        },
+    }
+
+
+def _process_deletion_job(job: DeletionJob, db: Session) -> dict[str, int]:
+    if job.deletion_type != "selected_health_data":
+        return {}
+    user_id = job.user_id
+    counts = {
+        "glucose": db.query(GlucoseEntry).filter(GlucoseEntry.user_id == user_id).delete(synchronize_session=False),
+        "diabetes": db.query(DiabetesContextEntry).filter(DiabetesContextEntry.user_id == user_id).delete(synchronize_session=False),
+        "exercise_feedback": db.query(ExerciseFeedback).filter(ExerciseFeedback.user_id == user_id).delete(synchronize_session=False),
+        "wearable_samples": db.query(WearableSample).filter(WearableSample.user_id == user_id).delete(synchronize_session=False),
+        "camera_analysis": db.query(CameraAnalysisSession).filter(CameraAnalysisSession.user_id == user_id).delete(synchronize_session=False),
+    }
+    profile = db.query(Profile).filter(Profile.user_id == user_id).one_or_none()
+    if profile:
+        health = dict(profile.health_payload or {})
+        for key in ["conditions", "sensitivities", "injuries", "diabetes", "mobility_aids"]:
+            health.pop(key, None)
+        profile.health_payload = health
+        counts["profile_health_fields"] = 1
+    return counts
+
+
 def _onboarding_payload(progress: OnboardingProgress) -> dict[str, Any]:
     return {
         "current_step": progress.current_step,
@@ -2115,7 +2254,16 @@ def _notification_job_payload(record: NotificationJob) -> dict[str, Any]:
 
 
 def _export_job_payload(record: DataExportJob) -> dict[str, Any]:
-    return {"id": record.id, "status": record.status, "archive_format": record.archive_format, "payload": record.payload, "created_at": record.created_at.isoformat() if record.created_at else None}
+    payload = dict(record.payload or {})
+    payload.pop("archive", None)
+    return {
+        "id": record.id,
+        "status": record.status,
+        "archive_format": record.archive_format,
+        "download_available": bool(record.download_token_hash),
+        "payload": payload,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }
 
 
 def _deletion_job_payload(record: DeletionJob) -> dict[str, Any]:

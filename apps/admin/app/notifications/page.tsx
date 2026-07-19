@@ -14,9 +14,8 @@ export default async function NotificationsPage({ searchParams }: { searchParams
       {firstJob ? <form className="form-grid" action="/api/admin-session/mutate" method="post">
         <h3>Notification action</h3>
         <input type="hidden" name="csrf" value={csrf} />
-        <input type="hidden" name="method" value="POST" />
-        <input type="hidden" name="path" value={`/admin/notifications/${firstJob.id}/retry`} />
-        <input type="hidden" name="redirectTo" value="/notifications" />
+        <input type="hidden" name="operation" value="notification_retry" />
+        <input type="hidden" name="job_id" value={firstJob.id} />
         <button type="submit">Retry notification</button>
       </form> : null}
       <DataTable columns={["id", "category", "provider", "scheduled_for", "status", "retry_count"]} rows={notifications.items ?? []} />

@@ -87,17 +87,16 @@ test("Playwright admin acceptance performs login, navigation, screenshots, logou
     await page.getByLabel("Email search").fill("closed-beta-e2e@example.test");
     await page.getByRole("button", { name: /^search$/i }).click();
     await page.getByRole("link", { name: /\/users\/usr_closed_beta_e2e/i }).click();
-    await page.getByLabel("Action").selectOption("disable");
-    await page.getByLabel("Reason").fill("closed beta E2E disable");
-    await page.getByRole("button", { name: /save user change/i }).click();
+    await page.getByLabel("Disable reason").fill("closed beta E2E disable");
+    await page.getByRole("button", { name: /^disable user$/i }).click();
     await assert.doesNotReject(page.getByText(/saved/i).waitFor({ timeout: 8000 }));
     await assert.doesNotReject(page.getByText(/Deleted/i).waitFor({ timeout: 8000 }));
-    await page.getByLabel("Action").selectOption("enable");
-    await page.getByRole("button", { name: /save user change/i }).click();
+    await page.getByLabel("Enable reason").fill("closed beta E2E enable");
+    await page.getByRole("button", { name: /^enable user$/i }).click();
     await assert.doesNotReject(page.getByText(/saved/i).waitFor({ timeout: 8000 }));
-    await page.getByLabel("Action").selectOption("update_role");
     await page.locator('select[name="role"]').selectOption("analyst");
-    await page.getByRole("button", { name: /save user change/i }).click();
+    await page.getByLabel("Role update reason").fill("closed beta E2E role update");
+    await page.getByRole("button", { name: /update user role/i }).click();
     await assert.doesNotReject(page.getByText(/saved/i).waitFor({ timeout: 8000 }));
 
     await page.goto(`${baseUrl}/exercises`);

@@ -134,7 +134,7 @@ def test_refresh_rotation_logout_and_legacy_password_upgrade(tmp_path, monkeypat
 
 
 def test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch)
+    client = _client(tmp_path, monkeypatch, ENABLE_DEVELOPMENT_RESET_PREVIEW="true", EMAIL_SENDER="console")
     registered, headers = _register(client, "reset@example.test")
     assert client.get("/api/v1/auth/me", headers=headers).status_code == 200
 
@@ -232,6 +232,12 @@ def test_production_rejects_default_secret_and_wildcard_cors(monkeypatch):
     with pytest.raises(ValueError):
         settings_mod.get_settings()
 
+    monkeypatch.setenv("CORS_ORIGINS", "https://admin.example.com")
+    monkeypatch.setenv("EMAIL_SENDER", "console")
+    settings_mod.get_settings.cache_clear()
+    with pytest.raises(ValueError):
+        settings_mod.get_settings()
+
 
 def test_ready_endpoint_and_production_revocation_require_redis(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, REDIS_URL="redis://localhost:1/0")
@@ -245,6 +251,7 @@ def test_ready_endpoint_and_production_revocation_require_redis(tmp_path, monkey
     monkeypatch.setenv("AUTH_SECRET", "strong-production-secret")
     monkeypatch.setenv("LOCAL_ADMIN_PASSWORD", "strong-admin-password")
     monkeypatch.setenv("CORS_ORIGINS", "https://admin.example.com")
+    monkeypatch.setenv("EMAIL_SENDER", "smtp")
     monkeypatch.setenv("REDIS_URL", "redis://localhost:1/0")
     settings_mod.get_settings.cache_clear()
     revocation_mod = importlib.reload(revocation_mod)
