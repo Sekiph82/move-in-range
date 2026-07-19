@@ -1,32 +1,39 @@
 import { readFileSync } from "node:fs";
 
-const checklistPath = "docs/COMPLETE_PRODUCT_MASTER_CHECKLIST.md";
-const checklist = readFileSync(checklistPath, "utf8");
 const errors = [];
+const checklistPaths = [
+  "docs/COMPLETE_PRODUCT_MASTER_CHECKLIST.md",
+  "docs/FUNCTIONAL_PRODUCT_COMPLETION_CHECKLIST.md"
+];
 
-if (/^- \[~\] IN PROGRESS/m.test(checklist)) {
-  errors.push("Checklist contains an in-progress task.");
-}
+for (const checklistPath of checklistPaths) {
+  const checklist = readFileSync(checklistPath, "utf8");
 
-if (/^- \[ \] NOT STARTED/m.test(checklist)) {
-  errors.push("Checklist contains a not-started task.");
-}
-
-const taskBlocks = checklist.split(/\n(?=- \[[ x!~-]\])/);
-for (const block of taskBlocks) {
-  const header = block.split("\n")[0] ?? "";
-  if (!header.startsWith("- [")) continue;
-  if (header.includes("[x] COMPLETE")) {
-    for (const required of ["Implementation files:", "Tests:", "Verification evidence:"]) {
-      if (!block.includes(required)) errors.push(`Completed task missing ${required} ${header}`);
-    }
-    if (/Implementation files: TBD|Tests: TBD|Verification evidence: TBD/.test(block)) {
-      errors.push(`Completed task has TBD evidence: ${header}`);
-    }
+  if (/^- \[~\] IN PROGRESS/m.test(checklist)) {
+    errors.push(`${checklistPath} contains an in-progress task.`);
   }
-  if (header.includes("[!] BLOCKED")) {
-    if (/Blockers: (None|TBD)\b/.test(block)) errors.push(`Blocked task has no blocker: ${header}`);
-    if (/Implementation files: TBD|Tests: TBD/.test(block)) errors.push(`Blocked task missing interface/mock evidence: ${header}`);
+
+  if (/^- \[ \] NOT STARTED/m.test(checklist)) {
+    errors.push(`${checklistPath} contains a not-started task.`);
+  }
+
+  const taskBlocks = checklist.split(/\n(?=- \[[ x!~-]\])/);
+  for (const block of taskBlocks) {
+    const header = block.split("\n")[0] ?? "";
+    if (!header.startsWith("- [")) continue;
+    if (header.includes("[x] COMPLETE")) {
+      const requiredFields = checklistPath.includes("FUNCTIONAL_PRODUCT") ? ["Backend:", "Mobile UI:", "Persistence:", "Authorization:", "Unit tests:", "Integration tests:", "E2E tests:"] : ["Implementation files:", "Tests:", "Verification evidence:"];
+      for (const required of requiredFields) {
+        if (!block.includes(required)) errors.push(`Completed task missing ${required} ${header}`);
+      }
+      if (/Implementation files: TBD|Tests: TBD|Verification evidence: TBD|Backend: TBD|Mobile UI: TBD|Persistence: TBD|Authorization: TBD/.test(block)) {
+        errors.push(`Completed task has TBD evidence: ${header}`);
+      }
+    }
+    if (header.includes("[!] BLOCKED")) {
+      if (/Blockers: (None|TBD)\b/.test(block)) errors.push(`Blocked task has no blocker: ${header}`);
+      if (/Implementation files: TBD|Tests: TBD/.test(block)) errors.push(`Blocked task missing interface/mock evidence: ${header}`);
+    }
   }
 }
 
@@ -59,4 +66,4 @@ if (errors.length) {
   process.exit(1);
 }
 
-console.log("Complete product checklist is closed and evidence-backed.");
+console.log("Complete product checklists are closed and evidence-backed.");

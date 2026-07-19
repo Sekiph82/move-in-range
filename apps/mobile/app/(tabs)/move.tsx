@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "expo-router";
 import { apiFetch } from "../../src/api";
 import { useTheme } from "../../src/theme";
 
@@ -14,6 +15,18 @@ export default function MoveScreen() {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Move</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+        <Link href="/exercises" asChild>
+          <Pressable accessibilityRole="link" style={{ minHeight: 40, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface }}>
+            <Text style={{ color: theme.primary, fontWeight: "700" }}>Exercise library</Text>
+          </Pressable>
+        </Link>
+        <Link href="/workout/library" asChild>
+          <Pressable accessibilityRole="link" style={{ minHeight: 40, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface }}>
+            <Text style={{ color: theme.primary, fontWeight: "700" }}>Workout player</Text>
+          </Pressable>
+        </Link>
+      </View>
       <TextInput accessibilityLabel="Search exercises" value={query} onChangeText={setQuery} placeholder="Search exercises" placeholderTextColor={theme.muted} style={{ minHeight: 48, borderColor: theme.border, borderWidth: 1, color: theme.text, padding: 12, borderRadius: 8 }} />
       <View style={{ gap: 8 }}>
         {exercises.isLoading ? <Text style={{ color: theme.muted }}>Loading exercises...</Text> : null}
@@ -21,6 +34,11 @@ export default function MoveScreen() {
           <Pressable key={exercise.id} accessibilityLabel={`Open ${exercise.name}`} onPress={() => setSelected(exercise.id)} style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 14 }}>
             <Text style={{ color: theme.text, fontWeight: "700" }}>{exercise.name}</Text>
             <Text style={{ color: theme.muted }}>{exercise.body_part} - {exercise.equipment} - {exercise.target}</Text>
+            <Link href={`/exercise/${exercise.id}` as never} asChild>
+              <Pressable accessibilityRole="link" style={{ minHeight: 36, justifyContent: "center" }}>
+                <Text style={{ color: theme.primary, fontWeight: "700" }}>Open detail</Text>
+              </Pressable>
+            </Link>
           </Pressable>
         ))}
         {exercises.data?.items?.length === 0 ? <Text style={{ color: theme.muted }}>No exercises matched that search.</Text> : null}

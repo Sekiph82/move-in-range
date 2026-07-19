@@ -13,12 +13,27 @@ export type AdminIdentity = {
 };
 
 export const roleNavigation: Record<AdminIdentity["role"], string[]> = {
-  super_admin: ["Users", "Policies", "Exercise Review", "Simulator", "Privacy Jobs", "System", "Audit Logs", "Import Jobs", "Feature Flags"],
-  clinical_reviewer: ["Policies", "Simulator"],
+  super_admin: ["Dashboard", "Users", "Exercises", "Policies", "Simulator", "Privacy Jobs", "Import Jobs", "Notifications", "Integrations", "System", "Audit"],
+  clinical_reviewer: ["Dashboard", "Policies", "Simulator"],
   exercise_reviewer: ["Exercise Review"],
-  content_editor: ["Import Jobs", "Feature Flags"],
-  support: ["Users", "Privacy Jobs", "Audit Logs"],
-  analyst: ["System", "Feature Flags"]
+  content_editor: ["Dashboard", "Import Jobs"],
+  support: ["Dashboard", "Users", "Privacy Jobs", "Notifications", "Audit"],
+  analyst: ["Dashboard", "Integrations", "System"]
+};
+
+export const navHref: Record<string, string> = {
+  Dashboard: "/dashboard",
+  Users: "/users",
+  Exercises: "/exercises",
+  "Exercise Review": "/exercises",
+  Policies: "/policies",
+  Simulator: "/policies/draft-2026-07-18/simulate",
+  "Privacy Jobs": "/privacy-jobs",
+  "Import Jobs": "/import-jobs",
+  Notifications: "/notifications",
+  Integrations: "/integrations",
+  System: "/system",
+  Audit: "/audit"
 };
 
 export async function requireAdmin() {

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox.ts");
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
@@ -148,4 +149,40 @@ test("provider state reports activation blockers honestly", () => {
   assert.equal(providerBlockedReason(dexcom), "Developer account or API credentials are required.");
   assert.equal(canActivateProvider(nightscout), true);
   assert.equal(providerBlockedReason(nightscout), null);
+});
+
+test("Expo Router exposes the functional product route family", () => {
+  const routes = [
+    "auth.tsx",
+    "onboarding.tsx",
+    "readiness.tsx",
+    "quick-session.tsx",
+    "daily-plan.tsx",
+    "weekly-plan.tsx",
+    "monthly-plan.tsx",
+    "calendar.tsx",
+    "exercises.tsx",
+    "exercise/[id].tsx",
+    "workout/[sessionId].tsx",
+    "workout/[sessionId]/pain.tsx",
+    "workout/[sessionId]/symptom.tsx",
+    "workout/[sessionId]/feedback.tsx",
+    "diabetes.tsx",
+    "integrations.tsx",
+    "notifications.tsx",
+    "privacy.tsx",
+    "caregivers.tsx",
+    "professionals.tsx",
+    "achievements.tsx",
+    "settings.tsx"
+  ];
+  for (const route of routes) {
+    assert.equal(existsSync(`apps/mobile/app/${route}`), true, route);
+  }
+  const workflow = readFileSync("apps/mobile/src/screens/ProductWorkflowScreen.tsx", "utf8");
+  assert.match(workflow, /const onboardingSteps = \[/);
+  const steps = workflow.match(/const onboardingSteps = \[([\s\S]*?)\];/)?.[1] ?? "";
+  assert.equal(steps.split("\n").filter((line) => line.trim().startsWith("\"")).length, 22);
+  assert.match(workflow, /camera_consent: true/);
+  assert.match(workflow, /does not change medication guidance/);
 });
