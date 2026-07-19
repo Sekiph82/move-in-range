@@ -20,3 +20,6 @@ Future agents must preserve these boundaries:
 - Keep admin login user-driven through `/login`; do not reintroduce environment-password auto-login into rendered admin pages.
 - Preserve Redis-backed token revocation for production and DB-backed refresh token family replay protection.
 - Keep release-candidate merge order documented in `docs/STACKED_PR_MERGE_PLAN.md`; do not merge stacked PRs out of order.
+- Keep complete-product work stacked on `codex/release-candidate-validation` until earlier PRs merge.
+- Run `npm.cmd run checklist:check` before claiming complete-product readiness; no task may remain `[ ] NOT STARTED` or `[~] IN PROGRESS`.
+- Do not claim real provider, push, HealthKit, Health Connect, wearable, Bluetooth, camera, device, licensed-media, or paid-infrastructure validation unless the actual credential, entitlement, hardware, or deployment validation happened.

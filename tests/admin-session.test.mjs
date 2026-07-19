@@ -22,7 +22,9 @@ test("admin protected dashboard redirects without session and has role-aware nav
   assert.match(session, /redirect\("\/login/);
   assert.match(session, /roleNavigation/);
   assert.match(session, /clinical_reviewer: \["Policies", "Simulator"\]/);
-  assert.match(session, /support: \["Audit Logs"\]/);
+  assert.match(session, /support: \["Users", "Privacy Jobs", "Audit Logs"\]/);
+  assert.match(page, /\/admin\/system/);
+  assert.match(page, /\/admin\/privacy-jobs/);
 });
 
 test("admin session cookies are http-only for credentials and csrf-protected for state changes", () => {

@@ -10,6 +10,7 @@ export default function MoveScreen() {
   const [selected, setSelected] = useState<string | undefined>();
   const exercises = useQuery({ queryKey: ["exercises", query], queryFn: () => apiFetch<any>(`/exercises?q=${encodeURIComponent(query)}&language=tr&page_size=15`) });
   const detail = useQuery({ queryKey: ["exercise", selected], enabled: Boolean(selected), queryFn: () => apiFetch<any>(`/exercises/${selected}?language=tr`) });
+  const media = useQuery({ queryKey: ["exercise-media", selected], enabled: Boolean(selected), queryFn: () => apiFetch<any>(`/exercises/${selected}/media-resolution?language=tr&reduced_motion=false&low_bandwidth=false`) });
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Move</Text>
@@ -30,6 +31,7 @@ export default function MoveScreen() {
           <Text style={{ color: theme.muted }}>{detail.data.instruction}</Text>
           {detail.data.instruction_steps.map((step: string, index: number) => <Text key={step} style={{ color: theme.text }}>{index + 1}. {step}</Text>)}
           <Text style={{ color: theme.muted }}>Attribution: {detail.data.media?.attribution || "No committed media; external license required."}</Text>
+          <Text style={{ color: theme.muted }}>Media: {media.data?.media?.source_type ?? "Resolving fallback"} - {media.data?.media?.prefetch_policy ?? "current and next only"}</Text>
         </View>
       ) : null}
     </ScrollView>

@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -H localhost -p 3200",
     "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3200",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test ../../tests/admin.test.mjs"
   },

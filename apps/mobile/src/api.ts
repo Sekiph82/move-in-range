@@ -118,6 +118,22 @@ export function saveProfile(language: "en" | "tr") {
   });
 }
 
+export function saveOnboardingStep(step: string, payload: Record<string, unknown>, completed = true, language: "en" | "tr" = "en") {
+  return apiFetch("/onboarding", { method: "PUT", body: JSON.stringify({ step, payload, completed, language }) });
+}
+
+export function recordConsent(consent_type: string, granted: boolean, evidence: Record<string, unknown> = {}) {
+  return apiFetch("/consents", { method: "POST", body: JSON.stringify({ consent_type, granted, version: "consent-2026-07", evidence }) });
+}
+
+export function saveCapacityProfile(payload: Record<string, unknown>) {
+  return apiFetch("/capacity-profile", { method: "PUT", body: JSON.stringify({ payload }) });
+}
+
+export function saveGoalsTargets(goals: string[], target_focuses: string[], natural_request?: string) {
+  return apiFetch("/goals-targets", { method: "PUT", body: JSON.stringify({ goals, target_focuses, natural_request }) });
+}
+
 export function submitReadiness() {
   return apiFetch("/readiness-checks", { method: "POST", body: JSON.stringify(defaultReadiness) });
 }
@@ -132,6 +148,18 @@ export function generateWeeklyPlan() {
 
 export function generateMonthlyPlan() {
   return apiFetch("/plans/monthly/generate", { method: "POST", body: JSON.stringify({}) });
+}
+
+export function generateAdvancedPlan(payload: Record<string, unknown>) {
+  return apiFetch("/plans/advanced/generate", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function createQuickSession(payload: Record<string, unknown>) {
+  return apiFetch("/quick-session", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function modifyPlan(planId: string, intent: string, request_payload: Record<string, unknown> = {}) {
+  return apiFetch(`/plans/${planId}/modify`, { method: "POST", body: JSON.stringify({ intent, request_payload }) });
 }
 
 export function startSession(planId?: string) {
@@ -157,4 +185,32 @@ export function logGlucose(sessionId?: string) {
     method: "POST",
     body: JSON.stringify({ value: 112, unit: "mg/dL", timing: "post", session_id: sessionId })
   });
+}
+
+export function logDiabetesContext(payload: Record<string, unknown>) {
+  return apiFetch("/diabetes/context", { method: "POST", body: JSON.stringify({ payload }) });
+}
+
+export function connectProvider(provider_key: string, mock = true) {
+  return apiFetch("/integrations/connect", { method: "POST", body: JSON.stringify({ provider_key, mock }) });
+}
+
+export function saveNotificationPreference(category: string, enabled: boolean) {
+  return apiFetch("/notification-preferences", { method: "PUT", body: JSON.stringify({ category, enabled }) });
+}
+
+export function requestDataExport() {
+  return apiFetch("/privacy/export-jobs", { method: "POST" });
+}
+
+export function inviteCaregiver(email: string, scopes: string[]) {
+  return apiFetch("/caregivers/invite", { method: "POST", body: JSON.stringify({ email, scopes }) });
+}
+
+export function inviteProfessional(email: string, role: string, scopes: string[]) {
+  return apiFetch("/professionals/invite", { method: "POST", body: JSON.stringify({ email, role, scopes }) });
+}
+
+export function analyzeCameraMock(payload: Record<string, unknown>) {
+  return apiFetch("/camera/analyze", { method: "POST", body: JSON.stringify({ payload }) });
 }
