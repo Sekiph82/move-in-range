@@ -54,3 +54,5 @@ services/api/media/
 .idea/
 .vscode/
 .local/
+.vercel/
+supabase/.temp/
