@@ -13,12 +13,12 @@ export type AdminIdentity = {
 };
 
 export const roleNavigation: Record<AdminIdentity["role"], string[]> = {
-  super_admin: ["Policies", "Exercise Review", "Simulator", "Audit Logs", "Import Jobs", "Feature Flags"],
+  super_admin: ["Users", "Policies", "Exercise Review", "Simulator", "Privacy Jobs", "System", "Audit Logs", "Import Jobs", "Feature Flags"],
   clinical_reviewer: ["Policies", "Simulator"],
   exercise_reviewer: ["Exercise Review"],
   content_editor: ["Import Jobs", "Feature Flags"],
-  support: ["Audit Logs"],
-  analyst: ["Feature Flags"]
+  support: ["Users", "Privacy Jobs", "Audit Logs"],
+  analyst: ["System", "Feature Flags"]
 };
 
 export async function requireAdmin() {

@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox.ts");
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
+const { emptyOnboardingDraft, isOnboardingComplete, saveStep, validateOnboardingStep } = await import("../apps/mobile/src/onboarding/onboardingState.ts");
+const { resolveWorkoutMedia, scheduleLocalVoiceCues } = await import("../apps/mobile/src/guidance/mediaVoice.ts");
+const { canActivateProvider, providerBlockedReason } = await import("../apps/mobile/src/integrations/providerState.ts");
 
 function mirToken(exp) {
   const body = btoa(JSON.stringify({ exp })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -116,4 +119,33 @@ test("token store treats corrupted storage as signed out", async () => {
   });
   assert.equal(await store.loadAccessToken(), null);
   assert.equal(await store.loadRefreshToken(), null);
+});
+
+test("onboarding draft validates required identity and consent fields before completion", () => {
+  assert.deepEqual(validateOnboardingStep("identity", { preferred_name: "Aylin" }), ["date_of_birth_required", "timezone_required", "language_required"]);
+  let draft = emptyOnboardingDraft("tr");
+  draft = saveStep(draft, "identity", { preferred_name: "Aylin", date_of_birth: "1982-04-20", timezone: "Europe/Istanbul", language: "tr" });
+  draft = saveStep(draft, "health_profile", { conditions: ["type_2_diabetes"] });
+  draft = saveStep(draft, "goals", { goals: ["mobility"], target_focuses: ["core"] });
+  draft = saveStep(draft, "capacity", { single_leg_stand: "low", balance_support_requirement: true });
+  assert.equal(isOnboardingComplete(draft), false);
+  draft = saveStep(draft, "consent", { wellness_limitations: true, health_data_processing: true });
+  assert.equal(isOnboardingComplete(draft), true);
+});
+
+test("voice scheduler and media resolver use safe fallbacks", () => {
+  const cues = scheduleLocalVoiceCues([{ name: "Chair march", durationSeconds: 40, restSeconds: 20 }], "essential_cues", "tr");
+  assert.equal(cues.some((cue) => cue.text === "Agri varsa dur"), true);
+  const media = resolveWorkoutMedia({ id: "exercise-1", media: { license_status: "external_terms_required" } });
+  assert.equal(media.sourceType, "internal_silhouette_animation");
+  assert.equal(media.prefetchPolicy, "current_and_next_only");
+});
+
+test("provider state reports activation blockers honestly", () => {
+  const dexcom = { key: "dexcom", category: "cgm", status: "blocked_credentials", scopes: ["glucose:read"] };
+  const nightscout = { key: "nightscout", category: "cgm", status: "mock_ready", scopes: ["glucose:read"] };
+  assert.equal(canActivateProvider(dexcom), false);
+  assert.equal(providerBlockedReason(dexcom), "Developer account or API credentials are required.");
+  assert.equal(canActivateProvider(nightscout), true);
+  assert.equal(providerBlockedReason(nightscout), null);
 });
