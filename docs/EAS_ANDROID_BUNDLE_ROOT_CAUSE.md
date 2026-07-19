@@ -11,6 +11,18 @@ Date: 2026-07-19
 - Failed build ID: `f19b94bf-f646-499f-86dd-258a50d516b6`
 - Failed commit: `92c5410724ebf7a3902b95613635b3f06ed5b7db`
 
+## Successful Retry
+
+- EAS build ID: `ffa5f78e-d11b-4a42-8bf5-58e6d14e0b2f`
+- Build page: `https://expo.dev/accounts/sekiphayit/projects/move-in-range/builds/ffa5f78e-d11b-4a42-8bf5-58e6d14e0b2f`
+- APK URL: `https://expo.dev/artifacts/eas/wzoDpl-wBfzaOCmCl2cTJcUUfQZN1W83bf3UjQKDlYQ.apk`
+- Commit: `9c1af90aac880f672280eca72faaa49b98f075f2`
+- Profile/distribution: `preview` / `INTERNAL`
+- SDK/app/build: Expo SDK `53.0.0`, app version `0.1.0`, Android build version `1`
+- APK size: `83013799` bytes
+- APK SHA-256: `32B03B42E89A09255699AA32F9CC938230703AEBD92376FFE5559CBBC296D34E`
+- Completed at: `2026-07-19T14:53:34.292Z`
+
 ## Symptom
 
 EAS failed during Android JavaScript bundling:

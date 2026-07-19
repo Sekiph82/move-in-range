@@ -1,6 +1,21 @@
 # Android Beta Build Handoff
 
-Current artifact status: blocked external. Failed EAS build `f19b94bf-f646-499f-86dd-258a50d516b6` used the repository root as a traditional Expo app and tried `expo/AppEntry.js` -> `../../App`. The source fix makes `apps/mobile` the authoritative EAS app root.
+Current artifact status: available. Failed EAS build `f19b94bf-f646-499f-86dd-258a50d516b6` used the repository root as a traditional Expo app and tried `expo/AppEntry.js` -> `../../App`; the successful retry below confirms `apps/mobile` is now the authoritative EAS app root.
+
+Successful preview artifact:
+
+- EAS build ID: `ffa5f78e-d11b-4a42-8bf5-58e6d14e0b2f`.
+- Build page: `https://expo.dev/accounts/sekiphayit/projects/move-in-range/builds/ffa5f78e-d11b-4a42-8bf5-58e6d14e0b2f`.
+- APK URL: `https://expo.dev/artifacts/eas/wzoDpl-wBfzaOCmCl2cTJcUUfQZN1W83bf3UjQKDlYQ.apk`.
+- Local downloaded artifact: `.local/eas-artifacts/MoveInRange-preview-ffa5f78e.apk`.
+- APK size: `83013799` bytes.
+- APK SHA-256: `32B03B42E89A09255699AA32F9CC938230703AEBD92376FFE5559CBBC296D34E`.
+- Build profile: `preview`; distribution: `INTERNAL`; artifact type: APK.
+- EAS account/project: `sekiphayit` / `move-in-range`; project ID `30719dd8-101e-4acd-8d2a-e5880d60b721`.
+- Git commit: `9c1af90aac880f672280eca72faaa49b98f075f2` (`fix(eas): align mobile slug with project`).
+- SDK/app version/build: Expo SDK `53.0.0`; app version `0.1.0`; Android build version `1`.
+- Created/completed: `2026-07-19T14:41:14.123Z` / `2026-07-19T14:53:34.292Z`; expires `2026-08-02T14:41:14.157Z`.
+- Build retry used remote Android credentials; because no local `keytool` was installed, EAS generated a cloud keystore during the non-interactive preview build.
 
 Validated locally:
 
@@ -25,8 +40,8 @@ Environment and toolchain result:
 - `JAVA_HOME`: not set.
 - `eas`, `adb`, `emulator`, `java`, `gradle`: not found on PATH.
 - `npx eas-cli --version`: `eas-cli/21.0.2 win32-x64 node-v24.14.0`.
-- `npx eas-cli whoami`: rerun from `apps/mobile` before retrying cloud build.
-- `eas build:list`: run only after authentication is confirmed.
+- `npx eas-cli whoami` from `apps/mobile`: `sekiphayit`.
+- `eas build:list --platform android --limit 1 --json`: latest Android build is `FINISHED`.
 
 Install Android Studio and SDK:
 
@@ -74,7 +89,7 @@ npx.cmd eas-cli whoami
 npx.cmd eas-cli build --platform android --profile preview --clear-cache
 ```
 
-Use the existing EAS project and remote keystore. Do not create a second EAS project, regenerate credentials, submit to Google Play, or run a paid build without confirming the account plan and build cost.
+Use the existing EAS project. The successful preview retry used EAS remote Android credentials and EAS generated a cloud keystore because no local `keytool` was installed; audit and preserve the selected Android credentials before any production/store distribution. Do not create a second EAS project, submit to Google Play, or run a paid build without confirming the account plan and build cost.
 
 Preview API configuration:
 

@@ -16,7 +16,7 @@ Current `origin/main`: `a0410a4aaf3512ee92abe9ce8fa8ef87f0dc8a07`.
 | 8 | #8 | `f0c66cb5aaf5995be43edba969b351a5963a1807` | `codex/product-acceptance-completion` | `codex/real-beta-completion` | Retarget to `main` after PR #7 lands | Real beta browser/API suite | Auth lifecycle and mobile UX files | Revert PR #8 merge commit | Required |
 | 9 | #9 | `b5ffeb6d1b4ab65c04583ed48b3198feef4b50f3` | `codex/real-beta-completion` | `codex/closed-beta-readiness` | Retarget to `main` after PR #8 lands | Closed beta readiness suite | Admin mutations, Docker, product E2E | Revert PR #9 merge commit | Required |
 | 10 | #10 | `657bd274f141e59cb828dc81308029469e477bf7` | `codex/closed-beta-readiness` | `codex/closed-beta-finalization` | Retarget to `main` after PR #9 lands | Docker acceptance and closed-beta final tests | Docker web/admin flows and docs | Revert PR #10 merge commit | Required |
-| 11 | #11 | local branch `codex/release-rehearsal`; final SHA recorded in PR after push | `codex/closed-beta-finalization` | `codex/release-rehearsal` | Retarget to `main` only after PR #10 lands | Full release-rehearsal suite, full PostgreSQL dataset import twice, migration rehearsal, backup/restore, Android EAS mobile-root archive/build review | RBAC migration, admin policy operation changes, EAS mobile root config, product UI E2E docs | Revert PR #11 merge commit | Required |
+| 11 | #11 | branch `codex/release-rehearsal`; latest pushed SHA recorded in PR | `codex/closed-beta-finalization` | `codex/release-rehearsal` | Retarget to `main` only after PR #10 lands | Full release-rehearsal suite, full PostgreSQL dataset import twice, migration rehearsal, backup/restore, Android EAS mobile-root archive/build review | RBAC migration, admin policy operation changes, EAS mobile root config, product UI E2E docs | Revert PR #11 merge commit | Required |
 
 Required full release-rehearsal command set after PR #11 retarget:
 
@@ -48,6 +48,6 @@ Manual approval requirements:
 - Review every PR diff after retargeting.
 - Confirm no duplicate Alembic heads.
 - Confirm Docker compose config still uses canonical ports 5432, 6379, 1025, 8025, 3200, 3210, and 8200.
-- Confirm Android installable artifact exists before native Android beta is marked GO.
+- Confirm Android installable artifact `ffa5f78e-d11b-4a42-8bf5-58e6d14e0b2f` remains accessible before native Android beta distribution.
 - Confirm EAS Android build is run from `apps/mobile`, uses project ID `30719dd8-101e-4acd-8d2a-e5880d60b721`, and does not depend on a root `App.tsx`.
 - Confirm dependency advisories have no high or critical findings.

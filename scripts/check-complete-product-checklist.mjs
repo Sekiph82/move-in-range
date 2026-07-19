@@ -65,7 +65,10 @@ for (const checklistPath of checklistPaths) {
         errors.push(`Release rehearsal dataset item references SQLite acceptance: ${header}`);
       }
       if (checklistPath.includes("RELEASE_REHEARSAL") && /Android installable preview artifact/i.test(header)) {
-        errors.push(`Android installable artifact is marked complete without APK/build evidence: ${header}`);
+        const hasApkEvidence = /EAS preview build|successful retry|EAS preview APK/i.test(block) && /APK URL/i.test(block) && /SHA-256/i.test(block);
+        if (!hasApkEvidence) {
+          errors.push(`Android installable artifact is marked complete without APK/build evidence: ${header}`);
+        }
       }
     }
     if (header.includes("[!] BLOCKED")) {
@@ -167,7 +170,10 @@ if (/PostgreSQL full dataset acceptance[\s\S]*SQLite/i.test(releaseChecklist)) {
 }
 const androidArtifactBlock = releaseChecklist.split(/\n(?=- \[[ x!~-]\])/).find((block) => /Android installable preview artifact/i.test(block)) ?? "";
 if (/go\/no-go result: GO\b/i.test(androidArtifactBlock)) {
-  errors.push("Android artifact is marked GO without APK/build evidence.");
+  const hasApkEvidence = /EAS preview build|successful retry|EAS preview APK/i.test(androidArtifactBlock) && /APK URL/i.test(androidArtifactBlock) && /SHA-256/i.test(androidArtifactBlock);
+  if (!hasApkEvidence) {
+    errors.push("Android artifact is marked GO without APK/build evidence.");
+  }
 }
 if (!/Backup and restore rehearsal[\s\S]*restore/i.test(releaseChecklist)) {
   errors.push("Backup rehearsal lacks restore verification.");
