@@ -126,11 +126,39 @@ def test_platform_service_contracts_are_deterministic():
 
 def test_admin_complete_platform_surfaces(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
+    registered, _ = _register(client, "admin-visible-user@example.test")
     _create_admin_user("admin-complete@example.test", "super_admin")
     admin_headers = _admin_headers(client, "admin-complete@example.test")
 
-    assert client.get("/api/v1/admin/users", headers=admin_headers).status_code == 200
+    users = client.get("/api/v1/admin/users", headers=admin_headers)
+    assert users.status_code == 200
+    assert users.json()["impersonation"] == "disabled_by_default"
+    detail = client.get(f"/api/v1/admin/users/{registered['user']['id']}", headers=admin_headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["user"]["email_masked"].startswith("ad***@")
+
+    policy = client.post("/api/v1/admin/policies", headers=admin_headers, json={"version": "draft-functional-2026-07", "rules": {"pain": "reduce_or_block"}})
+    assert policy.status_code == 201, policy.text
+    policy_id = policy.json()["policy"]["version"]
+    assert client.get(f"/api/v1/admin/policies/{policy_id}", headers=admin_headers).status_code == 200
+    assert client.post(f"/api/v1/admin/policies/{policy_id}/approve", headers=admin_headers, json={"rationale": "Reviewed fixtures"}).json()["policy"]["clinical_review_state"] == "approved"
+    assert client.post(f"/api/v1/admin/policies/{policy_id}/publish", headers=admin_headers, json={"rationale": "Ready for local validation"}).json()["policy"]["status"] == "published"
+    assert client.post(f"/api/v1/admin/policies/{policy_id}/rollback", headers=admin_headers, json={"rationale": "Stacked PR validation rollback"}).json()["policy"]["status"] == "rolled_back"
+
+    exercises = client.get("/api/v1/admin/exercises", headers=admin_headers)
+    assert exercises.status_code == 200
+    if exercises.json()["items"]:
+        exercise_id = exercises.json()["items"][0]["id"]
+        assert client.get(f"/api/v1/admin/exercises/{exercise_id}", headers=admin_headers).status_code == 200
+        patched = client.patch(f"/api/v1/admin/exercises/{exercise_id}", headers=admin_headers, json={"payload": {"safety_tags": ["chair_supported"], "publish_state": "reviewed"}})
+        assert patched.status_code == 200, patched.text
+
     assert client.get("/api/v1/admin/system", headers=admin_headers).status_code == 200
+    assert client.get("/api/v1/admin/privacy-jobs", headers=admin_headers).status_code == 200
+    assert client.get("/api/v1/admin/import-jobs", headers=admin_headers).status_code == 200
+    assert client.get("/api/v1/admin/notifications", headers=admin_headers).status_code == 200
+    assert client.get("/api/v1/admin/integrations", headers=admin_headers).status_code == 200
+    assert client.get("/api/v1/admin/audit", headers=admin_headers).status_code == 200
     simulator = client.post("/api/v1/admin/policy-simulator", headers=admin_headers, json={"energy": 2, "sleep_quality": 3, "pain": 7, "available_minutes": 10})
     assert simulator.status_code == 200
     assert simulator.json()["simulation_id"] >= 1

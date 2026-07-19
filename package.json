@@ -21,13 +21,15 @@
     "import:exercises": "node scripts/import-exercises.mjs",
     "db:migrate": "node scripts/migration-check.mjs",
     "security:check": "node scripts/security-check.mjs",
-    "checklist:check": "node scripts/check-complete-product-checklist.mjs"
+    "checklist:check": "node scripts/check-complete-product-checklist.mjs",
+    "e2e:browser": "node --test tests/browser-e2e.test.mjs"
   },
   "engines": {
     "node": ">=20",
     "python": ">=3.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "typescript": "^5.8.3"
   }
 }

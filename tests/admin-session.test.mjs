@@ -21,10 +21,11 @@ test("admin app uses visible login and does not auto-login with embedded credent
 test("admin protected dashboard redirects without session and has role-aware navigation", () => {
   assert.match(session, /redirect\("\/login/);
   assert.match(session, /roleNavigation/);
-  assert.match(session, /clinical_reviewer: \["Policies", "Simulator"\]/);
-  assert.match(session, /support: \["Users", "Privacy Jobs", "Audit Logs"\]/);
-  assert.match(page, /\/admin\/system/);
-  assert.match(page, /\/admin\/privacy-jobs/);
+  assert.match(session, /clinical_reviewer: \["Dashboard", "Policies", "Simulator"\]/);
+  assert.match(session, /support: \["Dashboard", "Users", "Privacy Jobs", "Notifications", "Audit"\]/);
+  assert.match(session, /System: "\/system"/);
+  assert.match(session, /"Privacy Jobs": "\/privacy-jobs"/);
+  assert.match(page, /redirect\("\/dashboard"\)/);
 });
 
 test("admin session cookies are http-only for credentials and csrf-protected for state changes", () => {

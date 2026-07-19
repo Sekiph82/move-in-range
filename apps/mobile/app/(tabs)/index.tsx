@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "expo-router";
 import { completeSession, createQuickSession, generateDailyPlan, logGlucose, reportPain, startSession, submitReadiness, apiFetch } from "../../src/api";
 import { useTheme } from "../../src/theme";
 
@@ -35,6 +36,20 @@ export default function TodayScreen() {
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Today</Text>
       <Text style={{ color: theme.muted, fontSize: 16 }}>Move safely. Learn your range.</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+        {[
+          ["/readiness", "Readiness"],
+          ["/daily-plan", "Daily plan"],
+          ["/quick-session", "Quick session"],
+          ["/workout/today", "Workout"]
+        ].map(([href, label]) => (
+          <Link key={href} href={href as never} asChild>
+            <Pressable accessibilityRole="link" style={{ minHeight: 40, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface }}>
+              <Text style={{ color: theme.primary, fontWeight: "700" }}>{label}</Text>
+            </Pressable>
+          </Link>
+        ))}
+      </View>
       {readiness.isLoading ? <ActivityIndicator accessibilityLabel="Loading readiness" /> : (
         <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 8 }}>
           <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>Readiness</Text>

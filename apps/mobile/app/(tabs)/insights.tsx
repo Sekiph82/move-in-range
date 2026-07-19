@@ -1,5 +1,6 @@
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "expo-router";
 import { apiFetch } from "../../src/api";
 import { useTheme } from "../../src/theme";
 
@@ -11,6 +12,19 @@ export default function InsightsScreen() {
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Insights</Text>
       <Text style={{ color: theme.muted, fontSize: 16 }}>Stored movement and glucose context, without treatment advice.</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+        {[
+          ["/achievements", "Achievements"],
+          ["/diabetes", "Diabetes"],
+          ["/calendar", "Calendar"]
+        ].map(([href, label]) => (
+          <Link key={href} href={href as never} asChild>
+            <Pressable accessibilityRole="link" style={{ minHeight: 40, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface }}>
+              <Text style={{ color: theme.primary, fontWeight: "700" }}>{label}</Text>
+            </Pressable>
+          </Link>
+        ))}
+      </View>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 8 }}>
         <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>Movement</Text>
         <Text style={{ color: theme.text }}>Sessions completed: {data?.sessions_completed ?? 0}</Text>

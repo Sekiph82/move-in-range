@@ -35,6 +35,8 @@ from .db.models import (
     Plan,
     PlanDecisionEvidence,
     PlanModification,
+    PolicyApproval,
+    PolicyVersion,
     Profile,
     ProfessionalNote,
     ProfessionalRelationship,
@@ -45,6 +47,7 @@ from .db.models import (
     ReadinessCheck,
     SessionEvent,
     SessionRecord,
+    SystemIncident,
     User,
     WearableSample,
 )
@@ -117,6 +120,20 @@ class Credentials(BaseModel):
 
 class RefreshPayload(BaseModel):
     refresh_token: str
+
+
+class AdminUpdatePayload(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class PolicyCreatePayload(BaseModel):
+    version: str = Field(min_length=3, max_length=80)
+    rules: dict[str, Any] = Field(default_factory=dict)
+    clinical_review_state: str = "draft"
+
+
+class PolicyActionPayload(BaseModel):
+    rationale: str = Field(default="Admin console action", max_length=500)
 
 
 class ProfilePayload(BaseModel):
@@ -1362,13 +1379,107 @@ def camera_analyze(payload: ProductPayload, user: User = Depends(require_user), 
 
 
 @router.get("/admin/policies")
-def policies(admin=Depends(require_admin_role("clinical_reviewer"))):
-    return {"admin": admin.id, "policies": [{"version": "draft-2026-07-18", "status": "draft", "clinical_review_state": "draft"}]}
+def policies(admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    items = db.query(PolicyVersion).order_by(desc(PolicyVersion.created_at)).limit(50).all()
+    if not items:
+        items = [PolicyVersion(version="draft-2026-07-18", status="draft", rules={"source": "seed"}, clinical_review_state="draft")]
+    return {"admin": admin.id, "items": [_policy_payload(item) for item in items]}
+
+
+@router.post("/admin/policies", status_code=status.HTTP_201_CREATED)
+def create_policy(payload: PolicyCreatePayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    existing = db.query(PolicyVersion).filter(PolicyVersion.version == payload.version).one_or_none()
+    if existing:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "policy_version_exists"})
+    policy = PolicyVersion(version=payload.version, status="draft", rules=payload.rules, clinical_review_state=payload.clinical_review_state)
+    db.add(policy)
+    db.add(AuditLog(actor_id=admin.id, action="admin.policy.create", target_type="policy", target_id=policy.version, redacted_payload={"status": policy.status}))
+    db.commit()
+    return {"policy": _policy_payload(policy)}
+
+
+@router.get("/admin/policies/{policy_id}")
+def policy_detail(policy_id: str, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    policy = _admin_policy_lookup(policy_id, db)
+    approvals = db.query(PolicyApproval).filter(PolicyApproval.policy_version_id == policy.id).order_by(desc(PolicyApproval.created_at)).all()
+    return {"policy": _policy_payload(policy, include_rules=True), "approvals": [_policy_approval_payload(item) for item in approvals]}
+
+
+@router.patch("/admin/policies/{policy_id}")
+def update_policy(policy_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    policy = _admin_policy_lookup(policy_id, db)
+    if "rules" in payload.payload and isinstance(payload.payload["rules"], dict):
+        policy.rules = payload.payload["rules"]
+    if "clinical_review_state" in payload.payload:
+        policy.clinical_review_state = str(payload.payload["clinical_review_state"])
+    if "status" in payload.payload:
+        policy.status = str(payload.payload["status"])
+    db.add(AuditLog(actor_id=admin.id, action="admin.policy.update", target_type="policy", target_id=policy.version, redacted_payload={"fields": sorted(payload.payload.keys())}))
+    db.commit()
+    return {"policy": _policy_payload(policy, include_rules=True)}
+
+
+@router.post("/admin/policies/{policy_id}/approve")
+def approve_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    return _policy_action(policy_id, "approved", payload.rationale, admin.id, db)
+
+
+@router.post("/admin/policies/{policy_id}/reject")
+def reject_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    return _policy_action(policy_id, "rejected", payload.rationale, admin.id, db)
+
+
+@router.post("/admin/policies/{policy_id}/publish")
+def publish_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    policy = _admin_policy_lookup(policy_id, db)
+    policy.status = "published"
+    policy.clinical_review_state = "approved"
+    approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=admin.id, decision="published", rationale=payload.rationale)
+    db.add(approval)
+    db.add(AuditLog(actor_id=admin.id, action="admin.policy.publish", target_type="policy", target_id=policy.version, redacted_payload={"decision": "published"}))
+    db.commit()
+    return {"policy": _policy_payload(policy, include_rules=True), "approval": _policy_approval_payload(approval)}
+
+
+@router.post("/admin/policies/{policy_id}/rollback")
+def rollback_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+    policy = _admin_policy_lookup(policy_id, db)
+    policy.status = "rolled_back"
+    approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=admin.id, decision="rolled_back", rationale=payload.rationale)
+    db.add(approval)
+    db.add(AuditLog(actor_id=admin.id, action="admin.policy.rollback", target_type="policy", target_id=policy.version, redacted_payload={"decision": "rolled_back"}))
+    db.commit()
+    return {"policy": _policy_payload(policy, include_rules=True), "approval": _policy_approval_payload(approval)}
 
 
 @router.get("/admin/exercises")
 def admin_exercises(admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
-    return exercise_search(page_size=25, db=db)
+    return exercise_search(page=1, page_size=25, db=db)
+
+
+@router.get("/admin/exercises/{exercise_id}")
+def admin_exercise_detail(exercise_id: str, admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    approvals = db.query(MediaApproval).filter(MediaApproval.exercise_id == exercise.id).order_by(desc(MediaApproval.created_at)).all()
+    tags = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).order_by(desc(ExerciseTag.created_at)).all()
+    return {"exercise": _exercise_payload(exercise, db, "en"), "media_approvals": [_media_approval_payload(item) for item in approvals], "tags": [_exercise_tag_payload(item) for item in tags]}
+
+
+@router.patch("/admin/exercises/{exercise_id}")
+def update_admin_exercise(exercise_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    metadata = {**(exercise.source_metadata or {})}
+    if "safety_tags" in payload.payload:
+        tag = ExerciseTag(exercise_id=exercise.id, classifier_version="manual-admin", tags={"safety_tags": payload.payload["safety_tags"]}, provenance="admin", confidence=100, manual_review_status="approved")
+        db.add(tag)
+    if "review_status" in payload.payload:
+        metadata["review_status"] = payload.payload["review_status"]
+    if "publish_state" in payload.payload:
+        metadata["publish_state"] = payload.payload["publish_state"]
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.update", target_type="exercise", target_id=exercise.id, redacted_payload={"fields": sorted(payload.payload.keys())}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
 
 
 @router.get("/admin/users")
@@ -1377,6 +1488,43 @@ def admin_users(admin=Depends(require_admin_role("support")), db: Session = Depe
     db.add(AuditLog(actor_id=admin.id, action="admin.users.masked_list", target_type="user", target_id="masked", redacted_payload={"count": len(users)}))
     db.commit()
     return {"items": [{"id": user.id, "email_masked": _mask_email(user.email), "role": user.role, "deleted": user.deleted_at is not None} for user in users], "impersonation": "disabled_by_default"}
+
+
+@router.get("/admin/users/{user_id}")
+def admin_user_detail(user_id: str, admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "user_not_found"})
+    profile = db.query(Profile).filter(Profile.user_id == user.id).one_or_none()
+    sessions = db.query(SessionRecord).filter(SessionRecord.user_id == user.id).order_by(desc(SessionRecord.created_at)).limit(5).all()
+    plans = db.query(Plan).filter(Plan.user_id == user.id).order_by(desc(Plan.created_at)).limit(5).all()
+    consents = db.query(ConsentRecord).filter(ConsentRecord.user_id == user.id).order_by(desc(ConsentRecord.created_at)).limit(10).all()
+    db.add(AuditLog(actor_id=admin.id, action="admin.user.masked_detail", target_type="user", target_id=user.id, redacted_payload={"email_masked": _mask_email(user.email)}))
+    db.commit()
+    return {
+        "user": {"id": user.id, "email_masked": _mask_email(user.email), "role": user.role, "deleted": user.deleted_at is not None},
+        "profile_summary": _profile_admin_summary(profile),
+        "sessions": [{"id": item.id, "status": item.status, "plan_id": item.plan_id, "elapsed_seconds": item.elapsed_seconds} for item in sessions],
+        "plans": [{"id": item.id, "plan_type": item.plan_type, "status": item.status, "safety_action": item.safety_action} for item in plans],
+        "consents": [{"consent_type": item.consent_type, "granted": item.granted, "version": item.version} for item in consents],
+    }
+
+
+@router.patch("/admin/users/{user_id}")
+def update_admin_user(user_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "user_not_found"})
+    action = payload.payload.get("action")
+    if action == "disable":
+        user.deleted_at = datetime.now(UTC)
+    elif action == "enable":
+        user.deleted_at = None
+    else:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_user_action"})
+    db.add(AuditLog(actor_id=admin.id, action=f"admin.user.{action}", target_type="user", target_id=user.id, redacted_payload={}))
+    db.commit()
+    return {"user": {"id": user.id, "email_masked": _mask_email(user.email), "role": user.role, "deleted": user.deleted_at is not None}}
 
 
 @router.get("/admin/system")
@@ -1389,6 +1537,7 @@ def admin_system(admin=Depends(require_admin_role("analyst")), db: Session = Dep
         "redis": "configured" if isinstance(store, RedisTokenRevocationStore) else "development_fallback",
         "import_jobs": {"latest": "see audit logs"},
         "provider_status": [{"key": key, "status": value["status"]} for key, value in PROVIDER_REGISTRY.items()],
+        "incidents": [_system_incident_payload(item) for item in db.query(SystemIncident).order_by(desc(SystemIncident.created_at)).limit(10).all()],
         "secrets_exposed": False,
     }
 
@@ -1398,6 +1547,35 @@ def admin_privacy_jobs(admin=Depends(require_admin_role("support")), db: Session
     exports = db.query(DataExportJob).order_by(desc(DataExportJob.created_at)).limit(20).all()
     deletions = db.query(DeletionJob).order_by(desc(DeletionJob.created_at)).limit(20).all()
     return {"exports": [_export_job_payload(item) for item in exports], "deletions": [_deletion_job_payload(item) for item in deletions]}
+
+
+@router.get("/admin/import-jobs")
+def admin_import_jobs(admin=Depends(require_admin_role("content_editor")), db: Session = Depends(get_db)):
+    exercise_count = db.query(Exercise).count()
+    latest = db.query(AuditLog).filter(AuditLog.action.like("%import%")).order_by(desc(AuditLog.created_at)).limit(10).all()
+    return {"items": [{"kind": "exercise_import", "status": "ready", "records_available": exercise_count}], "audit": [{"event": item.action, "redacted": True} for item in latest]}
+
+
+@router.get("/admin/notifications")
+def admin_notifications(admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    jobs = db.query(NotificationJob).order_by(desc(NotificationJob.created_at)).limit(50).all()
+    return {"items": [_notification_job_payload(item) for item in jobs], "provider": "mock_or_local"}
+
+
+@router.get("/admin/integrations")
+def admin_integrations(admin=Depends(require_admin_role("analyst")), db: Session = Depends(get_db)):
+    connections = db.query(ProviderConnection).order_by(desc(ProviderConnection.created_at)).limit(50).all()
+    syncs = db.query(ProviderSyncRecord).order_by(desc(ProviderSyncRecord.created_at)).limit(50).all()
+    return {
+        "providers": [{"key": key, **value} for key, value in PROVIDER_REGISTRY.items()],
+        "connections": [_provider_connection_payload(item) for item in connections],
+        "syncs": [_provider_sync_payload(item) for item in syncs],
+    }
+
+
+@router.get("/admin/audit")
+def audit(admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    return audit_logs(admin, db)
 
 
 @router.get("/admin/audit-logs")
@@ -1518,6 +1696,73 @@ def _mask_email(email: str | None) -> str | None:
         return email
     name, domain = email.split("@", 1)
     return f"{name[:2]}***@{domain}"
+
+
+def _policy_payload(record: PolicyVersion, include_rules: bool = False) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": record.id,
+        "version": record.version,
+        "status": record.status,
+        "clinical_review_state": record.clinical_review_state,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }
+    if include_rules:
+        payload["rules"] = record.rules or {}
+    else:
+        payload["rule_count"] = len(record.rules or {})
+    return payload
+
+
+def _admin_policy_lookup(policy_id: str, db: Session) -> PolicyVersion:
+    query = db.query(PolicyVersion)
+    policy = query.filter(PolicyVersion.version == policy_id).one_or_none()
+    if not policy and policy_id.isdigit():
+        policy = db.get(PolicyVersion, int(policy_id))
+    if not policy:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "policy_not_found"})
+    return policy
+
+
+def _policy_approval_payload(record: PolicyApproval) -> dict[str, Any]:
+    return {"id": record.id, "reviewer_id": record.reviewer_id, "decision": record.decision, "rationale": record.rationale, "created_at": record.created_at.isoformat() if record.created_at else None}
+
+
+def _policy_action(policy_id: str, decision: str, rationale: str, reviewer_id: str, db: Session) -> dict[str, Any]:
+    policy = _admin_policy_lookup(policy_id, db)
+    policy.clinical_review_state = decision
+    if decision == "rejected":
+        policy.status = "changes_requested"
+    approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=reviewer_id, decision=decision, rationale=rationale)
+    db.add(approval)
+    db.add(AuditLog(actor_id=reviewer_id, action=f"admin.policy.{decision}", target_type="policy", target_id=policy.version, redacted_payload={"decision": decision}))
+    db.commit()
+    return {"policy": _policy_payload(policy, include_rules=True), "approval": _policy_approval_payload(approval)}
+
+
+def _profile_admin_summary(profile: Profile | None) -> dict[str, Any]:
+    if not profile:
+        return {"present": False}
+    health = profile.health_payload or {}
+    return {
+        "present": True,
+        "preferred_name": profile.preferred_name,
+        "locale": profile.locale,
+        "timezone": profile.timezone,
+        "onboarding_complete": profile.onboarding_complete,
+        "conditions_count": len(health.get("conditions", [])),
+        "sensitivities_count": len(health.get("sensitivities", {})),
+        "equipment": health.get("equipment", []),
+        "goals": health.get("goals", []),
+        "diabetes_enabled": bool((health.get("diabetes") or {}).get("enabled")),
+    }
+
+
+def _exercise_tag_payload(record: ExerciseTag) -> dict[str, Any]:
+    return {"id": record.id, "classifier_version": record.classifier_version, "tags": record.tags, "provenance": record.provenance, "confidence": record.confidence, "manual_review_status": record.manual_review_status}
+
+
+def _system_incident_payload(record: SystemIncident) -> dict[str, Any]:
+    return {"id": record.id, "incident_type": record.incident_type, "severity": record.severity, "status": record.status, "redacted_payload": record.redacted_payload}
 
 
 def _optional_datetime(value: Any) -> datetime | None:
@@ -1714,7 +1959,7 @@ def _get_exercise(exercise_id: str, db: Session) -> Exercise:
 def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: bool = False) -> dict[str, Any]:
     localizations = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id).all()
     media = db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id == exercise.id).one_or_none()
-    tag = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).one_or_none()
+    tag = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).order_by(desc(ExerciseTag.created_at)).first()
     instructions = {loc.locale: loc.instructions for loc in localizations}
     steps = {loc.locale: loc.instruction_steps for loc in localizations}
     selected_locale = language if language in instructions else "en"

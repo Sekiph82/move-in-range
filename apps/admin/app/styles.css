@@ -12,8 +12,14 @@ a { color: inherit; }
 .nav button { width: 100%; margin-top: 18px; background: #edf6f2; color: #17211d; cursor: pointer; }
 .role { color: #b8c9c2; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .main { padding: 28px; }
+.page-title { margin-bottom: 20px; }
+.page-title h2 { margin: 0 0 6px; font-size: 28px; }
+.page-title p { margin: 0; color: #53645e; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 .card { border: 1px solid #d8e3de; border-radius: 8px; padding: 16px; background: white; }
+.metric span { color: #53645e; display: block; font-size: 13px; }
+.metric strong { display: block; font-size: 22px; margin: 8px 0; overflow-wrap: anywhere; }
+.metric p { color: #53645e; margin: 0; }
 button, input, select, textarea { min-height: 40px; border-radius: 6px; border: 1px solid #b8c9c2; padding: 8px 10px; }
 .login-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #eef4f1; }
 .login-panel { width: min(420px, 100%); background: white; border: 1px solid #d8e3de; border-radius: 8px; padding: 24px; }
@@ -21,3 +27,20 @@ button, input, select, textarea { min-height: 40px; border-radius: 6px; border: 
 .login-panel button { margin-top: 8px; background: #18211e; color: white; cursor: pointer; }
 .error { color: #9a1f1f; background: #fff2f2; border: 1px solid #efb7b7; border-radius: 6px; padding: 10px; }
 pre { overflow: auto; max-width: 100%; }
+.table-wrap { overflow-x: auto; border: 1px solid #d8e3de; border-radius: 8px; background: white; }
+table { width: 100%; border-collapse: collapse; min-width: 680px; }
+th, td { padding: 10px 12px; border-bottom: 1px solid #e8efec; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { font-size: 12px; color: #53645e; text-transform: uppercase; letter-spacing: 0; background: #f4f8f6; }
+tr:last-child td { border-bottom: 0; }
+.details { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.details div { border: 1px solid #d8e3de; border-radius: 8px; padding: 12px; background: white; }
+.details dt { color: #53645e; font-size: 12px; text-transform: uppercase; }
+.details dd { margin: 6px 0 0; font-weight: 700; overflow-wrap: anywhere; }
+.empty { border: 1px dashed #b8c9c2; border-radius: 8px; padding: 16px; color: #53645e; background: white; }
+.payload { margin-top: 16px; border: 1px solid #d8e3de; border-radius: 8px; padding: 12px; background: white; }
+.payload summary { cursor: pointer; font-weight: 700; }
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  .nav { position: static; }
+  .main { padding: 18px; }
+}

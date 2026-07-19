@@ -1,51 +1,5 @@
-import { requireAdmin, readAdminApi, roleNavigation, apiBase } from "./session";
+import { redirect } from "next/navigation";
 
-export default async function AdminHome() {
-  const { admin, token, csrf } = await requireAdmin();
-  const navItems = roleNavigation[admin.role];
-  const [users, policies, exercises, privacyJobs, system, audit, simulation] = await Promise.all([
-    navItems.includes("Users") ? readAdminApi("/admin/users", token) : { error: "Forbidden" },
-    navItems.includes("Policies") ? readAdminApi("/admin/policies", token) : { error: "Forbidden" },
-    navItems.includes("Exercise Review") ? readAdminApi("/admin/exercises", token) : { error: "Forbidden" },
-    navItems.includes("Privacy Jobs") ? readAdminApi("/admin/privacy-jobs", token) : { error: "Forbidden" },
-    navItems.includes("System") ? readAdminApi("/admin/system", token) : { error: "Forbidden" },
-    navItems.includes("Audit Logs") ? readAdminApi("/admin/audit-logs", token) : { error: "Forbidden" },
-    navItems.includes("Simulator")
-      ? fetch(`${apiBase}/api/v1/admin/policy-simulator`, {
-          method: "POST",
-          cache: "no-store",
-          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-          body: JSON.stringify({ energy: 2, sleep_quality: 3, pain: 7, available_minutes: 10, stress: 3 })
-        }).then((response) => response.ok ? response.json() : { error: `API returned ${response.status}` }).catch((error) => ({ error: error instanceof Error ? error.message : "API unavailable" }))
-      : { error: "Forbidden" }
-  ]);
-
-  return (
-    <div className="shell">
-      <nav className="nav" aria-label="Admin navigation">
-        <h1>MoveInRange</h1>
-        <p className="role">{admin.email}<br />{admin.role}</p>
-        {navItems.map((item) => <a key={item} href={"#" + item}>{item}</a>)}
-        <form action="/api/admin-session/logout" method="post">
-          <input type="hidden" name="csrf" value={csrf} />
-          <button type="submit">Log out</button>
-        </form>
-      </nav>
-      <main className="main">
-        <h2>Administration</h2>
-        <p>Authenticated administration reads API data from {apiBase}.</p>
-        <section className="grid">
-          <article className="card"><h3>Admin Session</h3><p>Signed in with a secure server-side session cookie.</p></article>
-          <article className="card" id="Users"><h3>Users</h3><p>{users.items?.length ?? 0} masked users visible.</p><pre>{JSON.stringify((users.items ?? []).slice(0, 5), null, 2)}</pre></article>
-          <article className="card" id="Policies"><h3>Policies</h3><pre>{JSON.stringify(policies, null, 2)}</pre></article>
-          <article className="card" id="Exercise Review"><h3>Exercise Review</h3><p>{exercises.items?.length ?? 0} exercises loaded for review.</p><pre>{JSON.stringify((exercises.items ?? []).slice(0, 3), null, 2)}</pre></article>
-          <article className="card" id="Simulator"><h3>Simulator</h3><pre>{JSON.stringify(simulation, null, 2)}</pre></article>
-          <article className="card" id="Privacy Jobs"><h3>Privacy Jobs</h3><pre>{JSON.stringify(privacyJobs, null, 2)}</pre></article>
-          <article className="card" id="System"><h3>System</h3><pre>{JSON.stringify(system, null, 2)}</pre></article>
-          <article className="card" id="Audit Logs"><h3>Audit Logs</h3><pre>{JSON.stringify(audit, null, 2)}</pre></article>
-          <article className="card"><h3>Safety Boundary</h3><p>No medication recommendation, diagnosis, or clinician-plan override.</p></article>
-        </section>
-      </main>
-    </div>
-  );
+export default function AdminHome() {
+  redirect("/dashboard");
 }
