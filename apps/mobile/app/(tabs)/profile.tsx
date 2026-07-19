@@ -56,7 +56,7 @@ export default function ProfileScreen() {
         <Text style={{ color: theme.text }}>Conditions: {(item?.conditions ?? []).join(", ") || "None saved"}</Text>
         <Text style={{ color: theme.text }}>Equipment: {(item?.equipment ?? []).join(", ") || "None saved"}</Text>
         <Text style={{ color: theme.text }}>Consent accepted: {item?.consent_accepted ? "yes" : "no"}</Text>
-        <Text style={{ color: theme.text }}>Onboarding status: {onboarding.data?.progress?.status ?? "not loaded"}</Text>
+        <Text style={{ color: theme.text }}>Onboarding status: {onboarding.data?.progress?.status ?? "No saved onboarding draft yet"}</Text>
         <Text style={{ color: theme.muted }}>MoveInRange is a wellness tool; it does not diagnose, change medication guidance, or provide insulin-dose guidance.</Text>
       </View>
       <View style={{ flexDirection: "row", gap: 12 }}>
