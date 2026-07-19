@@ -20,7 +20,8 @@
     "format:check": "node scripts/check-format.mjs",
     "import:exercises": "node scripts/import-exercises.mjs",
     "db:migrate": "node scripts/migration-check.mjs",
-    "security:check": "node scripts/security-check.mjs"
+    "security:check": "node scripts/security-check.mjs",
+    "checklist:check": "node scripts/check-complete-product-checklist.mjs"
   },
   "engines": {
     "node": ">=20",

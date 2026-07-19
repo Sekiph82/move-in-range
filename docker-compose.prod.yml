@@ -1,0 +1,39 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL}
+      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD}
+    ports:
+      - "8200:8200"
+    depends_on:
+      - postgres
+      - redis
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${API_BASE_URL}
+    ports:
+      - "3200:3200"
+    depends_on:
+      - api
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: moveinrange
+      POSTGRES_USER: moveinrange
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+volumes:
+  postgres-data:
