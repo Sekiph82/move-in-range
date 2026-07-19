@@ -4,7 +4,8 @@ const errors = [];
 const checklistPaths = [
   "docs/COMPLETE_PRODUCT_MASTER_CHECKLIST.md",
   "docs/FUNCTIONAL_PRODUCT_COMPLETION_CHECKLIST.md",
-  "docs/PRODUCT_ACCEPTANCE_CHECKLIST.md"
+  "docs/PRODUCT_ACCEPTANCE_CHECKLIST.md",
+  "docs/REAL_BETA_COMPLETION_CHECKLIST.md"
 ];
 
 for (const checklistPath of checklistPaths) {
@@ -23,7 +24,9 @@ for (const checklistPath of checklistPaths) {
     const header = block.split("\n")[0] ?? "";
     if (!header.startsWith("- [")) continue;
     if (header.includes("[x] COMPLETE")) {
-      const requiredFields = checklistPath.includes("PRODUCT_ACCEPTANCE")
+      const requiredFields = checklistPath.includes("REAL_BETA")
+        ? ["route:", "component:", "user action:", "API endpoint:", "persistence:", "validation:", "loading state:", "empty state:", "error state:", "success state:", "unit test:", "integration test:", "browser E2E:", "device validation:", "blocker:"]
+        : checklistPath.includes("PRODUCT_ACCEPTANCE")
         ? ["feature:", "route:", "component:", "API endpoint:", "persistence:", "validation:", "unit-test evidence:", "integration-test evidence:", "E2E evidence:", "manual validation:", "blocker:"]
         : checklistPath.includes("FUNCTIONAL_PRODUCT")
           ? ["Backend:", "Mobile UI:", "Persistence:", "Authorization:", "Unit tests:", "Integration tests:", "E2E tests:"]
@@ -43,11 +46,15 @@ for (const checklistPath of checklistPaths) {
       if (checklistPath.includes("PRODUCT_ACCEPTANCE") && /provider activation/i.test(header) && !/sandbox|credential|blocker/i.test(block)) {
         errors.push(`Provider activation item lacks proof: ${header}`);
       }
+      if (checklistPath.includes("REAL_BETA") && /\b(mock|internal fallback pending|not loaded|achievement_key|event_type|value: 112)\b/i.test(block)) {
+        errors.push(`Completed beta item exposes internal or sample wording: ${header}`);
+      }
     }
     if (header.includes("[!] BLOCKED")) {
       if (/Blockers: (None|TBD)\b/.test(block)) errors.push(`Blocked task has no blocker: ${header}`);
       if (/Implementation files: TBD|Tests: TBD/.test(block)) errors.push(`Blocked task missing interface/mock evidence: ${header}`);
       if (checklistPath.includes("PRODUCT_ACCEPTANCE") && !/blocker: .+/i.test(block)) errors.push(`Blocked acceptance item missing blocker field: ${header}`);
+      if (checklistPath.includes("REAL_BETA") && !/blocker: .+/i.test(block)) errors.push(`Blocked beta item missing blocker field: ${header}`);
     }
   }
 }

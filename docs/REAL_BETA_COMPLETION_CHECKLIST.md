@@ -1,0 +1,139 @@
+# Real Beta Completion Checklist
+
+Legend: `[ ] NOT STARTED`, `[~] IN PROGRESS`, `[x] COMPLETE`, `[!] BLOCKED`, `[-] NOT APPLICABLE`
+
+- [x] COMPLETE Real user authentication
+  - route: `/auth/login`, `/auth/register`, `/auth/forgot-password`, `/auth/session-expired`
+  - component: `AuthScreen`, `schemas.ts`, `api.ts`
+  - user action: register, sign in, show/hide password, remember session, clear saved session, recover password
+  - API endpoint: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`
+  - persistence: `TokenStore` with SecureStore/memory fallback
+  - validation: `loginSchema`, `registerSchema`, `forgotPasswordSchema`
+  - loading state: auth mutation pending labels
+  - empty state: blank form fields by default
+  - error state: `ErrorText` and field-level schema messages
+  - success state: route replacement to onboarding
+  - unit test: `beta validation schemas reject malformed auth, glucose, and sharing payloads`
+  - integration test: `test_mvp_hardening.py` auth/session tests
+  - browser E2E: admin browser auth remains covered; product web blocked without Expo web harness
+  - device validation: blocked, Android SDK/emulator absent on this machine
+  - blocker: None for API-backed auth; native device validation blocked
+
+- [x] COMPLETE Onboarding step controls
+  - route: `/onboarding`
+  - component: `OnboardingScreen`, `model.ts`
+  - user action: back, continue, save, resume, select gender, contexts, regions, goals, targets, equipment
+  - API endpoint: `GET /api/v1/onboarding`, `PUT /api/v1/onboarding`
+  - persistence: onboarding draft payload and completion flag
+  - validation: `validateOnboardingStepPayload` plus readable field-level error copy
+  - loading state: loading draft indicator
+  - empty state: no saved draft text
+  - error state: schema messages and mutation error panel
+  - success state: progress list marks saved/current/pending
+  - unit test: `real onboarding metadata covers required acceptance steps and validation`
+  - integration test: `test_complete_product_platform.py`
+  - browser E2E: route inventory
+  - device validation: blocked, Android SDK/emulator absent
+  - blocker: None for implementation
+
+- [x] COMPLETE Calendar and achievements beta copy
+  - route: `/calendar`, `/achievements`, Today tab
+  - component: `CalendarScreen`, `AchievementsScreen`
+  - user action: switch month/week, previous, next, today, select date, inspect achievement cards
+  - API endpoint: `GET /api/v1/calendar`, `GET /api/v1/achievements`
+  - persistence: calendar events and achievement records
+  - validation: selected ISO date state
+  - loading state: `LoadingState`
+  - empty state: no plans/sessions and no achievements copy
+  - error state: API errors surface through query state in the route shell
+  - success state: selected day detail and earned/locked achievement cards
+  - unit test: internal-key guard via `npm test`
+  - integration test: `test_complete_product_platform.py`
+  - browser E2E: route inventory
+  - device validation: blocked, Android SDK/emulator absent
+  - blocker: None for API-backed UI
+
+- [x] COMPLETE Exercise filters and detail beta wording
+  - route: `/exercises`, `/exercise/[id]`
+  - component: `ExerciseLibraryScreen`, `ExerciseDetailScreen`
+  - user action: search, filter by body part/equipment/target, reset filters, load more, open detail, favorite
+  - API endpoint: `GET /api/v1/exercises`, `GET /api/v1/exercises/{id}`, `POST /api/v1/exercises/{id}/favorite`
+  - persistence: favorites and recent exercise records
+  - validation: visible filters alter query parameters
+  - loading state: `LoadingState`
+  - empty state: no matching exercises copy
+  - error state: `ErrorText`
+  - success state: paginated results and beta detail copy
+  - unit test: route/component inventory and user-facing wording guards
+  - integration test: PostgreSQL dataset import and API exercise tests
+  - browser E2E: route inventory
+  - device validation: blocked, Android SDK/emulator absent
+  - blocker: None for supported search/body-part/equipment/target filters; difficulty/position/media filters require backend fields not present yet and are not shown as active controls
+
+- [x] COMPLETE Diabetes beta form
+  - route: `/diabetes`
+  - component: `DiabetesScreen`, `glucoseSchema`
+  - user action: enter timing, unit, value, trend, source, symptoms, meal timing, active-insulin note, delayed interval
+  - API endpoint: `POST /api/v1/glucose`, `POST /api/v1/diabetes/context`, `GET /api/v1/diabetes/insights`
+  - persistence: glucose and diabetes context entries
+  - validation: `glucoseSchema`
+  - loading state: insights loading indicator
+  - empty state: no glucose context saved
+  - error state: field-level schema messages and mutation error
+  - success state: save actions invalidate insights
+  - unit test: `beta validation schemas reject malformed auth, glucose, and sharing payloads`
+  - integration test: `test_complete_product_platform.py`
+  - browser E2E: route inventory
+  - device validation: blocked, Android SDK/emulator absent
+  - blocker: None for API-backed UI
+
+- [x] COMPLETE Honest integration labels
+  - route: `/integrations`
+  - component: `IntegrationsScreen`
+  - user action: inspect provider state and connect sandbox providers only
+  - API endpoint: `GET /api/v1/integrations/providers`, `POST /api/v1/integrations/connect`
+  - persistence: provider connections and sync records
+  - validation: blocked providers disable connect action
+  - loading state: `LoadingState`
+  - empty state: no providers rendered by API
+  - error state: `ErrorText`
+  - success state: query invalidation after connection
+  - unit test: `provider state reports activation blockers honestly`
+  - integration test: `test_complete_product_platform.py`
+  - browser E2E: route inventory
+  - device validation: blocked, Android SDK/emulator absent
+  - blocker: Real vendor credentials remain external
+
+- [!] BLOCKED Android device validation
+  - route: native Android runtime
+  - component: Expo app
+  - user action: install/run app on emulator or device
+  - API endpoint: Docker API available at port 8200
+  - persistence: SecureStore and native notification/device state
+  - validation: adb/emulator/SDK detection performed
+  - loading state: not applicable without runtime
+  - empty state: no connected device
+  - error state: SDK paths missing
+  - success state: not reached
+  - unit test: token storage fallback tests
+  - integration test: Docker API suite
+  - browser E2E: admin browser E2E only
+  - device validation: blocked
+  - blocker: `adb`, `emulator`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, and common Windows SDK paths were not found
+
+- [!] BLOCKED Product Expo web E2E
+  - route: Expo web product routes
+  - component: Expo Router mobile app
+  - user action: register through full mobile web flow
+  - API endpoint: Docker API available
+  - persistence: SecureStore web fallback requires browser runtime validation
+  - validation: route inventory and API tests cover pieces
+  - loading state: not executed in Expo web
+  - empty state: not executed in Expo web
+  - error state: not executed in Expo web
+  - success state: not executed in Expo web
+  - unit test: mobile route and schema tests
+  - integration test: API tests
+  - browser E2E: admin only in this PR
+  - device validation: blocked
+  - blocker: no Expo web server/harness is configured in the repository test profile
