@@ -1,6 +1,8 @@
 .git
 .github
 .local
+.vercel
+supabase/.temp
 .npm
 .npm-cache
 .pnpm-store
