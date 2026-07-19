@@ -39,7 +39,7 @@ class Profile(TimestampMixin, Base):
 class Exercise(TimestampMixin, Base):
     __tablename__ = "exercises"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    source_id: Mapped[str] = mapped_column(String(16), unique=True)
+    source_id: Mapped[str] = mapped_column(String(64), unique=True)
     slug: Mapped[str] = mapped_column(String(220), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(240), index=True)
     body_part: Mapped[str] = mapped_column(String(80), index=True)

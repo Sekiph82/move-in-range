@@ -1,13 +1,35 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { execFileSync } from "node:child_process";
 
-const files = execFileSync("git", ["ls-files"], { encoding: "utf8" })
-  .trim()
-  .split(/\r?\n/)
-  .filter((file) => file && !file.endsWith("package-lock.json"));
+function trackedOrWorkspaceFiles() {
+  try {
+    return execFileSync("git", ["ls-files"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+  } catch {
+    const ignoredDirs = new Set([".git", "node_modules", ".next", ".expo", ".pytest_cache", ".ruff_cache", ".local"]);
+    const ignoredExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".db", ".sqlite"]);
+    const found = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = dir === "." ? entry.name : `${dir}/${entry.name}`;
+        if (entry.isDirectory()) {
+          if (!ignoredDirs.has(entry.name)) walk(path);
+          continue;
+        }
+        if (![...ignoredExtensions].some((ext) => entry.name.endsWith(ext))) found.push(path);
+      }
+    };
+    walk(".");
+    return found;
+  }
+}
+
+const files = trackedOrWorkspaceFiles().filter((file) => file && !file.endsWith("package-lock.json"));
 
 test("MoveInRange local service URLs use canonical MVP ports", () => {
   const offenders = [];
