@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -29,7 +29,7 @@ function trackedOrWorkspaceFiles() {
   }
 }
 
-const files = trackedOrWorkspaceFiles().filter((file) => file && !file.endsWith("package-lock.json"));
+const files = trackedOrWorkspaceFiles().filter((file) => file && existsSync(file) && !file.endsWith("package-lock.json"));
 
 test("MoveInRange local service URLs use canonical MVP ports", () => {
   const offenders = [];

@@ -6,6 +6,7 @@ export const API_BASE_URL = configuredBase.replace(/\/api\/v1\/?$/, "");
 const API_V1 = `${API_BASE_URL}/api/v1`;
 const demoEmail = "demo@moveinrange.local";
 const demoPassword = "MoveInRangeLocalDemo!";
+const enableDemoLogin = process.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN === "true";
 
 const memoryTokens: Record<string, string | null> = { access_token: null, refresh_token: null };
 
@@ -39,9 +40,65 @@ async function storeTokens(payload: { access_token: string; refresh_token: strin
   await tokenStore.save(payload);
 }
 
-export async function ensureLocalSession() {
+async function authRequest(path: string, body: Record<string, unknown>) {
+  const response = await fetch(`${API_V1}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  }).catch(() => null);
+  if (!response) throw new Error("API unavailable. Check your connection and try again.");
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Authentication failed (${response.status})`);
+  }
+  const payload = await response.json();
+  await storeTokens(payload);
+  return payload;
+}
+
+export function registerUser(payload: { email: string; password: string; preferredName: string; marketingConsent?: boolean }) {
+  return authRequest("/auth/register", { email: payload.email, password: payload.password, preferred_name: payload.preferredName, marketing_consent: Boolean(payload.marketingConsent) });
+}
+
+export function loginUser(payload: { email: string; password: string }) {
+  return authRequest("/auth/login", payload);
+}
+
+export async function refreshSession() {
+  const refresh_token = await tokenStore.loadRefreshToken();
+  if (!refresh_token) return null;
+  try {
+    return await authRequest("/auth/refresh", { refresh_token });
+  } catch {
+    await tokenStore.clear();
+    return null;
+  }
+}
+
+export async function restoreSession() {
   const existing = await tokenStore.loadAccessToken();
   if (existing) return existing;
+  const refreshed = await refreshSession();
+  return refreshed?.access_token ?? null;
+}
+
+export async function logoutUser() {
+  const token = await tokenStore.loadAccessToken();
+  if (token) {
+    await fetch(`${API_V1}/auth/logout`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    }).catch(() => null);
+  }
+  await tokenStore.clear();
+}
+
+export async function ensureLocalSession() {
+  const restored = await restoreSession();
+  if (restored) return restored;
+  if (!enableDemoLogin) {
+    throw new Error("Please sign in before continuing.");
+  }
   const credentials = { email: demoEmail, password: demoPassword };
   let response = await fetch(`${API_V1}/auth/login`, {
     method: "POST",
@@ -180,10 +237,10 @@ export function reportPain(sessionId: string) {
   });
 }
 
-export function logGlucose(sessionId?: string) {
+export function logGlucose(payload: { value: number; unit: "mg/dL" | "mmol/L"; timing: "pre" | "post" | "delayed"; session_id?: string }) {
   return apiFetch("/glucose", {
     method: "POST",
-    body: JSON.stringify({ value: 112, unit: "mg/dL", timing: "post", session_id: sessionId })
+    body: JSON.stringify(payload)
   });
 }
 
@@ -193,6 +250,10 @@ export function logDiabetesContext(payload: Record<string, unknown>) {
 
 export function connectProvider(provider_key: string, mock = true) {
   return apiFetch("/integrations/connect", { method: "POST", body: JSON.stringify({ provider_key, mock }) });
+}
+
+export function favoriteExercise(exerciseId: string) {
+  return apiFetch(`/exercises/${exerciseId}/favorite`, { method: "POST" });
 }
 
 export function saveNotificationPreference(category: string, enabled: boolean) {

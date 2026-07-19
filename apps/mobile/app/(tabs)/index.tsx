@@ -2,8 +2,26 @@ import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "expo-router";
-import { completeSession, createQuickSession, generateDailyPlan, logGlucose, reportPain, startSession, submitReadiness, apiFetch } from "../../src/api";
+import { completeSession, createQuickSession, generateDailyPlan, reportPain, startSession, submitReadiness, apiFetch } from "../../src/api";
 import { useTheme } from "../../src/theme";
+
+const calendarEventLabels: Record<string, string> = {
+  daily_plan: "Daily plan",
+  session: "Workout",
+  reminder: "Reminder",
+  recovery: "Recovery"
+};
+
+const calendarStatusLabels: Record<string, string> = {
+  planned: "Planned",
+  completed: "Completed",
+  skipped: "Skipped",
+  partial: "Partially completed",
+  pain_stop: "Stopped for pain",
+  symptom_stop: "Stopped for symptoms",
+  recovery: "Recovery",
+  blocked: "Blocked"
+};
 
 export default function TodayScreen() {
   const theme = useTheme();
@@ -24,7 +42,6 @@ export default function TodayScreen() {
       const id = started.session.id as string;
       setSessionId(id);
       await reportPain(id);
-      await logGlucose(id);
       return completeSession(id);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insights"] })
@@ -75,7 +92,7 @@ export default function TodayScreen() {
         <Pressable accessibilityLabel="Create eight minute chair session" onPress={() => quickSession.mutate()} style={{ minHeight: 48, justifyContent: "center" }}>
           <Text style={{ color: theme.primary, fontWeight: "700" }}>{quickSession.isPending ? "Creating..." : "Create 8-minute chair session"}</Text>
         </Pressable>
-        {(calendar.data?.items ?? []).slice(0, 3).map((item: any) => <Text key={item.id} style={{ color: theme.text }}>{item.event_date}: {item.event_type} - {item.status}</Text>)}
+        {(calendar.data?.items ?? []).slice(0, 3).map((item: any) => <Text key={item.id} style={{ color: theme.text }}>{item.event_date}: {calendarEventLabels[item.event_type] ?? "Movement event"} - {calendarStatusLabels[item.status] ?? "Scheduled"}</Text>)}
       </View>
       <Pressable accessibilityLabel="Start guided workout" disabled={!plan.data?.plan || blocked} onPress={() => workout.mutate()} style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.primary, opacity: !plan.data?.plan || blocked ? 0.5 : 1 }}>
         <Text style={{ color: theme.surface, fontWeight: "700" }}>{workout.isPending ? "Recording workout..." : sessionId ? "Complete another guided workout" : "Start guided workout"}</Text>

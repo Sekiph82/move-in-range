@@ -6,8 +6,10 @@ const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/wo
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
 const { emptyOnboardingDraft, isOnboardingComplete, saveStep, validateOnboardingStep } = await import("../apps/mobile/src/onboarding/onboardingState.ts");
 const { ONBOARDING_STEPS, BODY_REGIONS, GENDER_OPTIONS, validateOnboardingStepPayload } = await import("../apps/mobile/src/features/onboarding/model.ts");
+const { loginSchema, registerSchema, glucoseSchema, inviteSchema } = await import("../apps/mobile/src/features/validation/schemas.ts");
 const { resolveWorkoutMedia, scheduleLocalVoiceCues } = await import("../apps/mobile/src/guidance/mediaVoice.ts");
 const { canActivateProvider, providerBlockedReason } = await import("../apps/mobile/src/integrations/providerState.ts");
+const { paramsFor } = await import("../apps/mobile/src/features/exercises/filters.ts");
 
 function mirToken(exp) {
   const body = btoa(JSON.stringify({ exp })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -154,7 +156,11 @@ test("provider state reports activation blockers honestly", () => {
 
 test("Expo Router exposes the functional product route family", () => {
   const routes = [
-    "auth.tsx",
+    "auth/index.tsx",
+    "auth/login.tsx",
+    "auth/register.tsx",
+    "auth/forgot-password.tsx",
+    "auth/session-expired.tsx",
     "onboarding.tsx",
     "readiness.tsx",
     "quick-session.tsx",
@@ -200,7 +206,54 @@ test("product workflow is decomposed into feature-specific screens", () => {
   ];
   for (const file of featureFiles) assert.equal(existsSync(file), true, file);
   assert.match(readFileSync("apps/mobile/src/features/exercises/ExerciseScreens.tsx", "utf8"), /camera_consent: true/);
-  assert.match(readFileSync("apps/mobile/src/features/diabetes/DiabetesScreen.tsx", "utf8"), /never calculates insulin or treatment/);
+  assert.match(readFileSync("apps/mobile/src/features/diabetes/DiabetesScreen.tsx", "utf8"), /not an insulin or treatment recommendation/);
+});
+
+test("beta validation schemas reject malformed auth, glucose, and sharing payloads", () => {
+  assert.equal(loginSchema.safeParse({ email: "bad", password: "", rememberSession: true }).success, false);
+  assert.equal(registerSchema.safeParse({
+    preferredName: "A",
+    email: "user@example.com",
+    password: "weak",
+    confirmPassword: "different",
+    acceptedTerms: false,
+    marketingConsent: false
+  }).success, false);
+  assert.equal(registerSchema.safeParse({
+    preferredName: "Aylin",
+    email: "user@example.com",
+    password: "MoveInRange1",
+    confirmPassword: "MoveInRange1",
+    acceptedTerms: true,
+    marketingConsent: false
+  }).success, true);
+  assert.equal(glucoseSchema.safeParse({ timing: "pre", value: "", unit: "mg/dL", trend: "steady", source: "manual" }).success, false);
+  assert.equal(glucoseSchema.safeParse({ timing: "post", value: "118", unit: "mg/dL", trend: "steady", source: "manual" }).success, true);
+  assert.equal(inviteSchema.safeParse({ email: "helper@example.com", scopes: [], expiryDays: 30 }).success, false);
+});
+
+test("beta exercise filters alter the supported API query", () => {
+  const params = new URLSearchParams(paramsFor("knee", "upper legs", "chair", "quads", 2));
+  assert.equal(params.get("q"), "knee");
+  assert.equal(params.get("body_part"), "upper legs");
+  assert.equal(params.get("equipment"), "chair");
+  assert.equal(params.get("target"), "quads");
+  assert.equal(params.get("page"), "2");
+  assert.equal(params.get("page_size"), "24");
+  assert.equal(params.get("language"), "en");
+});
+
+test("beta mobile UI does not expose old demo wording or fixed glucose defaults", () => {
+  const files = [
+    "apps/mobile/src/features/auth/AuthScreen.tsx",
+    "apps/mobile/src/features/exercises/ExerciseScreens.tsx",
+    "apps/mobile/src/features/diabetes/DiabetesScreen.tsx",
+    "apps/mobile/src/features/calendar/CalendarScreen.tsx",
+    "apps/mobile/src/features/achievements/AchievementsScreen.tsx"
+  ];
+  const text = files.map((file) => readFileSync(file, "utf8")).join("\n");
+  assert.doesNotMatch(text, /Demo session|Mock privacy-first form check|internal fallback pending|achievement_key:|event_type -|value:\s*112/);
+  assert.doesNotMatch(text, /not loaded/i);
 });
 
 test("real onboarding metadata covers required acceptance steps and validation", () => {

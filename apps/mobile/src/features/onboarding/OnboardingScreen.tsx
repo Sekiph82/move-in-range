@@ -9,10 +9,38 @@ function toggle(values: string[], value: string) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
+const errorCopy: Record<string, string> = {
+  preferred_name_required: "Enter at least 2 characters for your preferred name.",
+  date_of_birth_iso_required: "Enter a complete birth date with year, month, and day.",
+  self_description_required: "Add your self-description or choose another option.",
+  trimester_required_when_pregnancy_selected: "Choose a trimester when pregnancy is selected.",
+  height_weight_required: "Enter height and weight as numbers.",
+  locale_required: "Choose country, timezone, and language.",
+  side_required: "Choose a side for the selected sensitive region.",
+  goal_required: "Choose at least one goal.",
+  target_required: "Choose at least one target muscle.",
+  minimum_five_minutes: "Choose at least 5 minutes."
+};
+
 function StepFields({ stepKey, draft, setDraft }: { stepKey: string; draft: OnboardingDraft; setDraft: (draft: OnboardingDraft) => void }) {
   const patch = (partial: Partial<OnboardingDraft>) => setDraft({ ...draft, ...partial });
+  const [birthYear = "", birthMonth = "", birthDay = ""] = draft.dateOfBirth.split("-");
+  const patchBirthDate = (part: "year" | "month" | "day", value: string) => {
+    const nextYear = part === "year" ? value : birthYear;
+    const nextMonth = part === "month" ? value : birthMonth;
+    const nextDay = part === "day" ? value : birthDay;
+    patch({ dateOfBirth: [nextYear, nextMonth, nextDay].join("-") });
+  };
   if (stepKey === "preferred_name") return <TextField label="Preferred name / Tercih edilen ad" value={draft.preferredName} onChangeText={(preferredName) => patch({ preferredName })} />;
-  if (stepKey === "date_of_birth") return <TextField label="Date of birth YYYY-MM-DD" value={draft.dateOfBirth} onChangeText={(dateOfBirth) => patch({ dateOfBirth })} />;
+  if (stepKey === "date_of_birth") {
+    return (
+      <>
+        <TextField label="Birth year YYYY" keyboardType="number-pad" value={birthYear} onChangeText={(value) => patchBirthDate("year", value)} />
+        <TextField label="Birth month MM" keyboardType="number-pad" value={birthMonth} onChangeText={(value) => patchBirthDate("month", value)} />
+        <TextField label="Birth day DD" keyboardType="number-pad" value={birthDay} onChangeText={(value) => patchBirthDate("day", value)} />
+      </>
+    );
+  }
   if (stepKey === "gender") {
     return (
       <>
@@ -107,7 +135,7 @@ export function OnboardingScreen() {
         <BodyText>{current.en} / {current.tr}</BodyText>
         <BodyText muted>Saved draft: {onboarding.isLoading ? "checking..." : onboarding.data?.item?.current_step ?? "none"}</BodyText>
         <StepFields stepKey={current.key} draft={draft} setDraft={setDraft} />
-        {errors.map((error) => <BodyText key={error} muted>{error}</BodyText>)}
+        {errors.map((error) => <BodyText key={error} muted>{errorCopy[error] ?? error}</BodyText>)}
         <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
           <ActionButton label="Back" disabled={stepIndex === 0} onPress={() => setStepIndex((value) => Math.max(value - 1, 0))} />
           <ActionButton label={saveStepMutation.isPending ? "Saving..." : stepIndex === ONBOARDING_STEPS.length - 1 ? "Finish onboarding" : "Save and continue"} disabled={errors.length > 0} onPress={() => saveStepMutation.mutate()} />

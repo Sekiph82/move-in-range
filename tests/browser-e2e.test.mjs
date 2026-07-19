@@ -2,14 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync } from "node:fs";
 
-const mobileRoutes = ["/auth", "/onboarding", "/readiness", "/daily-plan", "/weekly-plan", "/monthly-plan", "/calendar", "/exercises", "/diabetes", "/integrations", "/notifications", "/privacy", "/caregivers", "/professionals", "/achievements", "/settings"];
+const mobileRoutes = ["/auth/index", "/auth/login", "/auth/register", "/auth/forgot-password", "/auth/session-expired", "/onboarding", "/readiness", "/daily-plan", "/weekly-plan", "/monthly-plan", "/calendar", "/exercises", "/diabetes", "/integrations", "/notifications", "/privacy", "/caregivers", "/professionals", "/achievements", "/settings"];
 const adminRoutes = ["/dashboard", "/users", "/exercises", "/policies", "/privacy-jobs", "/import-jobs", "/notifications", "/integrations", "/system", "/audit"];
 
 test("browser E2E route inventory is wired to real app files", () => {
   for (const route of mobileRoutes) {
-    const file = route === "/daily-plan" || route === "/weekly-plan" || route === "/monthly-plan" || route === "/quick-session"
-      ? `apps/mobile/app/${route.slice(1)}.tsx`
-      : `apps/mobile/app/${route.slice(1)}.tsx`;
+    const file = `apps/mobile/app/${route.slice(1)}.tsx`;
     assert.equal(existsSync(file), true, file);
   }
   for (const route of adminRoutes) {
