@@ -2,6 +2,7 @@ from collections.abc import Generator
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select
 from ..settings import get_settings
 from .base import Base
 
@@ -25,9 +26,22 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 
 
 def init_db() -> None:
-    from . import models  # noqa: F401
+    from . import models
+    from ..auth import hash_password
 
     Base.metadata.create_all(bind=engine)
+    settings = get_settings()
+    if settings.environment.lower() == "production":
+        return
+    with SessionLocal() as db:
+        existing = db.scalar(select(models.User).where(models.User.email == settings.local_admin_email))
+        if existing is None:
+            db.add(models.User(id="local-admin", email=settings.local_admin_email, password_hash=hash_password(settings.local_admin_password), role="super_admin", auth_provider="local"))
+        else:
+            existing.role = "super_admin"
+            existing.password_hash = hash_password(settings.local_admin_password)
+            existing.deleted_at = None
+        db.commit()
 
 
 def get_db() -> Generator[Session, None, None]:

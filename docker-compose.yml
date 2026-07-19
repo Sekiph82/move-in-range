@@ -109,6 +109,7 @@ services:
         condition: service_healthy
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://api:8200
+      ADMIN_COOKIE_SECURE: "false"
     ports:
       - "3200:3200"
     healthcheck:
@@ -143,6 +144,7 @@ services:
       NEXT_PUBLIC_API_BASE_URL: http://api:8200
       EXPO_PUBLIC_API_BASE_URL: http://api:8200
       ADMIN_E2E_BASE_URL: http://admin:3200
+      ADMIN_COOKIE_SECURE: "false"
       AUTH_PROVIDER: local
       AUTH_SECRET: docker-test-secret
       LOCAL_ADMIN_EMAIL: admin@moveinrange.local

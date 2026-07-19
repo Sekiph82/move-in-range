@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { csrfCookie, refreshCookie, sessionCookie } from "../../session";
 
 export function secureCookie() {
+  if (process.env.ADMIN_COOKIE_SECURE === "false") return false;
+  if (process.env.ADMIN_COOKIE_SECURE === "true") return true;
   return process.env.NODE_ENV === "production";
 }
 
