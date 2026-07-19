@@ -6,6 +6,7 @@ Validated locally:
 
 - Mobile app root: `apps/mobile`.
 - EAS project: `@sekiphayit/move-in-range`.
+- Expo slug: `move-in-range`.
 - EAS project ID: `30719dd8-101e-4acd-8d2a-e5880d60b721`.
 - Android package identifier: `com.moveinrange.app`.
 - `npm.cmd exec expo-doctor` from `apps/mobile`: checks passed.

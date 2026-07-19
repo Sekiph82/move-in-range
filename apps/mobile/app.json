@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "MoveInRange",
-    "slug": "moveinrange",
+    "slug": "move-in-range",
     "scheme": "moveinrange",
     "version": "0.1.0",
     "orientation": "portrait",

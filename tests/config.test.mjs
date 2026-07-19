@@ -57,6 +57,7 @@ test("admin environment variables use canonical LOCAL_ADMIN names", () => {
 test("Android Expo config blocks broad storage and overlay permissions", () => {
   const appJson = JSON.parse(readFileSync("apps/mobile/app.json", "utf8"));
   const android = appJson.expo.android;
+  assert.equal(appJson.expo.slug, "move-in-range");
   assert.equal(android.package, "com.moveinrange.app");
   assert.equal(appJson.expo.ios.bundleIdentifier, "com.moveinrange.app");
   assert.equal(appJson.expo.extra.eas.projectId, "30719dd8-101e-4acd-8d2a-e5880d60b721");

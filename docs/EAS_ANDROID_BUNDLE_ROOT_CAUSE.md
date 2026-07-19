@@ -6,6 +6,7 @@ Date: 2026-07-19
 
 - EAS account: `sekiphayit`
 - EAS project: `@sekiphayit/move-in-range`
+- Expo slug: `move-in-range`
 - EAS project ID: `30719dd8-101e-4acd-8d2a-e5880d60b721`
 - Failed build ID: `f19b94bf-f646-499f-86dd-258a50d516b6`
 - Failed commit: `92c5410724ebf7a3902b95613635b3f06ed5b7db`
@@ -38,6 +39,7 @@ The repository root is not an Expo app. A root-level EAS config plus a root-leve
 - Removed the root Expo config target.
 - Moved the authoritative EAS config to `apps/mobile/eas.json`.
 - Linked `apps/mobile/app.json` to the existing EAS project ID.
+- Aligned `apps/mobile/app.json` slug with the linked EAS project slug, `move-in-range`.
 - Added `.easignore` so local `.git`, `.local`, generated native output, node modules, and test/build caches are not uploaded.
 - Kept the Expo Router entry in `apps/mobile/package.json`.
 - Did not add a fake root `App.tsx`.
