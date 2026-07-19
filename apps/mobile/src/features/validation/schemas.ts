@@ -28,6 +28,16 @@ export const registerSchema = z.object({
 
 export const forgotPasswordSchema = z.object({ email });
 
+export const resetPasswordSchema = z.object({
+  token: z.string().trim().min(24, "Enter the reset token from your email."),
+  password,
+  confirmPassword: z.string()
+}).superRefine((payload, ctx) => {
+  if (payload.password !== payload.confirmPassword) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["confirmPassword"], message: "Passwords must match." });
+  }
+});
+
 export const glucoseSchema = z.object({
   timing: z.enum(["pre", "post", "delayed"]),
   value: z.coerce.number().positive().max(600),

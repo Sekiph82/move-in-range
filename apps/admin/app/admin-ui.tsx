@@ -84,6 +84,14 @@ export function ErrorPanel({ payload }: { payload: any }) {
   return <p className="error">{payload.error}</p>;
 }
 
+export function StatusBanner({ searchParams }: { searchParams?: Record<string, string | string[] | undefined> }) {
+  const success = typeof searchParams?.success === "string" ? searchParams.success : "";
+  const error = typeof searchParams?.error === "string" ? searchParams.error : "";
+  if (success) return <p className="success">Saved. The persisted record was updated and audited.</p>;
+  if (error) return <p className="error">Action failed: {error.replaceAll("_", " ")}</p>;
+  return null;
+}
+
 export function DetailsDisclosure({ title, payload }: { title: string; payload: unknown }) {
   return (
     <details className="payload">

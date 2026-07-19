@@ -1,8 +1,9 @@
-import { AdminShell, ErrorPanel, MetricGrid } from "../admin-ui";
+import { AdminShell, ErrorPanel, MetricGrid, StatusBanner } from "../admin-ui";
 import { apiBase, readAdminApi, requireAdmin } from "../session";
 
-export default async function DashboardPage() {
-  const { token } = await requireAdmin();
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
+  const params = await searchParams;
+  const { token, csrf } = await requireAdmin();
   const [users, policies, exercises, system] = await Promise.all([
     readAdminApi("/admin/users", token),
     readAdminApi("/admin/policies", token),
@@ -11,6 +12,7 @@ export default async function DashboardPage() {
   ]);
   return (
     <AdminShell title="Dashboard">
+      <StatusBanner searchParams={params} />
       <ErrorPanel payload={users} />
       <ErrorPanel payload={policies} />
       <ErrorPanel payload={exercises} />
@@ -23,6 +25,14 @@ export default async function DashboardPage() {
         { label: "Redis revocation", value: system.redis ?? "unavailable" },
         { label: "PostgreSQL", value: system.postgresql ?? "unavailable" }
       ]} />
+      <form className="form-grid" action="/api/admin-session/mutate" method="post">
+        <h3>Closed beta seed</h3>
+        <input type="hidden" name="csrf" value={csrf} />
+        <input type="hidden" name="method" value="POST" />
+        <input type="hidden" name="path" value="/admin/e2e-seed" />
+        <input type="hidden" name="redirectTo" value="/dashboard" />
+        <button type="submit">Prepare disposable test records</button>
+      </form>
     </AdminShell>
   );
 }

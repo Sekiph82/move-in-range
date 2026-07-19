@@ -25,7 +25,7 @@ def _client(tmp_path, monkeypatch):
 
 
 def _register(client, email):
-    response = client.post("/api/v1/auth/register", json={"email": email, "password": "safe-local-passphrase"})
+    response = client.post("/api/v1/auth/register", json={"email": email, "password": "MoveInRange1"})
     assert response.status_code == 201, response.text
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}

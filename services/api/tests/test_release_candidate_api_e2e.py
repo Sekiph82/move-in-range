@@ -38,9 +38,9 @@ def _auth_headers(payload):
 
 def test_release_candidate_api_e2e_workflow(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, REDIS_URL="redis://localhost:1/0")
-    register = client.post("/api/v1/auth/register", json={"email": "rc-a@example.test", "password": "safe-release-passphrase"})
+    register = client.post("/api/v1/auth/register", json={"email": "rc-a@example.test", "password": "MoveInRange1"})
     assert register.status_code == 201, register.text
-    login = client.post("/api/v1/auth/login", json={"email": "rc-a@example.test", "password": "safe-release-passphrase"})
+    login = client.post("/api/v1/auth/login", json={"email": "rc-a@example.test", "password": "MoveInRange1"})
     assert login.status_code == 200, login.text
     auth = login.json()
     headers = _auth_headers(auth)
@@ -109,7 +109,7 @@ def test_release_candidate_api_e2e_workflow(tmp_path, monkeypatch):
     assert client.post("/api/v1/auth/logout", headers=_auth_headers(refreshed.json())).status_code == 200
     assert client.get("/api/v1/auth/me", headers=_auth_headers(refreshed.json())).status_code == 401
 
-    user_b = client.post("/api/v1/auth/register", json={"email": "rc-b@example.test", "password": "safe-release-passphrase"}).json()
+    user_b = client.post("/api/v1/auth/register", json={"email": "rc-b@example.test", "password": "MoveInRange1"}).json()
     user_b_headers = _auth_headers(user_b)
     assert client.patch(f"/api/v1/sessions/{session_id}", headers=user_b_headers, json={"elapsed_seconds": 1}).status_code == 404
     assert client.post(f"/api/v1/sessions/{session_id}/events", headers=user_b_headers, json={"event_type": "pause"}).status_code == 404

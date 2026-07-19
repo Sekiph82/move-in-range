@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import UTC, datetime
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 from .auth import decode_token
@@ -14,6 +15,8 @@ def require_user(authorization: str | None = Header(default=None), db: Session =
         user = db.get(User, payload["sub"])
         if not user or user.deleted_at is not None:
             raise HTTPException(status_code=401, detail={"code": "user_not_found"})
+        if _token_issued_before_auth_invalidation(payload, user):
+            raise HTTPException(status_code=401, detail={"code": "session_expired"})
         return user
     raise HTTPException(status_code=401, detail={"code": "missing_token"})
 
@@ -27,11 +30,20 @@ def require_admin_role(role: str) -> Callable:
         admin = db.get(User, payload["sub"])
         if not admin or admin.deleted_at is not None:
             raise HTTPException(status_code=401, detail={"code": "admin_not_found"})
+        if _token_issued_before_auth_invalidation(payload, admin):
+            raise HTTPException(status_code=401, detail={"code": "session_expired"})
         allowed = ADMIN_PERMISSIONS.get(role, {role})
         if admin.role != "super_admin" and admin.role not in allowed:
             raise HTTPException(status_code=403, detail={"code": "forbidden", "required_role": role})
         return admin
     return dependency
+
+def _token_issued_before_auth_invalidation(payload: dict, user: User) -> bool:
+    if user.auth_invalidated_at is None:
+        return False
+    issued_at = datetime.fromtimestamp(int(payload.get("iat", 0)), UTC)
+    invalidated_at = user.auth_invalidated_at if user.auth_invalidated_at.tzinfo else user.auth_invalidated_at.replace(tzinfo=UTC)
+    return issued_at < invalidated_at
 
 ADMIN_PERMISSIONS = {
     "admin": {"super_admin", "clinical_reviewer", "exercise_reviewer", "content_editor", "support", "analyst"},

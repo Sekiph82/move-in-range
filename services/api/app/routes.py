@@ -9,6 +9,7 @@ from .auth import create_token, decode_token, hash_password, password_needs_upgr
 from .db.models import (
     AuditLog,
     AuthRefreshToken,
+    PasswordResetToken,
     AchievementRecord,
     BaselineAssessment,
     CalendarEvent,
@@ -120,6 +121,19 @@ class Credentials(BaseModel):
 
 class RefreshPayload(BaseModel):
     refresh_token: str
+
+
+class PasswordResetRequestPayload(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetValidatePayload(BaseModel):
+    token: str = Field(min_length=24, max_length=256)
+
+
+class PasswordResetPayload(BaseModel):
+    token: str = Field(min_length=24, max_length=256)
+    password: str = Field(min_length=8, max_length=128)
 
 
 class AdminUpdatePayload(BaseModel):
@@ -307,6 +321,7 @@ def ready(db: Session = Depends(get_db)):
 def register(payload: Credentials, request: Request, db: Session = Depends(get_db)):
     _rate_limit(f"register:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
     email = payload.email.strip().lower()
+    _validate_password_strength(payload.password)
     if db.query(User).filter(User.email == email).one_or_none():
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "email_exists"})
     user = User(
@@ -331,6 +346,8 @@ def login(payload: Credentials, request: Request, db: Session = Depends(get_db))
     user = db.query(User).filter(User.email == payload.email.strip().lower()).one_or_none()
     if not user or not user.password_hash or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_credentials"})
+    if user.deleted_at is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "account_disabled"})
     if password_needs_upgrade(user.password_hash):
         user.password_hash = hash_password(payload.password)
     refresh = _issue_refresh_token(user, db, "mobile")
@@ -345,6 +362,12 @@ def refresh(payload: RefreshPayload, request: Request, db: Session = Depends(get
     _rate_limit(f"refresh:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
     decoded = decode_token(payload.refresh_token, "refresh")
     user = db.get(User, decoded["sub"])
+    if user and user.deleted_at is not None:
+        if decoded.get("fam"):
+            _revoke_refresh_family(decoded["fam"], db)
+        user.refresh_token_hash = None
+        db.commit()
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "account_disabled"})
     if not user or user.refresh_token_hash != token_hash(payload.refresh_token):
         if decoded.get("fam"):
             _revoke_refresh_family(decoded["fam"], db)
@@ -365,6 +388,57 @@ def logout(authorization: str | None = Header(default=None), user: User = Depend
     db.add(AuditLog(actor_id=user.id, action="auth.logout", target_type="user", target_id=user.id, redacted_payload={}))
     db.commit()
     return {"logged_out": True}
+
+
+@router.post("/auth/forgot-password")
+def forgot_password(payload: PasswordResetRequestPayload, request: Request, db: Session = Depends(get_db)):
+    _rate_limit(f"forgot-password:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).one_or_none()
+    response: dict[str, Any] = {"accepted": True, "message": "If an account exists, password reset instructions have been sent."}
+    if user and user.password_hash and user.deleted_at is None:
+        token = secrets.token_urlsafe(32)
+        ip_hash = token_hash(request.client.host) if request.client else None
+        db.add(
+            PasswordResetToken(
+                user_id=user.id,
+                token_hash=token_hash(token),
+                expires_at=datetime.now(UTC) + timedelta(minutes=30),
+                requested_ip_hash=ip_hash,
+            )
+        )
+        db.add(AuditLog(actor_id=user.id, action="auth.password_reset.request", target_type="user", target_id=user.id, redacted_payload={"delivery": "development_preview" if _show_reset_preview() else "email_adapter"}))
+        if _show_reset_preview():
+            response["development_reset_link"] = f"{get_settings().api_base_url}/auth/reset-password?token={token}"
+            response["development_reset_token"] = token
+    else:
+        db.add(AuditLog(actor_id="system", action="auth.password_reset.request_unknown", target_type="user", target_id="masked", redacted_payload={}))
+    db.commit()
+    return response
+
+
+@router.post("/auth/reset-password/validate")
+def validate_password_reset(payload: PasswordResetValidatePayload, db: Session = Depends(get_db)):
+    record = _password_reset_record(payload.token, db)
+    return {"valid": True, "expires_at": record.expires_at.isoformat()}
+
+
+@router.post("/auth/reset-password")
+def reset_password(payload: PasswordResetPayload, request: Request, db: Session = Depends(get_db)):
+    _rate_limit(f"reset-password:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
+    _validate_password_strength(payload.password)
+    record = _password_reset_record(payload.token, db)
+    user = db.get(User, record.user_id)
+    if not user or user.deleted_at is not None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_reset_token"})
+    user.password_hash = hash_password(payload.password)
+    user.refresh_token_hash = None
+    user.auth_invalidated_at = datetime.now(UTC)
+    record.used_at = datetime.now(UTC)
+    _revoke_user_refresh_tokens(user.id, db)
+    db.add(AuditLog(actor_id=user.id, action="auth.password_reset.complete", target_type="user", target_id=user.id, redacted_payload={"sessions_revoked": True}))
+    db.commit()
+    return {"reset": True}
 
 
 @router.get("/auth/me")
@@ -391,6 +465,8 @@ def admin_login(payload: Credentials, request: Request, db: Session = Depends(ge
         db.refresh(user)
     if not user or user.role not in ADMIN_ROLES or not user.password_hash or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_admin_credentials"})
+    if user.deleted_at is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "account_disabled"})
     if password_needs_upgrade(user.password_hash):
         user.password_hash = hash_password(payload.password)
     refresh = _issue_refresh_token(user, db, "admin")
@@ -477,14 +553,21 @@ def save_onboarding(payload: OnboardingPayload, user: User = Depends(require_use
     draft = dict(progress.draft_payload or {})
     draft[payload.step] = payload.payload
     completed = set(progress.completed_steps or [])
+    completed.add(payload.step)
+    now = datetime.now(UTC).isoformat()
+    meta = dict(draft.get("_meta") or {})
+    meta["schema_version"] = "closed-beta-1"
+    meta["saved_step"] = payload.step
+    meta["completed_steps"] = sorted(completed)
+    meta["updated_at"] = now
     if payload.completed:
-        completed.add(payload.step)
+        meta["completed_at"] = now
+    draft["_meta"] = meta
     progress.current_step = payload.step
     progress.completed_steps = sorted(completed)
     progress.draft_payload = draft
     progress.language = payload.language
-    required = {"identity", "health_profile", "goals", "capacity", "consent"}
-    progress.status = "complete" if required.issubset(completed) else "in_progress"
+    progress.status = "complete" if payload.completed or payload.step == "review_complete" else "in_progress"
     profile = _profile_for(user.id, db)
     health = dict(profile.health_payload or {})
     health["onboarding_draft"] = draft
@@ -1462,7 +1545,7 @@ def admin_exercise_detail(exercise_id: str, admin=Depends(require_admin_role("ex
     exercise = _get_exercise(exercise_id, db)
     approvals = db.query(MediaApproval).filter(MediaApproval.exercise_id == exercise.id).order_by(desc(MediaApproval.created_at)).all()
     tags = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).order_by(desc(ExerciseTag.created_at)).all()
-    return {"exercise": _exercise_payload(exercise, db, "en"), "media_approvals": [_media_approval_payload(item) for item in approvals], "tags": [_exercise_tag_payload(item) for item in tags]}
+    return {"exercise": _exercise_payload(exercise, db, "en"), "turkish": _exercise_payload(exercise, db, "tr"), "media_approvals": [_media_approval_payload(item) for item in approvals], "tags": [_exercise_tag_payload(item) for item in tags], "revision_history": [tag.created_at.isoformat() for tag in tags if tag.created_at]}
 
 
 @router.patch("/admin/exercises/{exercise_id}")
@@ -1472,6 +1555,27 @@ def update_admin_exercise(exercise_id: str, payload: AdminUpdatePayload, admin=D
     if "safety_tags" in payload.payload:
         tag = ExerciseTag(exercise_id=exercise.id, classifier_version="manual-admin", tags={"safety_tags": payload.payload["safety_tags"]}, provenance="admin", confidence=100, manual_review_status="approved")
         db.add(tag)
+    for field in ["name", "body_part", "equipment", "target"]:
+        if field in payload.payload and str(payload.payload[field]).strip():
+            setattr(exercise, field, str(payload.payload[field]).strip().lower() if field != "name" else str(payload.payload[field]).strip())
+    if "turkish_title" in payload.payload or "turkish_instructions" in payload.payload:
+        localized = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id, ExerciseLocalization.locale == "tr").one_or_none()
+        if not localized:
+            localized = ExerciseLocalization(exercise_id=exercise.id, locale="tr", instructions="", instruction_steps=[])
+            db.add(localized)
+        if str(payload.payload.get("turkish_title", "")).strip():
+            metadata["tr_title"] = str(payload.payload["turkish_title"]).strip()
+        if str(payload.payload.get("turkish_instructions", "")).strip():
+            localized.instructions = str(payload.payload["turkish_instructions"]).strip()
+            localized.instruction_steps = [line.strip() for line in localized.instructions.splitlines() if line.strip()]
+    if "substitution_id" in payload.payload and str(payload.payload["substitution_id"]).strip():
+        substitutions = list(metadata.get("substitution_ids") or [])
+        substitution_id = str(payload.payload["substitution_id"]).strip()
+        if substitution_id not in substitutions:
+            substitutions.append(substitution_id)
+        metadata["substitution_ids"] = substitutions[:20]
+    if "restricted_regions" in payload.payload:
+        metadata["restricted_regions"] = payload.payload["restricted_regions"]
     if "review_status" in payload.payload:
         metadata["review_status"] = payload.payload["review_status"]
     if "publish_state" in payload.payload:
@@ -1483,11 +1587,17 @@ def update_admin_exercise(exercise_id: str, payload: AdminUpdatePayload, admin=D
 
 
 @router.get("/admin/users")
-def admin_users(admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
-    users = db.query(User).order_by(desc(User.created_at)).limit(50).all()
+def admin_users(q: str = "", role: str | None = None, page: int = Query(default=1, ge=1), admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    query = db.query(User)
+    if q:
+        query = query.filter(func.lower(User.email).like(f"%{q.lower()}%"))
+    if role:
+        query = query.filter(User.role == role)
+    total = query.count()
+    users = query.order_by(desc(User.created_at)).offset((page - 1) * 50).limit(50).all()
     db.add(AuditLog(actor_id=admin.id, action="admin.users.masked_list", target_type="user", target_id="masked", redacted_payload={"count": len(users)}))
     db.commit()
-    return {"items": [{"id": user.id, "email_masked": _mask_email(user.email), "role": user.role, "deleted": user.deleted_at is not None} for user in users], "impersonation": "disabled_by_default"}
+    return {"items": [{"id": user.id, "email_masked": _mask_email(user.email), "role": user.role, "deleted": user.deleted_at is not None} for user in users], "pagination": {"page": page, "page_size": 50, "total": total}, "impersonation": "disabled_by_default"}
 
 
 @router.get("/admin/users/{user_id}")
@@ -1517,12 +1627,19 @@ def update_admin_user(user_id: str, payload: AdminUpdatePayload, admin=Depends(r
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "user_not_found"})
     action = payload.payload.get("action")
     if action == "disable":
+        if user.id == admin.id and admin.role == "super_admin":
+            raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "cannot_disable_current_super_admin"})
         user.deleted_at = datetime.now(UTC)
     elif action == "enable":
         user.deleted_at = None
+    elif action == "update_role":
+        next_role = str(payload.payload.get("role", "user"))
+        if next_role not in ADMIN_ROLES | {"user"}:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_role"})
+        user.role = next_role
     else:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_user_action"})
-    db.add(AuditLog(actor_id=admin.id, action=f"admin.user.{action}", target_type="user", target_id=user.id, redacted_payload={}))
+    db.add(AuditLog(actor_id=admin.id, action=f"admin.user.{action}", target_type="user", target_id=user.id, redacted_payload={"reason": payload.payload.get("reason", "admin_action")}))
     db.commit()
     return {"user": {"id": user.id, "email_masked": _mask_email(user.email), "role": user.role, "deleted": user.deleted_at is not None}}
 
@@ -1549,6 +1666,32 @@ def admin_privacy_jobs(admin=Depends(require_admin_role("support")), db: Session
     return {"exports": [_export_job_payload(item) for item in exports], "deletions": [_deletion_job_payload(item) for item in deletions]}
 
 
+@router.post("/admin/privacy-jobs/{kind}/{job_id}/{action}")
+def admin_privacy_job_action(kind: str, job_id: int, action: str, payload: AdminUpdatePayload | None = None, admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    allowed = {"process", "retry", "fail", "cancel", "approve"}
+    if action not in allowed:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_privacy_action"})
+    if kind == "export":
+        job = db.get(DataExportJob, job_id)
+        if not job:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "privacy_job_not_found"})
+        job.status = "ready" if action in {"process", "approve"} else "queued" if action == "retry" else "failed" if action == "fail" else "cancelled"
+        job.payload = {**(job.payload or {}), "processed_by": admin.id, "contains": ["profile", "onboarding", "plans", "sessions", "feedback", "diabetes", "consents", "relationships", "provider_metadata"], "secrets_included": False}
+        result = {"job": _export_job_payload(job)}
+    elif kind == "deletion":
+        job = db.get(DeletionJob, job_id)
+        if not job:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "privacy_job_not_found"})
+        job.status = "completed" if action == "process" else "requested" if action == "retry" else "failed" if action == "fail" else "cancelled" if action == "cancel" else "approved"
+        job.payload = {**(job.payload or {}), "processed_by": admin.id, "legal_certification": False}
+        result = {"job": _deletion_job_payload(job)}
+    else:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_privacy_job_kind"})
+    db.add(AuditLog(actor_id=admin.id, action=f"admin.privacy.{kind}.{action}", target_type=f"privacy_{kind}", target_id=str(job_id), redacted_payload=(payload.payload if payload else {})))
+    db.commit()
+    return result
+
+
 @router.get("/admin/import-jobs")
 def admin_import_jobs(admin=Depends(require_admin_role("content_editor")), db: Session = Depends(get_db)):
     exercise_count = db.query(Exercise).count()
@@ -1562,6 +1705,23 @@ def admin_notifications(admin=Depends(require_admin_role("support")), db: Sessio
     return {"items": [_notification_job_payload(item) for item in jobs], "provider": "mock_or_local"}
 
 
+@router.post("/admin/notifications/{job_id}/{action}")
+def admin_notification_action(job_id: int, action: str, admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    job = db.get(NotificationJob, job_id)
+    if not job:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "notification_job_not_found"})
+    if action == "retry":
+        job.status = "scheduled"
+        job.retry_count += 1
+    elif action == "cancel":
+        job.status = "cancelled"
+    else:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_notification_action"})
+    db.add(AuditLog(actor_id=admin.id, action=f"admin.notification.{action}", target_type="notification_job", target_id=str(job.id), redacted_payload={}))
+    db.commit()
+    return {"job": _notification_job_payload(job)}
+
+
 @router.get("/admin/integrations")
 def admin_integrations(admin=Depends(require_admin_role("analyst")), db: Session = Depends(get_db)):
     connections = db.query(ProviderConnection).order_by(desc(ProviderConnection.created_at)).limit(50).all()
@@ -1571,6 +1731,49 @@ def admin_integrations(admin=Depends(require_admin_role("analyst")), db: Session
         "connections": [_provider_connection_payload(item) for item in connections],
         "syncs": [_provider_sync_payload(item) for item in syncs],
     }
+
+
+@router.post("/admin/integrations/{connection_id}/{action}")
+def admin_integration_action(connection_id: int, action: str, admin=Depends(require_admin_role("analyst")), db: Session = Depends(get_db)):
+    connection = db.get(ProviderConnection, connection_id)
+    if not connection:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "integration_connection_not_found"})
+    if action == "disable":
+        connection.status = "disabled"
+        connection.token_reference = None
+    elif action == "retry-sync":
+        db.add(ProviderSyncRecord(connection_id=connection.id, sync_type="admin_retry", status="completed", records_seen=0, duplicates_skipped=0, payload={"manual": True}))
+    else:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_integration_action"})
+    db.add(AuditLog(actor_id=admin.id, action=f"admin.integration.{action}", target_type="provider_connection", target_id=str(connection.id), redacted_payload={}))
+    db.commit()
+    return {"connection": _provider_connection_payload(connection)}
+
+
+@router.post("/admin/e2e-seed")
+def admin_e2e_seed(admin=Depends(require_admin_role("super_admin")), db: Session = Depends(get_db)):
+    if get_settings().environment.lower() == "production":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "seed_mode_disabled"})
+    user = db.query(User).filter(User.email == "closed-beta-e2e@example.test").one_or_none()
+    if not user:
+        user = User(id="usr_closed_beta_e2e", email="closed-beta-e2e@example.test", password_hash=hash_password("MoveInRange1"), auth_provider="local", role="user")
+        db.add(user)
+        db.flush()
+    exercise = db.query(Exercise).order_by(Exercise.id).first()
+    if exercise:
+        media = MediaApproval(exercise_id=exercise.id, media_type="silhouette", license_state="internal", source="closed_beta_seed", status="pending", metadata_payload={})
+        db.add(media)
+    policy_version = "closed-beta-e2e-policy"
+    if not db.query(PolicyVersion).filter(PolicyVersion.version == policy_version).one_or_none():
+        db.add(PolicyVersion(version=policy_version, status="draft", rules={"closed_beta": True}, clinical_review_state="draft"))
+    export = DataExportJob(user_id=user.id, status="queued", payload={"seed": True})
+    deletion = DeletionJob(user_id=user.id, deletion_type="selected_health_data", status="requested", cancellation_deadline=datetime.now(UTC) + timedelta(days=7), payload={"seed": True})
+    notification = NotificationJob(user_id=user.id, category="sync_failure", provider="local", scheduled_for=datetime.now(UTC), status="failed", payload={"seed": True})
+    connection = ProviderConnection(user_id=user.id, provider_key="nightscout", category="cgm", status="sync_failed", scopes=["glucose:read"], token_reference="seed-token-ref")
+    db.add_all([export, deletion, notification, connection])
+    db.add(AuditLog(actor_id=admin.id, action="admin.e2e.seed", target_type="closed_beta", target_id=user.id, redacted_payload={"seed": True}))
+    db.commit()
+    return {"user_id": user.id, "policy_version": policy_version, "privacy_export_id": export.id, "deletion_id": deletion.id, "notification_id": notification.id, "connection_id": connection.id, "exercise_id": exercise.id if exercise else None}
 
 
 @router.get("/admin/audit")
@@ -1593,6 +1796,24 @@ def policy_simulator(payload: ReadinessPayload, admin=Depends(require_admin_role
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.simulate", target_type="policy", target_id=decision["policy_version"], redacted_payload={"action": decision["action"]}))
     db.commit()
     return {"admin": admin.id, "decision": decision, "rejected_exercises": [], "generated_plan_allowed": decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE", "simulation_id": simulation.id}
+
+
+def _show_reset_preview() -> bool:
+    settings = get_settings()
+    return settings.environment.lower() != "production" and settings.enable_development_reset_preview
+
+
+def _validate_password_strength(password: str) -> None:
+    if len(password) < 10 or not any(ch.islower() for ch in password) or not any(ch.isupper() for ch in password) or not any(ch.isdigit() for ch in password):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "weak_password"})
+
+
+def _password_reset_record(token: str, db: Session) -> PasswordResetToken:
+    record = db.query(PasswordResetToken).filter(PasswordResetToken.token_hash == token_hash(token)).one_or_none()
+    now = datetime.now(UTC)
+    if not record or record.used_at is not None or _as_utc(record.expires_at) < now:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_reset_token"})
+    return record
 
 
 def _auth_response(user: User, refresh: str) -> dict[str, Any]:
@@ -1963,10 +2184,11 @@ def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: boo
     instructions = {loc.locale: loc.instructions for loc in localizations}
     steps = {loc.locale: loc.instruction_steps for loc in localizations}
     selected_locale = language if language in instructions else "en"
+    localized_name = (exercise.source_metadata or {}).get("tr_title") if selected_locale == "tr" else None
     payload = {
         "id": exercise.id,
         "slug": exercise.slug,
-        "name": exercise.name,
+        "name": localized_name or exercise.name,
         "body_part": exercise.body_part,
         "equipment": exercise.equipment,
         "target": exercise.target,
