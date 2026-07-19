@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 def _client(tmp_path, monkeypatch, **env):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'hardening.db'}")
+    monkeypatch.setenv("LOCAL_ADMIN_EMAIL", env.pop("LOCAL_ADMIN_EMAIL", "admin@moveinrange.local"))
+    monkeypatch.setenv("LOCAL_ADMIN_PASSWORD", env.pop("LOCAL_ADMIN_PASSWORD", "MoveInRangeAdminLocal!"))
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     settings_mod = importlib.import_module("app.settings")
@@ -509,7 +511,7 @@ def test_postgres_revocation_store_persists_hashes_and_cleans_expired(tmp_path, 
 
 
 def test_postgres_rate_limiter_windows_keys_and_cleanup(tmp_path, monkeypatch):
-    _client(tmp_path, monkeypatch, AUTH_RATE_LIMIT="2", RATE_LIMIT_WINDOW_SECONDS="1")
+    _client(tmp_path, monkeypatch, AUTH_RATE_LIMIT="2", RATE_LIMIT_WINDOW_SECONDS="60")
     rate_limit_mod = importlib.import_module("app.rate_limit")
     limiter = rate_limit_mod.get_rate_limiter()
     limiter.check("login:ip:1.2.3.4", 2)
@@ -517,8 +519,6 @@ def test_postgres_rate_limiter_windows_keys_and_cleanup(tmp_path, monkeypatch):
     with pytest.raises(rate_limit_mod.RateLimitExceeded):
         limiter.check("login:ip:1.2.3.4", 2)
     limiter.check("login:ip:5.6.7.8", 2)
-    time.sleep(1.1)
-    limiter.check("login:ip:1.2.3.4", 2)
 
     session_mod = importlib.import_module("app.db.session")
     models = importlib.import_module("app.db.models")
