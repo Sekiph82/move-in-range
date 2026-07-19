@@ -9,6 +9,31 @@ const demoPassword = "MoveInRangeLocalDemo!";
 const enableDemoLogin = process.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN === "true";
 
 const memoryTokens: Record<string, string | null> = { access_token: null, refresh_token: null };
+const webTokenPrefix = "mir_";
+
+function getWebToken(key: string) {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(`${webTokenPrefix}${key}`);
+  } catch {
+    return null;
+  }
+}
+
+function setWebToken(key: string, value: string) {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(`${webTokenPrefix}${key}`, value);
+  } catch {
+    // localStorage can be unavailable in privacy-restricted browser contexts.
+  }
+}
+
+function deleteWebToken(key: string) {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.removeItem(`${webTokenPrefix}${key}`);
+  } catch {
+    // localStorage can be unavailable in privacy-restricted browser contexts.
+  }
+}
 
 export type AuthTokenResponse = {
   access_token: string;
@@ -22,23 +47,25 @@ const tokenStore = new TokenStore({
     try {
       return await SecureStore.getItemAsync(key);
     } catch {
-      return memoryTokens[key] ?? null;
+      return getWebToken(key) ?? memoryTokens[key] ?? null;
     }
   },
   async setItem(key: string, value: string) {
     memoryTokens[key] = value;
+    setWebToken(key, value);
     try {
       await SecureStore.setItemAsync(key, value);
     } catch {
-      // Unsupported runtimes use memory only; this is not durable persistence.
+      // Unsupported runtimes use the web/local fallback above.
     }
   },
   async deleteItem(key: string) {
     memoryTokens[key] = null;
+    deleteWebToken(key);
     try {
       await SecureStore.deleteItemAsync(key);
     } catch {
-      // Unsupported runtimes use memory only; this is not durable persistence.
+      // Unsupported runtimes use the web/local fallback above.
     }
   }
 });
@@ -294,6 +321,10 @@ export function startSession(planId?: string) {
   return apiFetch<{ session: { id: string } }>("/sessions", { method: "POST", body: JSON.stringify({ plan_id: planId, resume: true }) });
 }
 
+export function patchSession(sessionId: string, payload: Record<string, unknown>) {
+  return apiFetch(`/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
+
 export function completeSession(sessionId: string) {
   return apiFetch(`/sessions/${sessionId}/complete`, {
     method: "POST",
@@ -305,6 +336,13 @@ export function reportPain(sessionId: string) {
   return apiFetch(`/sessions/${sessionId}/pain`, {
     method: "POST",
     body: JSON.stringify({ location: "knee", severity: 4, idempotency_key: `pain-${Date.now()}` })
+  });
+}
+
+export function recordExerciseFeedback(sessionId: string) {
+  return apiFetch("/exercise-feedback", {
+    method: "POST",
+    body: JSON.stringify({ payload: { session_id: sessionId, feedback_type: "exercise_feedback", exertion: 3, pain_change: "same", notes: "closed beta UI feedback" } })
   });
 }
 

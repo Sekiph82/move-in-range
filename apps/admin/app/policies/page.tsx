@@ -13,9 +13,7 @@ export default async function PoliciesPage({ searchParams }: { searchParams: Pro
       <form className="form-grid" action="/api/admin-session/mutate" method="post">
         <h3>Create policy draft</h3>
         <input type="hidden" name="csrf" value={csrf} />
-        <input type="hidden" name="method" value="POST" />
-        <input type="hidden" name="path" value="/admin/policies" />
-        <input type="hidden" name="redirectTo" value="/policies" />
+        <input type="hidden" name="operation" value="policy_draft_create" />
         <label>Version<input name="version" defaultValue={`closed-beta-${Date.now()}`} /></label>
         <label>Clinical review<select name="clinical_review_state" defaultValue="draft"><option value="draft">Draft</option><option value="submitted">Submitted</option></select></label>
         <button type="submit">Create draft</button>

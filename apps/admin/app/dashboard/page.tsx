@@ -28,9 +28,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       <form className="form-grid" action="/api/admin-session/mutate" method="post">
         <h3>Closed beta seed</h3>
         <input type="hidden" name="csrf" value={csrf} />
-        <input type="hidden" name="method" value="POST" />
-        <input type="hidden" name="path" value="/admin/e2e-seed" />
-        <input type="hidden" name="redirectTo" value="/dashboard" />
+        <input type="hidden" name="operation" value="e2e_seed" />
         <button type="submit">Prepare disposable test records</button>
       </form>
     </AdminShell>

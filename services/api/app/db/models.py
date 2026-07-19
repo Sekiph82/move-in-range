@@ -36,6 +36,18 @@ class PasswordResetToken(TimestampMixin, Base):
     used_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     requested_ip_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+class EmailDeliveryAttempt(TimestampMixin, Base):
+    __tablename__ = "email_delivery_attempts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    recipient_hash: Mapped[str] = mapped_column(String(128), index=True)
+    template: Mapped[str] = mapped_column(String(80), index=True)
+    provider: Mapped[str] = mapped_column(String(80), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    redacted_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
 class Profile(TimestampMixin, Base):
     __tablename__ = "profiles"
     id: Mapped[int] = mapped_column(primary_key=True)

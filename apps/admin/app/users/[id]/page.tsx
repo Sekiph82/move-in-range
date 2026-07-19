@@ -20,15 +20,29 @@ export default async function UserDetailPage({ params, searchParams }: { params:
         { label: "Diabetes enabled", value: detail.profile_summary?.diabetes_enabled }
       ]} />
       <form className="form-grid" action="/api/admin-session/mutate" method="post">
-        <h3>User mutation</h3>
+        <h3>Disable user</h3>
         <input type="hidden" name="csrf" value={csrf} />
-        <input type="hidden" name="method" value="PATCH" />
-        <input type="hidden" name="path" value={`/admin/users/${id}`} />
-        <input type="hidden" name="redirectTo" value={`/users/${id}`} />
-        <label>Action<select name="action" defaultValue="enable"><option value="enable">Enable</option><option value="disable">Disable</option><option value="update_role">Update role</option></select></label>
+        <input type="hidden" name="operation" value="user_disable" />
+        <input type="hidden" name="user_id" value={id} />
+        <label>Disable reason<input name="reason" defaultValue="closed beta admin validation" /></label>
+        <button type="submit" className="danger-button">Disable user</button>
+      </form>
+      <form className="form-grid" action="/api/admin-session/mutate" method="post">
+        <h3>Enable user</h3>
+        <input type="hidden" name="csrf" value={csrf} />
+        <input type="hidden" name="operation" value="user_enable" />
+        <input type="hidden" name="user_id" value={id} />
+        <label>Enable reason<input name="reason" defaultValue="closed beta admin validation" /></label>
+        <button type="submit">Enable user</button>
+      </form>
+      <form className="form-grid" action="/api/admin-session/mutate" method="post">
+        <h3>Update role</h3>
+        <input type="hidden" name="csrf" value={csrf} />
+        <input type="hidden" name="operation" value="user_role_update" />
+        <input type="hidden" name="user_id" value={id} />
         <label>Role<select name="role" defaultValue={detail.user?.role ?? "user"}><option value="user">user</option><option value="support">support</option><option value="analyst">analyst</option><option value="content_editor">content_editor</option><option value="exercise_reviewer">exercise_reviewer</option><option value="clinical_reviewer">clinical_reviewer</option></select></label>
-        <label>Reason<input name="reason" defaultValue="closed beta admin validation" /></label>
-        <button type="submit">Save user change</button>
+        <label>Role update reason<input name="reason" defaultValue="closed beta admin validation" /></label>
+        <button type="submit">Update user role</button>
       </form>
       <h3>Plans</h3>
       <DataTable columns={["id", "plan_type", "status", "safety_action"]} rows={detail.plans ?? []} />

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch, completeSession, reportPain, startSession } from "../../api";
+import { apiFetch, completeSession, patchSession, recordExerciseFeedback, reportPain, startSession } from "../../api";
 import { ActionButton, BodyText, ChipGroup, ErrorText, LoadingState, Panel, SecondaryLink, TextField } from "../shared/ui";
 
 export function WorkoutScreen({ id }: { id?: string }) {
@@ -15,15 +15,21 @@ export function WorkoutScreen({ id }: { id?: string }) {
       return started;
     }
   });
+  const pauseMutation = useMutation({ mutationFn: () => patchSession(lastSessionId ?? "local-session", { status: "paused", payload: { paused_from_ui: true } }) });
+  const resumeMutation = useMutation({ mutationFn: () => patchSession(lastSessionId ?? "local-session", { status: "in_progress", payload: { resumed_from_ui: true } }) });
+  const feedbackMutation = useMutation({ mutationFn: () => recordExerciseFeedback(lastSessionId ?? "local-session") });
   return (
     <>
       <Panel title="Workout controls">
         <BodyText>{blocked ? "Readiness is blocked; start is disabled." : "Preparation, work, rest, pause, skip, substitute, and completion controls are available for the current plan."}</BodyText>
         <ActionButton label={workoutMutation.isPending ? "Starting..." : "Start guided workout"} disabled={blocked} onPress={() => workoutMutation.mutate()} />
+        <ActionButton label={pauseMutation.isPending ? "Pausing..." : "Pause workout"} disabled={!lastSessionId} onPress={() => pauseMutation.mutate()} />
+        <ActionButton label={resumeMutation.isPending ? "Resuming..." : "Resume workout"} disabled={!lastSessionId} onPress={() => resumeMutation.mutate()} />
+        <ActionButton label={feedbackMutation.isPending ? "Saving..." : "Submit exercise feedback"} disabled={!lastSessionId} onPress={() => feedbackMutation.mutate()} />
         <SecondaryLink href={`/workout/${lastSessionId ?? "local-session"}/pain`} label="Report pain" />
         <SecondaryLink href={`/workout/${lastSessionId ?? "local-session"}/symptom`} label="Report symptoms" />
         <SecondaryLink href={`/workout/${lastSessionId ?? "local-session"}/feedback`} label="Finish with feedback" />
-        <ErrorText error={workoutMutation.error} />
+        <ErrorText error={workoutMutation.error ?? pauseMutation.error ?? resumeMutation.error ?? feedbackMutation.error} />
       </Panel>
       <Panel title="Plan items">
         {daily.isLoading ? <LoadingState /> : null}

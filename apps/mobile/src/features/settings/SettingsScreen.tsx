@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch, recordConsent, saveCapacityProfile, saveGoalsTargets, saveProfile } from "../../api";
+import { router } from "expo-router";
+import { apiFetch, logoutUser, recordConsent, saveCapacityProfile, saveGoalsTargets, saveProfile } from "../../api";
 import { ActionButton, BodyText, ErrorText, LoadingState, Panel } from "../shared/ui";
 
 export function SettingsScreen() {
@@ -14,6 +15,7 @@ export function SettingsScreen() {
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["profile"] })
   });
+  const logoutMutation = useMutation({ mutationFn: logoutUser, onSuccess: () => router.replace("/auth/login") });
   return (
     <Panel title="Health settings">
       {profile.isLoading ? <LoadingState /> : null}
@@ -21,7 +23,8 @@ export function SettingsScreen() {
       <BodyText>Equipment: {(profile.data?.profile?.equipment ?? []).join(", ") || "Not saved"}</BodyText>
       <BodyText muted>Goals, capacity, consent, and accessibility preferences are saved through real API calls.</BodyText>
       <ActionButton label={settingsMutation.isPending ? "Saving..." : "Save safe default settings"} onPress={() => settingsMutation.mutate()} />
-      <ErrorText error={settingsMutation.error} />
+      <ActionButton label={logoutMutation.isPending ? "Signing out..." : "Sign out"} onPress={() => logoutMutation.mutate()} />
+      <ErrorText error={settingsMutation.error ?? logoutMutation.error} />
     </Panel>
   );
 }
