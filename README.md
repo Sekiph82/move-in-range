@@ -84,12 +84,26 @@ MoveInRangeLocalDemo!
 
 Use these only for local development.
 
+## Complete Product Platform
+
+The complete-product layer adds API-backed foundations for:
+
+- multi-step onboarding, consent history, identity, physiological context, health profile, goals, target muscles, capacity, and baseline assessments
+- advanced deterministic planning, all core program-variant families, quick-session mode, plan modification, calendar, progression, achievements, and feedback
+- workout media fallback, silhouette policy, Turkish/English voice cue scheduling, offline state helpers, and restart-safe workout state
+- diabetes context, delayed glucose checks, CGM/wearable/health-platform provider architecture, mock sync, and honest blocked states for real providers
+- notification preferences and jobs, privacy export/deletion jobs, caregiver relationships, professional relationships, camera mock analysis, and admin management views
+- staging/production environment templates, production Docker Compose, backup/restore documentation, and checklist validation
+
+External integrations are not claimed as live. Dexcom, FreeStyle Libre, Tidepool, Garmin, Fitbit, FCM, APNs, HealthKit, Health Connect, Bluetooth sensors, camera pose estimation, licensed media, and paid infrastructure activation require credentials, entitlements, hardware, licensing, or deployment authorization.
+
 ## Verification
 
 ```powershell
 npm.cmd install
 npm.cmd run format:check
 npm.cmd run lint
+npm.cmd run checklist:check
 npm.cmd run typecheck
 npm.cmd run test
 npm.cmd run build

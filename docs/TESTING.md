@@ -5,6 +5,7 @@ Run from `C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range`.
 ```powershell
 npm.cmd run format:check
 npm.cmd run lint
+npm.cmd run checklist:check
 npm.cmd run typecheck
 npm.cmd run test
 ruff check services/api
@@ -61,6 +62,8 @@ Current expanded coverage includes:
 - PostgreSQL migration/import/API integration guard.
 - Redis token revocation integration when Redis is available.
 - Full API E2E release-candidate flow.
+- Complete-product onboarding, consent, capacity, baseline safety, target muscles, advanced plans, plan modification, quick-session, media fallback, voice cues, diabetes context, mock provider sync, wearable provenance, notification preferences/jobs, privacy jobs, caregiver revoke, professional restrictions/notes, camera consent, and admin system/privacy/user surfaces.
+- Mobile onboarding draft validation, media fallback, voice scheduler, and provider blocked-state honesty.
 - Timestamp-based workout timer pause/resume/invalidation.
 - Workout snapshot restore and offline outbox account isolation.
 - Canonical local port guard for `8200` and `3200`.

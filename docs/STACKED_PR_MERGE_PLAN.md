@@ -85,3 +85,27 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-postgres.ps1
 ```
 
 Merge the release-candidate PR only after manual Android/device validation is either completed or explicitly waived.
+
+## 8. Retarget Complete Product Platform PR
+
+- Base: `main` after PR #1, PR #2, PR #3, and the release-candidate PR are merged in order.
+- Head: `codex/complete-product-platform`.
+- Expected CI: `validate` and `security` pass, including `npm.cmd run checklist:check`.
+- Conflict check: verify the diff contains only complete-product additions on top of release-candidate work.
+- Blocked checks: external providers, physical devices, HealthKit, Health Connect, push credentials, licensed media, camera pose-estimation, and paid infrastructure stay blocked until real access exists.
+
+Verification:
+
+```powershell
+npm.cmd install
+npm.cmd run format:check
+npm.cmd run lint
+npm.cmd run checklist:check
+npm.cmd run typecheck
+npm.cmd run test
+npm.cmd run build
+ruff check services/api
+python -m pytest services/api/tests
+npm.cmd run security:check
+npm.cmd audit --audit-level=high
+```
