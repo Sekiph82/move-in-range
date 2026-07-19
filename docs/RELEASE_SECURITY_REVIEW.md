@@ -7,6 +7,7 @@ Reviewed areas and result:
 - Admin privilege escalation: role changes are super-admin only; support promotion is denied and audited.
 - Policy self-approval: clinical reviewer cannot approve a policy version they created.
 - Policy publication: clinical reviewer cannot publish; super-admin can publish only after clinical approval is persisted.
+- Exercise admin mutation split: content editors can update Turkish translation and metadata only; exercise reviewers can update safety, substitutions, and publication only; publish is denied until safety review and Turkish content are complete.
 - Integration disable/revoke: analyst can retry sync but cannot disable/revoke credentials.
 - Production email sender: `EMAIL_SENDER=console`, Mailpit/localhost SMTP, localhost reset/API URLs, development reset preview, E2E seed, insecure admin cookie, default secrets, wildcard CORS, and in-memory revocation are rejected in production.
 - Reset token leakage: reset tokens are hashed in persistence, single-use, expiration checked, and old sessions are invalidated; Mailpit browser E2E verifies delivery without relying on API log exposure.
@@ -18,6 +19,7 @@ Reviewed areas and result:
 - CSRF: admin mutation proxy uses CSRF validation; direct forged request is covered in admin browser E2E.
 - CORS: wildcard CORS is rejected in production.
 - Android environment URLs: public config currently uses local API for development only; preview/production build must inject non-local API URL.
+- Android permissions: Expo config allows only `INTERNET` and `VIBRATE`; storage and overlay permissions are blocked and verified through temporary prebuild manifest audit.
 - Deep-link hijacking risk: scheme `moveinrange` exists; Android App Links are not configured and must be evaluated before public distribution.
 - Backup secret exposure: backup file was generated under `.local`, checksum recorded, restored, and deleted; no backup committed.
 

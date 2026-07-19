@@ -53,3 +53,19 @@ test("admin environment variables use canonical LOCAL_ADMIN names", () => {
   }
   assert.deepEqual(offenders, []);
 });
+
+test("Android Expo config blocks broad storage and overlay permissions", () => {
+  const appJson = JSON.parse(readFileSync("apps/mobile/app.json", "utf8"));
+  const android = appJson.expo.android;
+  assert.equal(android.package, "com.moveinrange.app");
+  assert.deepEqual(android.permissions, ["INTERNET", "VIBRATE"]);
+  for (const permission of ["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "SYSTEM_ALERT_WINDOW"]) {
+    assert.ok(android.blockedPermissions.includes(`android.permission.${permission}`), permission);
+    assert.equal(android.permissions.includes(`android.permission.${permission}`), false, permission);
+    assert.equal(android.permissions.includes(permission), false, permission);
+  }
+
+  const eas = JSON.parse(readFileSync("eas.json", "utf8"));
+  const releaseText = JSON.stringify([eas.build.preview, eas.build.production]);
+  assert.doesNotMatch(releaseText, /localhost|127\.0\.0\.1|10\.0\.2\.2|mailpit/i);
+});

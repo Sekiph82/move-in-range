@@ -144,6 +144,23 @@ if (!/sessions_revoked/.test(platformTests) || !/auth\/refresh/.test(platformTes
   errors.push("Deletion lacks session-revocation test evidence.");
 }
 
+const adminMutationProxy = readFileSync("apps/admin/app/api/admin-session/mutate/route.ts", "utf8");
+if (/exercise_content_update/.test(adminMutationProxy)) {
+  errors.push("Legacy exercise_content_update mutation returned to the admin proxy.");
+}
+for (const operationBlock of adminMutationProxy.matchAll(/exercise_[a-z_]+:\s*\{[\s\S]*?\n  \}/g)) {
+  const block = operationBlock[0];
+  const hasContentFields = /\b(title|instruction_steps|form_cues|common_mistakes|breathing_cues)\b/.test(block);
+  const hasSafetyFields = /\b(safety_tags|restricted_regions|contraindication_categories|substitution_id|publish_state)\b/.test(block);
+  if (hasContentFields && hasSafetyFields) {
+    errors.push(`Exercise admin operation mixes content and safety fields: ${block.split(":")[0]}`);
+  }
+}
+const backendRoutes = readFileSync("services/api/app/routes.py", "utf8");
+if (/@router\.patch\("\/admin\/exercises\/\{exercise_id\}"\)/.test(backendRoutes)) {
+  errors.push("Generic admin exercise PATCH endpoint returned.");
+}
+
 const releaseChecklist = readFileSync("docs/RELEASE_REHEARSAL_CHECKLIST.md", "utf8");
 if (/PostgreSQL full dataset acceptance[\s\S]*SQLite/i.test(releaseChecklist)) {
   errors.push("Release checklist uses SQLite for full dataset acceptance.");

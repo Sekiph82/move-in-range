@@ -38,7 +38,14 @@ test("backend exposes admin CRUD and operations used by the console", () => {
   for (const endpoint of [
     '"/admin/users/{user_id}"',
     '"/admin/exercises/{exercise_id}"',
+    '"/admin/exercises/{exercise_id}/translation"',
+    '"/admin/exercises/{exercise_id}/metadata"',
+    '"/admin/exercises/{exercise_id}/safety"',
+    '"/admin/exercises/{exercise_id}/substitutions"',
+    '"/admin/exercises/{exercise_id}/publish"',
+    '"/admin/exercises/{exercise_id}/unpublish"',
     '"/admin/policies/{policy_id}"',
+    '"/admin/policies/{policy_id}/submit"',
     '"/admin/policies/{policy_id}/approve"',
     '"/admin/policies/{policy_id}/publish"',
     '"/admin/policies/{policy_id}/rollback"',
@@ -58,10 +65,19 @@ test("admin mutation proxy uses typed allowlisted operations instead of browser 
   assert.doesNotMatch(route, /requiredRole/);
   assert.match(route, /unknown_fields/);
   assert.match(route, /user_role_update:[\s\S]*allowedRoles: \["super_admin"\]/);
+  assert.doesNotMatch(route, /exercise_content_update/);
+  assert.match(route, /exercise_translation_update:[\s\S]*allowedRoles: \["content_editor", "super_admin"\]/);
+  assert.match(route, /exercise_metadata_update:[\s\S]*allowedRoles: \["content_editor", "super_admin"\]/);
+  assert.match(route, /exercise_safety_update:[\s\S]*allowedRoles: \["exercise_reviewer", "super_admin"\]/);
+  assert.match(route, /exercise_substitution_add: exerciseSubstitutionAction\("add"\)/);
+  assert.match(route, /exercise_publish: exercisePublicationAction\("publish"\)/);
+  assert.doesNotMatch(route, /policyStatuses/);
+  assert.doesNotMatch(route, /clinicalReviewStates/);
   assert.match(route, /integration_disable: integrationAction\("disable"\)/);
   assert.match(route, /action === "retry-sync" \? \["analyst", "super_admin"\] : \["super_admin"\]/);
+  assert.match(route, /policy_submit: policyAction\("submit"\)/);
   assert.match(route, /policy_publish: policyAction\("publish"\)/);
-  assert.match(route, /action === "approve" \|\| action === "reject" \? \["clinical_reviewer"\] as const : \["super_admin"\] as const/);
+  assert.match(route, /action === "submit" \? \["content_editor", "super_admin"\] as const : action === "approve" \|\| action === "reject" \? \["clinical_reviewer"\] as const : \["super_admin"\] as const/);
   assert.doesNotMatch(route, /form\.get\("path"\)/);
   assert.doesNotMatch(route, /form\.get\("method"\)/);
   assert.doesNotMatch(route, /payload_json/);
@@ -78,6 +94,7 @@ test("admin mutation proxy uses typed allowlisted operations instead of browser 
   ];
   for (const file of adminFiles) {
     const source = readFileSync(file, "utf8");
+    assert.doesNotMatch(source, /exercise_content_update/, file);
     assert.doesNotMatch(source, /name="path"/, file);
     assert.doesNotMatch(source, /name="method"/, file);
     assert.doesNotMatch(source, /name="payload_json"/, file);

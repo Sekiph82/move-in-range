@@ -8,7 +8,7 @@ Validated locally:
 - `npm --workspace @moveinrange/mobile exec -- expo config --type public`: package `com.moveinrange.app`, scheme `moveinrange`, version `0.1.0`.
 - `npm --workspace @moveinrange/mobile exec -- expo export --platform android`: Android bundle export succeeded to `dist`.
 - `npm --workspace @moveinrange/mobile exec -- expo prebuild --platform android --no-install`: generated Gradle project structure, `applicationId 'com.moveinrange.app'`, `versionCode 1`, `versionName "0.1.0"`, deep-link scheme `moveinrange`.
-- Manifest permissions observed: `INTERNET`, `READ_EXTERNAL_STORAGE`, `SYSTEM_ALERT_WINDOW`, `VIBRATE`, `WRITE_EXTERNAL_STORAGE`.
+- Manifest permissions observed after permission audit: `INTERNET`, `VIBRATE`; `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, and `SYSTEM_ALERT_WINDOW` are generated only with `tools:node="remove"` from Expo `blockedPermissions`.
 - Prebuild warnings to resolve before production: configure Android edge-to-edge for target SDK 36; install/configure `expo-system-ui` if automatic user interface style is required.
 
 Environment and toolchain result:
@@ -17,7 +17,9 @@ Environment and toolchain result:
 - `ANDROID_SDK_ROOT`: not set.
 - `JAVA_HOME`: not set.
 - `eas`, `adb`, `emulator`, `java`, `gradle`: not found on PATH.
-- `eas whoami` and `eas build:list`: blocked because EAS CLI executable is not installed in the workspace.
+- `npx eas-cli --version`: `eas-cli/21.0.2 win32-x64 node-v24.14.0`.
+- `npx eas-cli whoami`: blocked with `Not logged in`.
+- `eas build:list`: not run because EAS authentication is unavailable.
 
 Install Android Studio and SDK:
 

@@ -5,10 +5,10 @@ Status key: `[x] COMPLETE`, `[!] BLOCKED`, `[-] NOT APPLICABLE`.
 - [x] COMPLETE RBAC operation correction
   - code evidence: `services/api/app/routes.py`, `services/api/app/security.py`, `apps/admin/app/api/admin-session/mutate/route.ts`
   - role: all admin roles
-  - API endpoint: `/api/v1/admin/users/{id}`, `/api/v1/admin/policies/{version}/{action}`, `/api/v1/admin/integrations/{id}/{action}`, `/api/v1/admin/notifications/{id}/{action}`
-  - UI route: `/users`, `/policies`, `/integrations`, `/notifications`
-  - persisted result: audit logs for successful and denied sensitive operations; policy actor ids and timestamps
-  - unit test: `test_release_rehearsal_admin_rbac_matrix_and_separation`
+  - API endpoint: `/api/v1/admin/users/{id}`, `/api/v1/admin/exercises/{id}/translation`, `/api/v1/admin/exercises/{id}/metadata`, `/api/v1/admin/exercises/{id}/safety`, `/api/v1/admin/exercises/{id}/substitutions`, `/api/v1/admin/exercises/{id}/publish`, `/api/v1/admin/policies/{version}/{action}`, `/api/v1/admin/integrations/{id}/{action}`, `/api/v1/admin/notifications/{id}/{action}`
+  - UI route: `/users`, `/exercises`, `/policies`, `/integrations`, `/notifications`
+  - persisted result: audit logs for successful and denied sensitive operations; policy actor ids and timestamps; exercise translation/safety/publication audit records
+  - unit test: `test_release_rehearsal_admin_rbac_matrix_and_separation`, `test_exercise_admin_operations_are_split_by_role_and_payload`
   - PostgreSQL integration test: Docker `python -m pytest services/api/tests` with PostgreSQL service healthy
   - browser E2E: `Playwright admin acceptance performs login, navigation, screenshots, logout, and CSRF rejection`
   - Docker result: `docker compose --profile test run --rm tests` passed
@@ -124,8 +124,8 @@ Status key: `[x] COMPLETE`, `[!] BLOCKED`, `[-] NOT APPLICABLE`.
   - PostgreSQL integration test: backend dependencies passed
   - browser E2E: product web E2E passed
   - Docker result: Docker suite passed
-  - Android artifact evidence: `expo-doctor` 18/18 passed; `expo config --type public` package `com.moveinrange.app`; `expo export --platform android` succeeded; `expo prebuild --platform android --no-install` generated Gradle structure; no installable artifact
-  - blocker: local Android toolchain and EAS auth are absent
+  - Android artifact evidence: `expo prebuild --platform android --no-install --clean` generated manifest with only `INTERNET` and `VIBRATE` active; storage and overlay permissions use `tools:node="remove"`; `npx eas-cli --version` returned `eas-cli/21.0.2`; no installable artifact
+  - blocker: EAS auth is not logged in and local Android build tooling/device validation remain unavailable
   - go/no-go result: BLOCKED EXTERNAL for native artifact
 
 - [!] BLOCKED Native Android manual device acceptance

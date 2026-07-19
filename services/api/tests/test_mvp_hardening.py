@@ -134,7 +134,14 @@ def test_release_rehearsal_admin_rbac_matrix_and_separation(tmp_path, monkeypatc
 
     policy_version = "release-rbac-policy"
     created = client.post("/api/v1/admin/policies", headers=content_headers, json={"version": policy_version, "clinical_review_state": "submitted", "rules": {"source": "rbac"}})
+    assert created.status_code == 422, created.text
+    created = client.post("/api/v1/admin/policies", headers=content_headers, json={"version": policy_version, "rules": {"source": "rbac"}})
     assert created.status_code == 201, created.text
+    forbidden_direct_update = client.patch(f"/api/v1/admin/policies/{policy_version}", headers=content_headers, json={"payload": {"status": "submitted", "clinical_review_state": "submitted"}})
+    assert forbidden_direct_update.status_code == 422
+    submitted = client.post(f"/api/v1/admin/policies/{policy_version}/submit", headers=content_headers, json={"rationale": "submit for clinical review"})
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["policy"]["clinical_review_state"] == "submitted"
     assert client.post(f"/api/v1/admin/policies/{policy_version}/approve", headers=content_headers, json={"rationale": "content cannot approve"}).status_code == 403
     assert client.post(f"/api/v1/admin/policies/{policy_version}/publish", headers=clinical_headers, json={"rationale": "clinical cannot publish"}).status_code == 403
     approved = client.post(f"/api/v1/admin/policies/{policy_version}/approve", headers=clinical_headers, json={"rationale": "clinical approval"})
@@ -148,6 +155,81 @@ def test_release_rehearsal_admin_rbac_matrix_and_separation(tmp_path, monkeypatc
     with session_mod.SessionLocal() as db:
         denied = db.query(models.AuditLog).filter(models.AuditLog.action.like("%.denied")).all()
         assert {item.action for item in denied} >= {"admin.user.update_role.denied", "admin.integration.disable.denied", "admin.policy.approved.denied"}
+
+
+def test_exercise_admin_operations_are_split_by_role_and_payload(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    for email, role in {
+        "exercise-super@example.test": "super_admin",
+        "exercise-reviewer@example.test": "exercise_reviewer",
+        "exercise-content@example.test": "content_editor",
+        "exercise-clinical@example.test": "clinical_reviewer",
+        "exercise-support@example.test": "support",
+        "exercise-analyst@example.test": "analyst",
+    }.items():
+        _create_admin_user(email, role)
+    headers = {role: _admin_headers(client, email) for email, role in {
+        "exercise-super@example.test": "super_admin",
+        "exercise-reviewer@example.test": "exercise_reviewer",
+        "exercise-content@example.test": "content_editor",
+        "exercise-clinical@example.test": "clinical_reviewer",
+        "exercise-support@example.test": "support",
+        "exercise-analyst@example.test": "analyst",
+    }.items()}
+    session_mod = importlib.import_module("app.db.session")
+    models = importlib.import_module("app.db.models")
+    with session_mod.SessionLocal() as db:
+        exercise = models.Exercise(id="exercise-rbac-split-main", source_id="rbac-split-main", slug="rbac-split-main", name="RBAC split main", body_part="legs", equipment="chair", target="mobility", secondary_muscles=[], source_metadata={})
+        substitution = models.Exercise(id="exercise-rbac-split-sub", source_id="rbac-split-sub", slug="rbac-split-sub", name="RBAC split sub", body_part="legs", equipment="chair", target="mobility", secondary_muscles=[], source_metadata={})
+        blocked_publish = models.Exercise(id="exercise-rbac-split-blocked", source_id="rbac-split-blocked", slug="rbac-split-blocked", name="RBAC split blocked", body_part="legs", equipment="chair", target="mobility", secondary_muscles=[], source_metadata={})
+        db.add_all([exercise, substitution, blocked_publish])
+        db.commit()
+    exercise_id = "exercise-rbac-split-main"
+    substitution_id = "exercise-rbac-split-sub"
+
+    translation_payload = {"locale": "tr", "title": "Kapali beta egzersiz", "instruction_steps": ["Nefes al", "Kontrollu hareket et"], "form_cues": ["Dik dur"], "common_mistakes": ["Acele etme"], "breathing_cues": ["Nefes ver"], "change_reason": "content review"}
+    metadata_payload = {"category": "mobility", "equipment": "chair", "position": "seated", "difficulty": "easy", "change_reason": "metadata review"}
+    safety_payload = {"safety_tags": ["chair_supported"], "restricted_regions": ["knee"], "contraindication_categories": ["acute_pain"], "review_reason": "safety review"}
+    substitution_payload = {"substitution_id": substitution_id, "reason": "safer alternative"}
+    publication_payload = {"reason": "publication rehearsal"}
+
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/translation", headers=headers["content_editor"], json=translation_payload).status_code == 200
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/metadata", headers=headers["content_editor"], json=metadata_payload).status_code == 200
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/safety", headers=headers["content_editor"], json=safety_payload).status_code == 403
+    assert client.post(f"/api/v1/admin/exercises/{exercise_id}/publish", headers=headers["content_editor"], json=publication_payload).status_code == 403
+
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/translation", headers=headers["exercise_reviewer"], json=translation_payload).status_code == 403
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/metadata", headers=headers["exercise_reviewer"], json=metadata_payload).status_code == 403
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/safety", headers=headers["exercise_reviewer"], json=safety_payload).status_code == 200
+    assert client.post(f"/api/v1/admin/exercises/{exercise_id}/substitutions", headers=headers["exercise_reviewer"], json=substitution_payload).status_code == 200
+    published = client.post(f"/api/v1/admin/exercises/{exercise_id}/publish", headers=headers["exercise_reviewer"], json=publication_payload)
+    assert published.status_code == 200, published.text
+    assert published.json()["metadata"]["publish_state"] == "published"
+
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/translation", headers=headers["super_admin"], json=translation_payload).status_code == 200
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/metadata", headers=headers["super_admin"], json=metadata_payload).status_code == 200
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/safety", headers=headers["super_admin"], json=safety_payload).status_code == 200
+    assert client.post(f"/api/v1/admin/exercises/{exercise_id}/substitutions/remove", headers=headers["super_admin"], json=substitution_payload).status_code == 200
+    assert client.post(f"/api/v1/admin/exercises/{exercise_id}/unpublish", headers=headers["super_admin"], json=publication_payload).status_code == 200
+
+    for denied_role in ["clinical_reviewer", "support", "analyst"]:
+        assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/translation", headers=headers[denied_role], json=translation_payload).status_code == 403
+        assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/metadata", headers=headers[denied_role], json=metadata_payload).status_code == 403
+        assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/safety", headers=headers[denied_role], json=safety_payload).status_code == 403
+        assert client.post(f"/api/v1/admin/exercises/{exercise_id}/substitutions", headers=headers[denied_role], json=substitution_payload).status_code == 403
+        assert client.post(f"/api/v1/admin/exercises/{exercise_id}/publish", headers=headers[denied_role], json=publication_payload).status_code == 403
+
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/translation", headers=headers["super_admin"], json={**translation_payload, "safety_tags": ["forbidden"]}).status_code == 422
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/translation", headers=headers["super_admin"], json={**translation_payload, "locale": "en"}).status_code == 422
+    assert client.patch(f"/api/v1/admin/exercises/{exercise_id}/safety", headers=headers["super_admin"], json={**safety_payload, "review_reason": ""}).status_code == 422
+    assert client.post(f"/api/v1/admin/exercises/{exercise_id}/substitutions", headers=headers["super_admin"], json={"substitution_id": exercise_id, "reason": "self"}).status_code == 409
+    assert client.post(f"/api/v1/admin/exercises/{exercise_id}/substitutions", headers=headers["super_admin"], json=substitution_payload).status_code == 200
+    assert client.post(f"/api/v1/admin/exercises/{exercise_id}/substitutions", headers=headers["super_admin"], json=substitution_payload).status_code == 409
+    blocked = client.post("/api/v1/admin/exercises/exercise-rbac-split-blocked/publish", headers=headers["super_admin"], json=publication_payload)
+    assert blocked.status_code == 409
+    blocked_payload = blocked.json()
+    detail = blocked_payload.get("detail", blocked_payload)
+    assert detail["code"] == "exercise_publication_preconditions_failed"
 
 
 def test_refresh_rotation_logout_and_legacy_password_upgrade(tmp_path, monkeypatch):

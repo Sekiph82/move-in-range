@@ -176,7 +176,7 @@ def test_admin_complete_platform_surfaces(tmp_path, monkeypatch):
     if exercises.json()["items"]:
         exercise_id = exercises.json()["items"][0]["id"]
         assert client.get(f"/api/v1/admin/exercises/{exercise_id}", headers=admin_headers).status_code == 200
-        patched = client.patch(f"/api/v1/admin/exercises/{exercise_id}", headers=admin_headers, json={"payload": {"safety_tags": ["chair_supported"], "publish_state": "reviewed"}})
+        patched = client.patch(f"/api/v1/admin/exercises/{exercise_id}/safety", headers=admin_headers, json={"safety_tags": ["chair_supported"], "review_reason": "complete platform safety review"})
         assert patched.status_code == 200, patched.text
 
     assert client.get("/api/v1/admin/system", headers=admin_headers).status_code == 200

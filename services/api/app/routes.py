@@ -154,6 +154,44 @@ class PolicyActionPayload(BaseModel):
     rationale: str = Field(default="Admin console action", max_length=500)
 
 
+class StrictPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class ExerciseTranslationUpdatePayload(StrictPayload):
+    locale: str
+    title: str
+    instruction_steps: list[str] = Field(min_length=1)
+    form_cues: list[str] = Field(default_factory=list)
+    common_mistakes: list[str] = Field(default_factory=list)
+    breathing_cues: list[str] = Field(default_factory=list)
+    change_reason: str
+
+
+class ExerciseMetadataUpdatePayload(StrictPayload):
+    category: str | None = None
+    equipment: str | None = None
+    position: str | None = None
+    difficulty: str | None = None
+    change_reason: str
+
+
+class ExerciseSafetyUpdatePayload(StrictPayload):
+    safety_tags: list[str] = Field(default_factory=list)
+    restricted_regions: list[str] = Field(default_factory=list)
+    contraindication_categories: list[str] = Field(default_factory=list)
+    review_reason: str
+
+
+class ExerciseSubstitutionPayload(StrictPayload):
+    substitution_id: str
+    reason: str
+
+
+class ExercisePublicationPayload(StrictPayload):
+    reason: str
+
+
 class ProfilePayload(BaseModel):
     preferred_name: str = "Local mover"
     age: int | None = None
@@ -1577,6 +1615,8 @@ def policies(admin=Depends(require_admin_roles("clinical_reviewer", "content_edi
 
 @router.post("/admin/policies", status_code=status.HTTP_201_CREATED)
 def create_policy(payload: PolicyCreatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="policy_draft_create")), db: Session = Depends(get_db)):
+    if payload.clinical_review_state != "draft":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "policy_draft_create_cannot_set_review_state"})
     existing = db.query(PolicyVersion).filter(PolicyVersion.version == payload.version).one_or_none()
     if existing:
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "policy_version_exists"})
@@ -1597,16 +1637,27 @@ def policy_detail(policy_id: str, admin=Depends(require_admin_roles("clinical_re
 @router.patch("/admin/policies/{policy_id}")
 def update_policy(policy_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="policy_draft_update")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
+    unknown = set(payload.payload) - {"rules"}
+    if unknown:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "policy_draft_update_forbidden_fields", "fields": sorted(unknown)})
     if "rules" in payload.payload and isinstance(payload.payload["rules"], dict):
         policy.rules = payload.payload["rules"]
-    if "clinical_review_state" in payload.payload:
-        policy.clinical_review_state = str(payload.payload["clinical_review_state"])
-    if "status" in payload.payload:
-        policy.status = str(payload.payload["status"])
-        if policy.status == "submitted":
-            policy.submitter_id = admin.id
-            policy.submitted_at = datetime.now(UTC)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.update", target_type="policy", target_id=policy.version, redacted_payload={"fields": sorted(payload.payload.keys())}))
+    db.commit()
+    return {"policy": _policy_payload(policy, include_rules=True)}
+
+
+@router.post("/admin/policies/{policy_id}/submit")
+def submit_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="policy_submit")), db: Session = Depends(get_db)):
+    policy = _admin_policy_lookup(policy_id, db)
+    rationale = payload.rationale.strip()
+    if not rationale:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "rationale_required"})
+    policy.status = "submitted"
+    policy.clinical_review_state = "submitted"
+    policy.submitter_id = admin.id
+    policy.submitted_at = datetime.now(UTC)
+    db.add(AuditLog(actor_id=admin.id, action="admin.policy.submit", target_type="policy", target_id=policy.version, redacted_payload={"fields": ["status", "clinical_review_state"]}))
     db.commit()
     return {"policy": _policy_payload(policy, include_rules=True)}
 
@@ -1661,54 +1712,158 @@ def admin_exercise_detail(exercise_id: str, admin=Depends(require_admin_roles("e
     exercise = _get_exercise(exercise_id, db)
     approvals = db.query(MediaApproval).filter(MediaApproval.exercise_id == exercise.id).order_by(desc(MediaApproval.created_at)).all()
     tags = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).order_by(desc(ExerciseTag.created_at)).all()
-    return {"exercise": _exercise_payload(exercise, db, "en"), "turkish": _exercise_payload(exercise, db, "tr"), "media_approvals": [_media_approval_payload(item) for item in approvals], "tags": [_exercise_tag_payload(item) for item in tags], "revision_history": [tag.created_at.isoformat() for tag in tags if tag.created_at]}
+    metadata = exercise.source_metadata or {}
+    return {
+        "exercise": _exercise_payload(exercise, db, "en"),
+        "turkish": _exercise_payload(exercise, db, "tr"),
+        "metadata": metadata,
+        "substitution_ids": list(metadata.get("substitution_ids") or []),
+        "publication_preconditions": _exercise_publication_preconditions(exercise, db),
+        "media_approvals": [_media_approval_payload(item) for item in approvals],
+        "tags": [_exercise_tag_payload(item) for item in tags],
+        "revision_history": [tag.created_at.isoformat() for tag in tags if tag.created_at],
+    }
 
 
-@router.patch("/admin/exercises/{exercise_id}")
-def update_admin_exercise(exercise_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_update")), db: Session = Depends(get_db)):
+@router.patch("/admin/exercises/{exercise_id}/translation")
+def update_admin_exercise_translation(exercise_id: str, payload: ExerciseTranslationUpdatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="exercise_translation_update")), db: Session = Depends(get_db)):
     exercise = _get_exercise(exercise_id, db)
-    safety_fields = {"safety_tags", "restricted_regions", "substitution_id", "publish_state", "review_status"}
-    content_fields = {"turkish_title", "turkish_instructions", "name", "body_part", "equipment", "target"}
-    requested = set(payload.payload)
-    if requested & safety_fields and admin.role not in {"exercise_reviewer", "super_admin"}:
-        db.add(AuditLog(actor_id=admin.id, action="admin.exercise.update.denied", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": "safety_role_required", "fields": sorted(requested & safety_fields)}))
-        db.commit()
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "exercise_safety_role_required"})
-    if requested & content_fields and not requested & safety_fields and admin.role not in {"content_editor", "super_admin"}:
-        db.add(AuditLog(actor_id=admin.id, action="admin.exercise.update.denied", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": "content_role_required", "fields": sorted(requested & content_fields)}))
-        db.commit()
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "exercise_content_role_required"})
+    if payload.locale != "tr":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_exercise_locale"})
+    title = _required_text(payload.title, "title_required")
+    reason = _required_text(payload.change_reason, "change_reason_required")
+    steps = _required_text_list(payload.instruction_steps, "instruction_steps_required")
+    localized = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id, ExerciseLocalization.locale == "tr").one_or_none()
+    if not localized:
+        localized = ExerciseLocalization(exercise_id=exercise.id, locale="tr", instructions="", instruction_steps=[])
+        db.add(localized)
     metadata = {**(exercise.source_metadata or {})}
-    if "safety_tags" in payload.payload:
-        tag = ExerciseTag(exercise_id=exercise.id, classifier_version="manual-admin", tags={"safety_tags": payload.payload["safety_tags"]}, provenance="admin", confidence=100, manual_review_status="approved")
-        db.add(tag)
-    for field in ["name", "body_part", "equipment", "target"]:
-        if field in payload.payload and str(payload.payload[field]).strip():
-            setattr(exercise, field, str(payload.payload[field]).strip().lower() if field != "name" else str(payload.payload[field]).strip())
-    if "turkish_title" in payload.payload or "turkish_instructions" in payload.payload:
-        localized = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id, ExerciseLocalization.locale == "tr").one_or_none()
-        if not localized:
-            localized = ExerciseLocalization(exercise_id=exercise.id, locale="tr", instructions="", instruction_steps=[])
-            db.add(localized)
-        if str(payload.payload.get("turkish_title", "")).strip():
-            metadata["tr_title"] = str(payload.payload["turkish_title"]).strip()
-        if str(payload.payload.get("turkish_instructions", "")).strip():
-            localized.instructions = str(payload.payload["turkish_instructions"]).strip()
-            localized.instruction_steps = [line.strip() for line in localized.instructions.splitlines() if line.strip()]
-    if "substitution_id" in payload.payload and str(payload.payload["substitution_id"]).strip():
-        substitutions = list(metadata.get("substitution_ids") or [])
-        substitution_id = str(payload.payload["substitution_id"]).strip()
-        if substitution_id not in substitutions:
-            substitutions.append(substitution_id)
-        metadata["substitution_ids"] = substitutions[:20]
-    if "restricted_regions" in payload.payload:
-        metadata["restricted_regions"] = payload.payload["restricted_regions"]
-    if "review_status" in payload.payload:
-        metadata["review_status"] = payload.payload["review_status"]
-    if "publish_state" in payload.payload:
-        metadata["publish_state"] = payload.payload["publish_state"]
+    metadata["tr_title"] = title
+    metadata["tr_form_cues"] = _clean_text_list(payload.form_cues)
+    metadata["tr_common_mistakes"] = _clean_text_list(payload.common_mistakes)
+    metadata["tr_breathing_cues"] = _clean_text_list(payload.breathing_cues)
+    metadata["translation_updated_by"] = admin.id
+    metadata["translation_updated_at"] = datetime.now(UTC).isoformat()
     exercise.source_metadata = metadata
-    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.update", target_type="exercise", target_id=exercise.id, redacted_payload={"fields": sorted(payload.payload.keys())}))
+    localized.instructions = "\n".join(steps)
+    localized.instruction_steps = steps
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.translation_update", target_type="exercise", target_id=exercise.id, redacted_payload={"locale": payload.locale, "reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.patch("/admin/exercises/{exercise_id}/metadata")
+def update_admin_exercise_metadata(exercise_id: str, payload: ExerciseMetadataUpdatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="exercise_metadata_update")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.change_reason, "change_reason_required")
+    metadata_updates = {
+        "category": payload.category,
+        "position": payload.position,
+        "difficulty": payload.difficulty,
+    }
+    equipment = payload.equipment.strip().lower() if payload.equipment and payload.equipment.strip() else None
+    cleaned = {key: str(value).strip().lower() for key, value in metadata_updates.items() if value and str(value).strip()}
+    if not cleaned and not equipment:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "metadata_field_required"})
+    metadata = {**(exercise.source_metadata or {})}
+    metadata.update(cleaned)
+    if equipment:
+        exercise.equipment = equipment
+    metadata["metadata_updated_by"] = admin.id
+    metadata["metadata_updated_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.metadata_update", target_type="exercise", target_id=exercise.id, redacted_payload={"fields": sorted([*cleaned.keys(), *(["equipment"] if equipment else [])]), "reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.patch("/admin/exercises/{exercise_id}/safety")
+def update_admin_exercise_safety(exercise_id: str, payload: ExerciseSafetyUpdatePayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_safety_update")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.review_reason, "review_reason_required")
+    safety_tags = _clean_text_list(payload.safety_tags)
+    restricted_regions = _clean_text_list(payload.restricted_regions)
+    contraindications = _clean_text_list(payload.contraindication_categories)
+    if not safety_tags and not restricted_regions and not contraindications:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "safety_field_required"})
+    metadata = {**(exercise.source_metadata or {})}
+    metadata["safety_tags"] = safety_tags
+    metadata["restricted_regions"] = restricted_regions
+    metadata["contraindication_categories"] = contraindications
+    metadata["review_status"] = "approved"
+    metadata["safety_reviewed_by"] = admin.id
+    metadata["safety_reviewed_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(ExerciseTag(exercise_id=exercise.id, classifier_version="manual-admin", tags={"safety_tags": safety_tags, "restricted_regions": restricted_regions, "contraindication_categories": contraindications}, provenance="admin", confidence=100, manual_review_status="approved"))
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.safety_update", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.post("/admin/exercises/{exercise_id}/substitutions")
+def add_admin_exercise_substitution(exercise_id: str, payload: ExerciseSubstitutionPayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_substitution_add")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    substitution = _get_exercise(payload.substitution_id, db)
+    reason = _required_text(payload.reason, "reason_required")
+    if substitution.id == exercise.id:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "self_substitution_rejected"})
+    metadata = {**(exercise.source_metadata or {})}
+    substitutions = list(metadata.get("substitution_ids") or [])
+    if substitution.id in substitutions:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "duplicate_substitution"})
+    substitutions.append(substitution.id)
+    metadata["substitution_ids"] = substitutions[:20]
+    metadata["substitution_updated_by"] = admin.id
+    metadata["substitution_updated_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.substitution_add", target_type="exercise", target_id=exercise.id, redacted_payload={"substitution_id": substitution.id, "reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.post("/admin/exercises/{exercise_id}/substitutions/remove")
+def remove_admin_exercise_substitution(exercise_id: str, payload: ExerciseSubstitutionPayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_substitution_remove")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.reason, "reason_required")
+    substitution_id = _required_text(payload.substitution_id, "substitution_id_required")
+    metadata = {**(exercise.source_metadata or {})}
+    substitutions = [item for item in list(metadata.get("substitution_ids") or []) if item != substitution_id]
+    metadata["substitution_ids"] = substitutions
+    metadata["substitution_updated_by"] = admin.id
+    metadata["substitution_updated_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.substitution_remove", target_type="exercise", target_id=exercise.id, redacted_payload={"substitution_id": substitution_id, "reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.post("/admin/exercises/{exercise_id}/publish")
+def publish_admin_exercise(exercise_id: str, payload: ExercisePublicationPayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_publish")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.reason, "reason_required")
+    preconditions = _exercise_publication_preconditions(exercise, db)
+    if not preconditions["eligible"]:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "exercise_publication_preconditions_failed", "preconditions": preconditions})
+    metadata = {**(exercise.source_metadata or {})}
+    metadata["publish_state"] = "published"
+    metadata["published_by"] = admin.id
+    metadata["published_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.publish", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.post("/admin/exercises/{exercise_id}/unpublish")
+def unpublish_admin_exercise(exercise_id: str, payload: ExercisePublicationPayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_unpublish")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.reason, "reason_required")
+    metadata = {**(exercise.source_metadata or {})}
+    metadata["publish_state"] = "unpublished"
+    metadata["unpublished_by"] = admin.id
+    metadata["unpublished_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.unpublish", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": reason}))
     db.commit()
     return admin_exercise_detail(exercise_id, admin, db)
 
@@ -1904,16 +2059,46 @@ def admin_e2e_seed(admin=Depends(require_admin_role("super_admin")), db: Session
         db.flush()
     for email, role in {
         "closed-beta-clinical@example.test": "clinical_reviewer",
+        "closed-beta-exercise@example.test": "exercise_reviewer",
         "closed-beta-content@example.test": "content_editor",
         "closed-beta-support@example.test": "support",
         "closed-beta-analyst@example.test": "analyst",
     }.items():
         if not db.query(User).filter(User.email == email).one_or_none():
             db.add(User(id="adm_" + hashlib.sha256(email.encode()).hexdigest()[:16], email=email, password_hash=hash_password("MoveInRangeAdmin1"), auth_provider="local", role=role))
-    exercise = db.query(Exercise).order_by(Exercise.id).first()
-    if exercise:
-        media = MediaApproval(exercise_id=exercise.id, media_type="silhouette", license_state="internal", source="closed_beta_seed", status="pending", metadata_payload={})
-        db.add(media)
+    exercise = db.get(Exercise, "exercise-closed-beta-admin-e2e")
+    if not exercise:
+        exercise = Exercise(
+            id="exercise-closed-beta-admin-e2e",
+            source_id="closed-beta-admin-e2e",
+            slug="closed-beta-admin-e2e",
+            name="000 Closed beta admin exercise",
+            body_part="legs",
+            equipment="chair",
+            target="mobility",
+            secondary_muscles=[],
+            source_metadata={"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"},
+        )
+        db.add(exercise)
+    substitution = db.get(Exercise, "exercise-closed-beta-admin-substitution")
+    if not substitution:
+        substitution = Exercise(
+            id="exercise-closed-beta-admin-substitution",
+            source_id="closed-beta-admin-substitution",
+            slug="closed-beta-admin-substitution",
+            name="001 Closed beta substitution exercise",
+            body_part="legs",
+            equipment="chair",
+            target="mobility",
+            secondary_muscles=[],
+            source_metadata={"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"},
+        )
+        db.add(substitution)
+    for seeded in [exercise, substitution]:
+        if not db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == seeded.id, ExerciseLocalization.locale == "en").one_or_none():
+            db.add(ExerciseLocalization(exercise_id=seeded.id, locale="en", instructions="Move with control.", instruction_steps=["Move with control."]))
+    media = MediaApproval(exercise_id=exercise.id, media_type="silhouette", license_state="internal", source="closed_beta_seed", status="pending", metadata_payload={})
+    db.add(media)
     policy_version = "closed-beta-e2e-policy"
     if not db.query(PolicyVersion).filter(PolicyVersion.version == policy_version).one_or_none():
         db.add(PolicyVersion(version=policy_version, status="draft", rules={"closed_beta": True}, clinical_review_state="draft"))
@@ -1924,7 +2109,7 @@ def admin_e2e_seed(admin=Depends(require_admin_role("super_admin")), db: Session
     db.add_all([export, deletion, notification, connection])
     db.add(AuditLog(actor_id=admin.id, action="admin.e2e.seed", target_type="closed_beta", target_id=user.id, redacted_payload={"seed": True}))
     db.commit()
-    return {"user_id": user.id, "policy_version": policy_version, "privacy_export_id": export.id, "deletion_id": deletion.id, "notification_id": notification.id, "connection_id": connection.id, "exercise_id": exercise.id if exercise else None}
+    return {"user_id": user.id, "policy_version": policy_version, "privacy_export_id": export.id, "deletion_id": deletion.id, "notification_id": notification.id, "connection_id": connection.id, "exercise_id": exercise.id, "substitution_id": substitution.id}
 
 
 @router.get("/admin/audit")
@@ -2431,6 +2616,36 @@ def _get_exercise(exercise_id: str, db: Session) -> Exercise:
     if not exercise:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "exercise_not_found"})
     return exercise
+
+
+def _required_text(value: str | None, code: str) -> str:
+    text_value = str(value or "").strip()
+    if not text_value:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": code})
+    return text_value
+
+
+def _clean_text_list(values: list[str]) -> list[str]:
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
+def _required_text_list(values: list[str], code: str) -> list[str]:
+    cleaned = _clean_text_list(values)
+    if not cleaned:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": code})
+    return cleaned
+
+
+def _exercise_publication_preconditions(exercise: Exercise, db: Session) -> dict[str, Any]:
+    metadata = exercise.source_metadata or {}
+    localized = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id, ExerciseLocalization.locale == "tr").one_or_none()
+    safety_review_complete = metadata.get("review_status") == "approved" and bool(metadata.get("safety_reviewed_by"))
+    localized_content_complete = bool(str(metadata.get("tr_title") or "").strip()) and bool(localized and _clean_text_list(localized.instruction_steps or []))
+    return {
+        "eligible": safety_review_complete and localized_content_complete,
+        "safety_review_complete": safety_review_complete,
+        "localized_content_complete": localized_content_complete,
+    }
 
 
 def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: bool = False) -> dict[str, Any]:

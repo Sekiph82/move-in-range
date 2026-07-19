@@ -14,10 +14,10 @@ Date: 2026-07-19
 | Workout | GO | Start, pause, resume, feedback browser scenario passed | Native background/process-kill validation required |
 | Diabetes | GO | mg/dL and mmol/L API/UI coverage passed | None |
 | Product web | GO | Product UI E2E 7 passed, 0 skipped | None |
-| Admin | GO | Role-separated policy/admin mutation tests passed | None |
+| Admin | GO | Role-separated policy/admin/exercise mutation tests passed | None |
 | Privacy | GO WITH MANUAL CONDITION | Export checksum, secret exclusion, ownership isolation, deletion processing, session revocation tested | Native/device privacy flow pending |
 | Email | GO | SMTP/Mailpit reset flow passed; production console sender rejected | Production SMTP credentials external |
-| Android artifact | BLOCKED EXTERNAL | Expo doctor/export/prebuild passed; no APK/AAB | Android SDK/EAS CLI/auth unavailable |
+| Android artifact | BLOCKED EXTERNAL | Expo prebuild permission audit passed; no APK/AAB | EAS auth or local Android build tooling unavailable |
 | Android runtime | BLOCKED EXTERNAL | No emulator/device available | Requires device/emulator run |
 | Accessibility | GO WITH MANUAL CONDITION | Web labels used in E2E | TalkBack/manual dynamic text pass required |
 | Security | GO WITH MANUAL CONDITION | High/critical audit clean; release review complete | Moderate dependency advisories need scheduled upgrade |
