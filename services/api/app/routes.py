@@ -9,25 +9,68 @@ from .auth import create_token, decode_token, hash_password, password_needs_upgr
 from .db.models import (
     AuditLog,
     AuthRefreshToken,
+    AchievementRecord,
+    BaselineAssessment,
+    CalendarEvent,
+    CameraAnalysisSession,
+    CapacityProfile,
+    CaregiverRelationship,
+    ConsentRecord,
+    DataExportJob,
+    DeletionJob,
+    DiabetesContextEntry,
+    ExerciseFeedback,
     Exercise,
     ExerciseLocalization,
     ExerciseMedia,
     ExerciseTag,
     FavoriteExercise,
     GlucoseEntry,
+    GoalPreference,
+    MediaApproval,
+    NotificationJob,
+    NotificationPreference,
+    OnboardingProgress,
     OfflineEvent,
     Plan,
+    PlanDecisionEvidence,
+    PlanModification,
     Profile,
+    ProfessionalNote,
+    ProfessionalRelationship,
+    ProfessionalRestriction,
+    ProgramSimulation,
+    ProviderConnection,
+    ProviderSyncRecord,
     ReadinessCheck,
     SessionEvent,
     SessionRecord,
     User,
+    WearableSample,
 )
 from .db.session import get_db
 from .revocation import RedisTokenRevocationStore, get_token_revocation_store
 from .security import require_admin_role, require_user
 from .settings import get_settings
 from .services.safety import EMERGENCY_MESSAGE, evaluate_safety
+from .services.platform import (
+    GENERAL_GOALS,
+    PROGRAM_VARIANTS,
+    PROVIDER_REGISTRY,
+    TARGET_FOCUSES,
+    apply_plan_modification,
+    build_program_payload,
+    derive_capacity_profile,
+    diabetes_insights,
+    evaluate_contextual_safety,
+    interpret_natural_request,
+    mock_pose_result,
+    mock_provider_sync,
+    progression_recommendation,
+    resolve_media,
+    schedule_notification,
+    schedule_voice_cues,
+)
 
 router = APIRouter()
 _rate_limits: dict[str, list[datetime]] = {}
@@ -147,6 +190,81 @@ class GlucosePayload(BaseModel):
     timing: str = "unspecified"
     session_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProductPayload(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class OnboardingPayload(BaseModel):
+    step: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    completed: bool = False
+    language: str = "en"
+
+
+class ConsentPayload(BaseModel):
+    consent_type: str
+    version: str = "consent-2026-07"
+    granted: bool
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class GoalsPayload(BaseModel):
+    goals: list[str] = Field(default_factory=list)
+    target_focuses: list[str] = Field(default_factory=list)
+    natural_request: str | None = None
+
+
+class AssessmentPayload(BaseModel):
+    assessment_type: str
+    status: str = "completed"
+    result_payload: dict[str, Any] = Field(default_factory=dict)
+    symptoms: dict[str, Any] = Field(default_factory=dict)
+    confidence: int = Field(default=3, ge=1, le=5)
+
+
+class ProgramRequestPayload(BaseModel):
+    variant: str | None = None
+    available_minutes: int | None = Field(default=None, ge=5, le=60)
+    target_focuses: list[str] = Field(default_factory=list)
+    equipment: list[str] = Field(default_factory=list)
+    natural_request: str | None = None
+    energy: int = Field(default=3, ge=1, le=5)
+    pain: int = Field(default=0, ge=0, le=10)
+    no_floor: bool = False
+    chair_only: bool = False
+    quiet: bool = False
+    recent_low: bool = False
+    cgm_trend: str | None = None
+    cardiac_rehabilitation: bool = False
+    clinician_prohibited_movements: list[str] = Field(default_factory=list)
+    physiological_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanModificationPayload(BaseModel):
+    intent: str
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProviderConnectPayload(BaseModel):
+    provider_key: str
+    scopes: list[str] = Field(default_factory=list)
+    mock: bool = True
+
+
+class NotificationPreferencePayload(BaseModel):
+    category: str
+    enabled: bool = True
+    quiet_hours: dict[str, Any] = Field(default_factory=dict)
+    channel: str = "local"
+
+
+class RelationshipPayload(BaseModel):
+    email: str
+    scopes: list[str] = Field(default_factory=list)
+    role: str | None = None
+    organization: str | None = None
 
 
 @router.get("/health")
@@ -325,6 +443,130 @@ def update_goals(payload: dict[str, list[str]], user: User = Depends(require_use
     return _patch_profile_list(user, db, "goals", payload.get("goals", []))
 
 
+@router.get("/onboarding")
+def get_onboarding(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    progress = db.query(OnboardingProgress).filter(OnboardingProgress.user_id == user.id).one_or_none()
+    if not progress:
+        return {"progress": {"current_step": "identity", "completed_steps": [], "draft_payload": {}, "language": "en", "status": "not_started"}}
+    return {"progress": _onboarding_payload(progress)}
+
+
+@router.put("/onboarding")
+def save_onboarding(payload: OnboardingPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    progress = db.query(OnboardingProgress).filter(OnboardingProgress.user_id == user.id).one_or_none()
+    if not progress:
+        progress = OnboardingProgress(user_id=user.id)
+        db.add(progress)
+    draft = dict(progress.draft_payload or {})
+    draft[payload.step] = payload.payload
+    completed = set(progress.completed_steps or [])
+    if payload.completed:
+        completed.add(payload.step)
+    progress.current_step = payload.step
+    progress.completed_steps = sorted(completed)
+    progress.draft_payload = draft
+    progress.language = payload.language
+    required = {"identity", "health_profile", "goals", "capacity", "consent"}
+    progress.status = "complete" if required.issubset(completed) else "in_progress"
+    profile = _profile_for(user.id, db)
+    health = dict(profile.health_payload or {})
+    health["onboarding_draft"] = draft
+    profile.health_payload = health
+    profile.onboarding_complete = progress.status == "complete"
+    db.add(AuditLog(actor_id=user.id, action="onboarding.save_step", target_type="onboarding", target_id=payload.step, redacted_payload={"completed": payload.completed}))
+    db.commit()
+    db.refresh(progress)
+    return {"progress": _onboarding_payload(progress)}
+
+
+@router.post("/consents", status_code=status.HTTP_201_CREATED)
+def record_consent(payload: ConsentPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    record = ConsentRecord(user_id=user.id, consent_type=payload.consent_type, version=payload.version, granted=payload.granted, evidence=payload.evidence)
+    db.add(record)
+    db.add(AuditLog(actor_id=user.id, action="consent.record", target_type="consent", target_id=payload.consent_type, redacted_payload={"version": payload.version, "granted": payload.granted}))
+    db.commit()
+    return {"consent": _consent_payload(record)}
+
+
+@router.get("/consents")
+def list_consents(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    records = db.query(ConsentRecord).filter(ConsentRecord.user_id == user.id).order_by(desc(ConsentRecord.created_at)).all()
+    return {"items": [_consent_payload(record) for record in records]}
+
+
+@router.put("/profile/advanced")
+def update_advanced_profile(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    profile = _profile_for(user.id, db)
+    health = dict(profile.health_payload or {})
+    health.update(payload.payload)
+    profile.health_payload = health
+    db.add(AuditLog(actor_id=user.id, action="profile.advanced_upsert", target_type="profile", target_id=str(profile.id), redacted_payload={"fields": sorted(payload.payload.keys())}))
+    db.commit()
+    return _profile_payload(user, profile)
+
+
+@router.put("/capacity-profile")
+def upsert_capacity_profile(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    derived = derive_capacity_profile(payload.payload)
+    record = CapacityProfile(
+        user_id=user.id,
+        version=derived["version"],
+        inputs=payload.payload,
+        derived_profile=derived,
+        expires_at=datetime.now(UTC) + timedelta(days=derived["expires_at_days"]),
+    )
+    db.add(record)
+    db.commit()
+    return {"capacity_profile": _capacity_payload(record)}
+
+
+@router.post("/baseline-assessments", status_code=status.HTTP_201_CREATED)
+def create_baseline_assessment(payload: AssessmentPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    safety = evaluate_contextual_safety({**payload.result_payload, **payload.symptoms})
+    if safety["action"] in {"BLOCK_AND_SHOW_SAFETY_MESSAGE", "CLINICIAN_SUPERVISION_REQUIRED"} and payload.status == "completed":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "assessment_not_allowed_by_safety", "safety_decision": safety})
+    record = BaselineAssessment(
+        user_id=user.id,
+        assessment_type=payload.assessment_type,
+        status=payload.status,
+        result_payload=payload.result_payload,
+        symptoms=payload.symptoms,
+        confidence=payload.confidence,
+        expires_at=datetime.now(UTC) + timedelta(days=90),
+    )
+    db.add(record)
+    db.add(_safety_decision_log(user.id, safety, {"assessment_type": payload.assessment_type, **payload.result_payload}))
+    db.commit()
+    return {"assessment": _assessment_payload(record), "safety_decision": safety}
+
+
+@router.put("/goals-targets")
+def upsert_goals_targets(payload: GoalsPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    invalid_goals = sorted(set(payload.goals) - GENERAL_GOALS)
+    invalid_focuses = sorted(set(payload.target_focuses) - TARGET_FOCUSES)
+    if invalid_goals or invalid_focuses:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_goal_or_focus", "invalid_goals": invalid_goals, "invalid_focuses": invalid_focuses})
+    interpretation = interpret_natural_request(payload.natural_request)
+    record = db.query(GoalPreference).filter(GoalPreference.user_id == user.id).one_or_none()
+    if not record:
+        record = GoalPreference(user_id=user.id)
+        db.add(record)
+    record.goals = payload.goals
+    record.target_focuses = sorted(set(payload.target_focuses + interpretation["target_focuses"]))
+    record.natural_request = payload.natural_request
+    record.safe_interpretation = interpretation
+    db.commit()
+    return {"goals": _goals_payload(record)}
+
+
+@router.post("/safety/evaluate")
+def evaluate_safety_context(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    decision = evaluate_contextual_safety(payload.payload)
+    db.add(_safety_decision_log(user.id, decision, payload.payload))
+    db.commit()
+    return {"decision": decision}
+
+
 @router.get("/conditions")
 def conditions():
     return {"items": [{"code": code, "label": code.replace("_", " ").title()} for code in CONDITIONS]}
@@ -407,6 +649,37 @@ def exercise_detail(exercise_id: str, language: str = "en", user: User = Depends
     return _exercise_payload(exercise, db, language)
 
 
+@router.get("/exercises/{exercise_id}/media-resolution")
+def exercise_media_resolution(
+    exercise_id: str,
+    language: str = "en",
+    reduced_motion: bool = False,
+    low_bandwidth: bool = False,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    exercise = _get_exercise(exercise_id, db)
+    payload = _exercise_payload(exercise, db, language)
+    return {"media": resolve_media(payload, reduced_motion=reduced_motion, low_bandwidth=low_bandwidth)}
+
+
+@router.post("/media-approvals", status_code=status.HTTP_201_CREATED)
+def create_media_approval(payload: ProductPayload, admin: User = Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
+    record = MediaApproval(
+        exercise_id=payload.payload.get("exercise_id", ""),
+        media_type=payload.payload.get("media_type", "silhouette"),
+        license_state=payload.payload.get("license_state", "internal"),
+        source=payload.payload.get("source", "internal_silhouette"),
+        status=payload.payload.get("status", "pending"),
+        attribution=payload.payload.get("attribution"),
+        metadata_payload=payload.payload,
+    )
+    db.add(record)
+    db.add(AuditLog(actor_id=admin.id, action="media.approval.create", target_type="media", target_id=record.exercise_id, redacted_payload={"status": record.status, "license_state": record.license_state}))
+    db.commit()
+    return {"media_approval": _media_approval_payload(record)}
+
+
 @router.get("/exercises/{exercise_id}/substitutions")
 def substitutions(exercise_id: str, db: Session = Depends(get_db)):
     exercise = _get_exercise(exercise_id, db)
@@ -455,6 +728,75 @@ def today_plan(user: User = Depends(require_user), db: Session = Depends(get_db)
 @router.post("/plans/daily")
 def legacy_daily_plan(payload: ReadinessPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     return generate_daily(payload, user, db)
+
+
+@router.get("/program-variants")
+def list_program_variants():
+    return {"items": [{"key": key, **value} for key, value in PROGRAM_VARIANTS.items()]}
+
+
+@router.post("/plans/advanced/generate", status_code=status.HTTP_201_CREATED)
+def generate_advanced_plan(payload: ProgramRequestPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    _rate_limit(f"advanced-plan:{user.id}", get_settings().auth_rate_limit * 2)
+    candidates = [_exercise_brief_payload(item) for item in db.query(Exercise).order_by(Exercise.name).limit(80).all()]
+    plan_payload = build_program_payload(user.id, payload.model_dump(), candidates)
+    if plan_payload["safety_decision"]["action"] == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
+        return {"blocked": True, "safety_decision": plan_payload["safety_decision"], "plan": None}
+    plan = Plan(id=plan_payload["id"], user_id=user.id, plan_type="advanced", payload=plan_payload, safety_action=plan_payload["safety_decision"]["action"])
+    evidence = PlanDecisionEvidence(
+        user_id=user.id,
+        plan_id=plan.id,
+        generator_version=plan_payload["generator_version"],
+        policy_version=plan_payload["policy_version"],
+        triggered_rules=plan_payload["triggered_rules"],
+        excluded_exercises=plan_payload["excluded_exercises"],
+        selected_exercises=plan_payload["selected_exercises"],
+        reason="Deterministic complete-product generator selected an auditable safe plan.",
+        modifications=plan_payload["modifications"],
+        user_request=plan_payload["user_request"],
+        final_safe_interpretation=plan_payload["final_safe_interpretation"],
+    )
+    db.add(plan)
+    db.add(evidence)
+    db.add(_safety_decision_log(user.id, plan_payload["safety_decision"], payload.model_dump()))
+    db.commit()
+    return {"blocked": False, "plan": plan_payload, "evidence_id": evidence.id}
+
+
+@router.get("/plans/advanced/latest")
+def latest_advanced_plan(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    plan = _latest_plan(user.id, "advanced", db)
+    return {"plan": plan.payload if plan else None}
+
+
+@router.post("/plans/{plan_id}/modify")
+def modify_plan(plan_id: str, payload: PlanModificationPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    plan = db.get(Plan, plan_id)
+    if not plan or plan.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "plan_not_found"})
+    modified = apply_plan_modification(plan.payload, payload.intent, payload.request_payload)
+    record = PlanModification(user_id=user.id, plan_id=plan.id, intent=payload.intent, request_payload=payload.request_payload, result_payload=modified, safety_decision=modified["safety_decision"])
+    plan.payload = modified
+    plan.safety_action = modified["safety_decision"]["action"]
+    db.add(record)
+    db.add(_safety_decision_log(user.id, modified["safety_decision"], payload.request_payload))
+    db.commit()
+    return {"plan": modified, "modification": _plan_modification_payload(record)}
+
+
+@router.post("/quick-session", status_code=status.HTTP_201_CREATED)
+def create_quick_session(payload: ProgramRequestPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    request_payload = payload.model_dump()
+    request_payload["variant"] = request_payload.get("variant") or None
+    candidates = [_exercise_brief_payload(item) for item in db.query(Exercise).order_by(Exercise.name).limit(60).all()]
+    plan_payload = build_program_payload(user.id, request_payload, candidates)
+    plan_payload["source"] = "what_can_i_do_today"
+    plan = Plan(id=plan_payload["id"], user_id=user.id, plan_type="quick_session", payload=plan_payload, safety_action=plan_payload["safety_decision"]["action"])
+    db.add(plan)
+    db.add(CalendarEvent(user_id=user.id, event_date=datetime.now(UTC).date().isoformat(), event_type="quick_session", status="planned", plan_id=plan.id, payload={"minutes": plan_payload["total_minutes"]}))
+    db.add(_safety_decision_log(user.id, plan_payload["safety_decision"], request_payload))
+    db.commit()
+    return {"plan": plan_payload}
 
 
 @router.post("/plans/weekly/generate", status_code=status.HTTP_201_CREATED)
@@ -535,6 +877,48 @@ def current_monthly(user: User = Depends(require_user), db: Session = Depends(ge
     return {"plan": plan.payload if plan else None}
 
 
+@router.get("/calendar")
+def calendar_events(start: str | None = None, end: str | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    query = db.query(CalendarEvent).filter(CalendarEvent.user_id == user.id)
+    if start:
+        query = query.filter(CalendarEvent.event_date >= start)
+    if end:
+        query = query.filter(CalendarEvent.event_date <= end)
+    items = query.order_by(CalendarEvent.event_date, CalendarEvent.id).all()
+    return {"items": [_calendar_event_payload(item) for item in items]}
+
+
+@router.post("/calendar-events", status_code=status.HTTP_201_CREATED)
+def create_calendar_event(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    event = CalendarEvent(
+        user_id=user.id,
+        event_date=payload.payload.get("event_date", datetime.now(UTC).date().isoformat()),
+        event_type=payload.payload.get("event_type", "planned_session"),
+        status=payload.payload.get("status", "planned"),
+        plan_id=payload.payload.get("plan_id"),
+        session_id=payload.payload.get("session_id"),
+        payload=payload.payload,
+    )
+    db.add(event)
+    db.commit()
+    return {"event": _calendar_event_payload(event)}
+
+
+@router.get("/progression")
+def progression(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    sessions = db.query(SessionRecord).filter(SessionRecord.user_id == user.id).order_by(desc(SessionRecord.created_at)).limit(10).all()
+    history = [{"status": item.status, "pain": (item.payload or {}).get("pain"), "symptoms": item.status == "stopped_for_symptoms"} for item in sessions]
+    profile = _profile_for(user.id, db)
+    recommendation = progression_recommendation(history, profile.health_payload or {})
+    return {"recommendation": recommendation}
+
+
+@router.get("/achievements")
+def achievements(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    records = db.query(AchievementRecord).filter(AchievementRecord.user_id == user.id).order_by(desc(AchievementRecord.created_at)).all()
+    return {"items": [_achievement_payload(item) for item in records]}
+
+
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 def start_session(payload: SessionStartPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     latest = db.query(ReadinessCheck).filter(ReadinessCheck.user_id == user.id).order_by(desc(ReadinessCheck.created_at)).first()
@@ -609,9 +993,36 @@ def complete_session(session_id: str, payload: dict[str, Any], user: User = Depe
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "session_stopped_for_symptoms", "safety_message": EMERGENCY_MESSAGE})
     session.status = "completed" if payload.get("completed", True) else "partial"
     session.payload = {**(session.payload or {}), "completion": payload}
+    if session.status == "completed":
+        achievement = db.query(AchievementRecord).filter(AchievementRecord.user_id == user.id, AchievementRecord.achievement_key == "first_safe_completion").one_or_none()
+        if not achievement:
+            db.add(AchievementRecord(user_id=user.id, achievement_key="first_safe_completion", payload={"message": "Completed a movement session without unsafe pressure."}))
+        db.add(CalendarEvent(user_id=user.id, event_date=datetime.now(UTC).date().isoformat(), event_type="session", status="completed", plan_id=session.plan_id, session_id=session.id, payload={"source": "session_complete"}))
     db.add(AuditLog(actor_id=user.id, action="session.complete", target_type="session", target_id=session.id, redacted_payload={"status": session.status}))
     db.commit()
     return {"session": _session_payload(session)}
+
+
+@router.post("/exercise-feedback", status_code=status.HTTP_201_CREATED)
+def create_exercise_feedback(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    record = ExerciseFeedback(
+        user_id=user.id,
+        exercise_id=payload.payload.get("exercise_id"),
+        session_id=payload.payload.get("session_id"),
+        feedback_type=payload.payload.get("feedback_type", "session_feedback"),
+        payload=payload.payload,
+    )
+    db.add(record)
+    db.commit()
+    return {"feedback": _feedback_payload(record)}
+
+
+@router.post("/voice/cues")
+def voice_cues(payload: ProductPayload, user: User = Depends(require_user)):
+    items = payload.payload.get("items", [])
+    mode = payload.payload.get("mode", "essential_cues")
+    language = payload.payload.get("language", "en")
+    return {"items": schedule_voice_cues(items, mode, language), "adapter": {"tts": "mock_tts", "prerecorded": "asset_manifest"}}
 
 
 @router.post("/glucose", status_code=status.HTTP_201_CREATED)
@@ -638,6 +1049,113 @@ def glucose(payload: GlucosePayload, user: User = Depends(require_user), db: Ses
 @router.post("/diabetes/glucose")
 def legacy_glucose(payload: GlucosePayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     return glucose(payload, user, db)
+
+
+@router.post("/diabetes/context", status_code=status.HTTP_201_CREATED)
+def diabetes_context(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    unit = payload.payload.get("unit", "mg/dL")
+    value = payload.payload.get("value")
+    canonical = None
+    if value is not None:
+        canonical = round(float(value) * 18.0182) if unit == "mmol/L" else round(float(value))
+    record = DiabetesContextEntry(
+        user_id=user.id,
+        session_id=payload.payload.get("session_id"),
+        timing=payload.payload.get("timing", "unspecified"),
+        source=payload.payload.get("source", "manual"),
+        unit=unit,
+        canonical_mg_dl=canonical,
+        sensor_timestamp=_optional_datetime(payload.payload.get("sensor_timestamp")),
+        payload=payload.payload,
+    )
+    db.add(record)
+    if payload.payload.get("delayed_check_minutes") in {30, 60, 90, 120}:
+        scheduled = schedule_notification(f"delayed_glucose_{payload.payload['delayed_check_minutes']}", (_profile_for(user.id, db).timezone or "UTC"), {"session_id": record.session_id})
+        db.add(NotificationJob(user_id=user.id, category=scheduled["category"], provider=scheduled["provider"], scheduled_for=_optional_datetime(scheduled["scheduled_for"]) or datetime.now(UTC), payload=scheduled))
+    db.commit()
+    return {"entry": _diabetes_context_payload(record), "no_insulin_recommendation": True}
+
+
+@router.get("/diabetes/insights")
+def advanced_diabetes_insights(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    entries = db.query(DiabetesContextEntry).filter(DiabetesContextEntry.user_id == user.id).order_by(DiabetesContextEntry.created_at).all()
+    return {"insights": diabetes_insights([_diabetes_context_payload(item) for item in entries])}
+
+
+@router.get("/integrations/providers")
+def providers():
+    return {"items": [{"key": key, **value} for key, value in PROVIDER_REGISTRY.items()]}
+
+
+@router.post("/integrations/connect", status_code=status.HTTP_201_CREATED)
+def connect_provider(payload: ProviderConnectPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    if payload.provider_key not in PROVIDER_REGISTRY:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "provider_not_found"})
+    provider = PROVIDER_REGISTRY[payload.provider_key]
+    connection = ProviderConnection(
+        user_id=user.id,
+        provider_key=payload.provider_key,
+        category=provider["category"],
+        status="mock_connected" if provider["status"] == "mock_ready" and payload.mock else provider["status"],
+        scopes=payload.scopes or provider["scopes"],
+        token_reference=None if payload.mock else "external_secret_store_required",
+        provenance={"mock": payload.mock, "blocked_reason": None if provider["status"] == "mock_ready" else provider["status"]},
+    )
+    db.add(connection)
+    db.add(AuditLog(actor_id=user.id, action="provider.connect", target_type="provider", target_id=payload.provider_key, redacted_payload={"mock": payload.mock, "status": connection.status}))
+    db.commit()
+    return {"connection": _provider_connection_payload(connection)}
+
+
+@router.post("/integrations/{connection_id}/sync")
+def sync_provider(connection_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    connection = db.get(ProviderConnection, connection_id)
+    if not connection or connection.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "connection_not_found"})
+    result = mock_provider_sync(connection.provider_key)
+    record = ProviderSyncRecord(
+        connection_id=connection.id,
+        sync_type=connection.category,
+        status=result["status"],
+        cursor_before=connection.sync_cursor,
+        cursor_after=result["cursor_after"],
+        records_seen=result["records_seen"],
+        duplicates_skipped=result["duplicates_skipped"],
+        payload=result,
+    )
+    connection.sync_cursor = result["cursor_after"]
+    db.add(record)
+    db.commit()
+    return {"sync": _provider_sync_payload(record)}
+
+
+@router.delete("/integrations/{connection_id}")
+def disconnect_provider(connection_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    connection = db.get(ProviderConnection, connection_id)
+    if not connection or connection.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "connection_not_found"})
+    connection.status = "disconnected"
+    connection.token_reference = None
+    db.add(AuditLog(actor_id=user.id, action="provider.disconnect", target_type="provider", target_id=connection.provider_key, redacted_payload={}))
+    db.commit()
+    return {"disconnected": True, "connection": _provider_connection_payload(connection)}
+
+
+@router.post("/wearables/samples", status_code=status.HTTP_201_CREATED)
+def wearable_sample(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    observed_at = _optional_datetime(payload.payload.get("observed_at")) or datetime.now(UTC)
+    record = WearableSample(
+        user_id=user.id,
+        provider_key=payload.payload.get("provider_key", "mock_wearable"),
+        sample_type=payload.payload.get("sample_type", "heart_rate"),
+        observed_at=observed_at,
+        value_payload=payload.payload.get("value_payload", payload.payload),
+        provenance={"mock": True, "not_sole_safety_source": True},
+        stale=(datetime.now(UTC) - observed_at) > timedelta(hours=24),
+    )
+    db.add(record)
+    db.commit()
+    return {"sample": _wearable_sample_payload(record)}
 
 
 @router.post("/offline-events", status_code=status.HTTP_201_CREATED)
@@ -701,6 +1219,148 @@ def insights(user: User = Depends(require_user), db: Session = Depends(get_db)):
     }
 
 
+@router.get("/notification-preferences")
+def notification_preferences(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    items = db.query(NotificationPreference).filter(NotificationPreference.user_id == user.id).order_by(NotificationPreference.category).all()
+    return {"items": [_notification_preference_payload(item) for item in items]}
+
+
+@router.put("/notification-preferences")
+def upsert_notification_preference(payload: NotificationPreferencePayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    pref = db.query(NotificationPreference).filter(NotificationPreference.user_id == user.id, NotificationPreference.category == payload.category).one_or_none()
+    if not pref:
+        pref = NotificationPreference(user_id=user.id, category=payload.category)
+        db.add(pref)
+    pref.enabled = payload.enabled
+    pref.quiet_hours = payload.quiet_hours
+    pref.channel = payload.channel
+    db.commit()
+    return {"preference": _notification_preference_payload(pref)}
+
+
+@router.post("/notifications/schedule", status_code=status.HTTP_201_CREATED)
+def create_notification_job(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    profile = _profile_for(user.id, db)
+    scheduled = schedule_notification(payload.payload.get("category", "workout_reminder"), profile.timezone or "UTC", payload.payload)
+    job = NotificationJob(user_id=user.id, category=scheduled["category"], provider=scheduled["provider"], scheduled_for=_optional_datetime(scheduled["scheduled_for"]) or datetime.now(UTC), payload=scheduled)
+    db.add(job)
+    db.commit()
+    return {"job": _notification_job_payload(job)}
+
+
+@router.post("/privacy/export-jobs", status_code=status.HTTP_201_CREATED)
+def create_export_job(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    job = DataExportJob(user_id=user.id, status="ready", payload={"format": "json", "contains": ["profile", "plans", "sessions", "glucose", "consents"], "machine_readable": True})
+    db.add(job)
+    db.add(AuditLog(actor_id=user.id, action="privacy.export.request", target_type="data_export", target_id=user.id, redacted_payload={}))
+    db.commit()
+    return {"job": _export_job_payload(job)}
+
+
+@router.get("/privacy/export-jobs")
+def list_export_jobs(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    jobs = db.query(DataExportJob).filter(DataExportJob.user_id == user.id).order_by(desc(DataExportJob.created_at)).all()
+    return {"items": [_export_job_payload(job) for job in jobs]}
+
+
+@router.post("/privacy/deletion-jobs", status_code=status.HTTP_201_CREATED)
+def create_deletion_job(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    job = DeletionJob(
+        user_id=user.id,
+        deletion_type=payload.payload.get("deletion_type", "selected_health_data"),
+        status="requested",
+        cancellation_deadline=datetime.now(UTC) + timedelta(days=7),
+        payload=payload.payload,
+    )
+    db.add(job)
+    db.add(AuditLog(actor_id=user.id, action="privacy.deletion.request", target_type="deletion_job", target_id=user.id, redacted_payload={"deletion_type": job.deletion_type}))
+    db.commit()
+    return {"job": _deletion_job_payload(job)}
+
+
+@router.post("/caregivers/invite", status_code=status.HTTP_201_CREATED)
+def invite_caregiver(payload: RelationshipPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    relationship = CaregiverRelationship(user_id=user.id, caregiver_email=payload.email.strip().lower(), shared_scopes=payload.scopes, expires_at=datetime.now(UTC) + timedelta(days=180), invitation_token_hash=token_hash(secrets.token_urlsafe(24)))
+    db.add(relationship)
+    db.add(AuditLog(actor_id=user.id, action="caregiver.invite", target_type="caregiver", target_id=relationship.caregiver_email, redacted_payload={"scopes": payload.scopes}))
+    db.commit()
+    return {"relationship": _caregiver_payload(relationship)}
+
+
+@router.post("/caregivers/{relationship_id}/revoke")
+def revoke_caregiver(relationship_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    relationship = db.get(CaregiverRelationship, relationship_id)
+    if not relationship or relationship.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "caregiver_relationship_not_found"})
+    relationship.status = "revoked"
+    relationship.shared_scopes = []
+    db.add(AuditLog(actor_id=user.id, action="caregiver.revoke", target_type="caregiver", target_id=relationship.caregiver_email, redacted_payload={}))
+    db.commit()
+    return {"relationship": _caregiver_payload(relationship)}
+
+
+@router.post("/professionals/invite", status_code=status.HTTP_201_CREATED)
+def invite_professional(payload: RelationshipPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    relationship = ProfessionalRelationship(
+        user_id=user.id,
+        professional_email=payload.email.strip().lower(),
+        role=payload.role or "trainer",
+        organization=payload.organization,
+        consent_scopes=payload.scopes,
+        expires_at=datetime.now(UTC) + timedelta(days=180),
+    )
+    db.add(relationship)
+    db.add(AuditLog(actor_id=user.id, action="professional.invite", target_type="professional", target_id=relationship.professional_email, redacted_payload={"role": relationship.role, "scopes": payload.scopes}))
+    db.commit()
+    return {"relationship": _professional_payload(relationship)}
+
+
+@router.post("/professionals/{relationship_id}/restrictions", status_code=status.HTTP_201_CREATED)
+def create_professional_restriction(relationship_id: int, payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    relationship = db.get(ProfessionalRelationship, relationship_id)
+    if not relationship or relationship.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "professional_relationship_not_found"})
+    record = ProfessionalRestriction(user_id=user.id, relationship_id=relationship.id, restriction_type=payload.payload.get("restriction_type", "movement"), payload=payload.payload, review_date=payload.payload.get("review_date"))
+    db.add(record)
+    db.add(AuditLog(actor_id=user.id, action="professional.restriction.create", target_type="professional_restriction", target_id=str(relationship.id), redacted_payload={"restriction_type": record.restriction_type}))
+    db.commit()
+    return {"restriction": _professional_restriction_payload(record)}
+
+
+@router.post("/professionals/{relationship_id}/notes", status_code=status.HTTP_201_CREATED)
+def create_professional_note(relationship_id: int, payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    relationship = db.get(ProfessionalRelationship, relationship_id)
+    if not relationship or relationship.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "professional_relationship_not_found"})
+    note = str(payload.payload.get("note", "")).strip()
+    if not note:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "note_required"})
+    record = ProfessionalNote(user_id=user.id, relationship_id=relationship.id, note_type=payload.payload.get("note_type", "movement"), note=note, redacted_payload={"no_prescribing": True})
+    db.add(record)
+    db.commit()
+    return {"note": _professional_note_payload(record)}
+
+
+@router.post("/camera/analyze", status_code=status.HTTP_201_CREATED)
+def camera_analyze(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    if not payload.payload.get("camera_consent"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "camera_consent_required"})
+    result = mock_pose_result(payload.payload.get("exercise_id"), payload.payload.get("samples", []))
+    record = CameraAnalysisSession(
+        user_id=user.id,
+        session_id=payload.payload.get("session_id"),
+        exercise_id=payload.payload.get("exercise_id"),
+        provider="mock_pose",
+        privacy_mode=payload.payload.get("privacy_mode", "session_only"),
+        result_payload=result,
+        recording_stored=False,
+    )
+    db.add(record)
+    db.add(AuditLog(actor_id=user.id, action="camera.mock_analysis", target_type="camera_session", target_id=record.exercise_id or "session", redacted_payload={"uploaded": False, "recording_stored": False}))
+    db.commit()
+    return {"analysis": _camera_payload(record)}
+
+
 @router.get("/admin/policies")
 def policies(admin=Depends(require_admin_role("clinical_reviewer"))):
     return {"admin": admin.id, "policies": [{"version": "draft-2026-07-18", "status": "draft", "clinical_review_state": "draft"}]}
@@ -709,6 +1369,35 @@ def policies(admin=Depends(require_admin_role("clinical_reviewer"))):
 @router.get("/admin/exercises")
 def admin_exercises(admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
     return exercise_search(page_size=25, db=db)
+
+
+@router.get("/admin/users")
+def admin_users(admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    users = db.query(User).order_by(desc(User.created_at)).limit(50).all()
+    db.add(AuditLog(actor_id=admin.id, action="admin.users.masked_list", target_type="user", target_id="masked", redacted_payload={"count": len(users)}))
+    db.commit()
+    return {"items": [{"id": user.id, "email_masked": _mask_email(user.email), "role": user.role, "deleted": user.deleted_at is not None} for user in users], "impersonation": "disabled_by_default"}
+
+
+@router.get("/admin/system")
+def admin_system(admin=Depends(require_admin_role("analyst")), db: Session = Depends(get_db)):
+    store = get_token_revocation_store()
+    return {
+        "api": health(),
+        "ready": ready(db),
+        "postgresql": "configured" if "postgresql" in get_settings().database_url else "not_current_backend",
+        "redis": "configured" if isinstance(store, RedisTokenRevocationStore) else "development_fallback",
+        "import_jobs": {"latest": "see audit logs"},
+        "provider_status": [{"key": key, "status": value["status"]} for key, value in PROVIDER_REGISTRY.items()],
+        "secrets_exposed": False,
+    }
+
+
+@router.get("/admin/privacy-jobs")
+def admin_privacy_jobs(admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+    exports = db.query(DataExportJob).order_by(desc(DataExportJob.created_at)).limit(20).all()
+    deletions = db.query(DeletionJob).order_by(desc(DeletionJob.created_at)).limit(20).all()
+    return {"exports": [_export_job_payload(item) for item in exports], "deletions": [_deletion_job_payload(item) for item in deletions]}
 
 
 @router.get("/admin/audit-logs")
@@ -720,10 +1409,12 @@ def audit_logs(admin=Depends(require_admin_role("support")), db: Session = Depen
 @router.post("/admin/policy-simulator")
 def policy_simulator(payload: ReadinessPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
     _rate_limit(f"admin-simulator:{admin.id}", get_settings().auth_rate_limit * 3)
-    decision = evaluate_safety(payload.model_dump())
+    decision = evaluate_contextual_safety(payload.model_dump())
+    simulation = ProgramSimulation(actor_id=admin.id, synthetic_profile=payload.model_dump(), result_payload={"decision": decision}, policy_version=decision["policy_version"])
+    db.add(simulation)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.simulate", target_type="policy", target_id=decision["policy_version"], redacted_payload={"action": decision["action"]}))
     db.commit()
-    return {"admin": admin.id, "decision": decision, "rejected_exercises": [], "generated_plan_allowed": decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"}
+    return {"admin": admin.id, "decision": decision, "rejected_exercises": [], "generated_plan_allowed": decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE", "simulation_id": simulation.id}
 
 
 def _auth_response(user: User, refresh: str) -> dict[str, Any]:
@@ -820,6 +1511,169 @@ def _rate_limit(key: str, limit: int) -> None:
 
 def _user_payload(user: User) -> dict[str, Any]:
     return {"id": user.id, "email": user.email, "auth_provider": user.auth_provider, "role": user.role}
+
+
+def _mask_email(email: str | None) -> str | None:
+    if not email or "@" not in email:
+        return email
+    name, domain = email.split("@", 1)
+    return f"{name[:2]}***@{domain}"
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _onboarding_payload(progress: OnboardingProgress) -> dict[str, Any]:
+    return {
+        "current_step": progress.current_step,
+        "completed_steps": progress.completed_steps or [],
+        "draft_payload": progress.draft_payload or {},
+        "language": progress.language,
+        "status": progress.status,
+        "updated_at": progress.updated_at.isoformat() if progress.updated_at else None,
+    }
+
+
+def _consent_payload(record: ConsentRecord) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "consent_type": record.consent_type,
+        "version": record.version,
+        "granted": record.granted,
+        "source": record.source,
+        "evidence": record.evidence,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }
+
+
+def _capacity_payload(record: CapacityProfile) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "version": record.version,
+        "source": record.source,
+        "inputs": record.inputs,
+        "derived_profile": record.derived_profile,
+        "expires_at": record.expires_at.isoformat() if record.expires_at else None,
+    }
+
+
+def _assessment_payload(record: BaselineAssessment) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "assessment_type": record.assessment_type,
+        "status": record.status,
+        "result_payload": record.result_payload,
+        "symptoms": record.symptoms,
+        "confidence": record.confidence,
+        "expires_at": record.expires_at.isoformat() if record.expires_at else None,
+    }
+
+
+def _goals_payload(record: GoalPreference) -> dict[str, Any]:
+    return {
+        "goals": record.goals or [],
+        "target_focuses": record.target_focuses or [],
+        "natural_request": record.natural_request,
+        "safe_interpretation": record.safe_interpretation or {},
+    }
+
+
+def _plan_modification_payload(record: PlanModification) -> dict[str, Any]:
+    return {"id": record.id, "plan_id": record.plan_id, "intent": record.intent, "safety_decision": record.safety_decision}
+
+
+def _media_approval_payload(record: MediaApproval) -> dict[str, Any]:
+    return {"id": record.id, "exercise_id": record.exercise_id, "media_type": record.media_type, "license_state": record.license_state, "source": record.source, "status": record.status, "attribution": record.attribution, "metadata": record.metadata_payload}
+
+
+def _calendar_event_payload(record: CalendarEvent) -> dict[str, Any]:
+    return {"id": record.id, "event_date": record.event_date, "event_type": record.event_type, "status": record.status, "plan_id": record.plan_id, "session_id": record.session_id, "payload": record.payload}
+
+
+def _achievement_payload(record: AchievementRecord) -> dict[str, Any]:
+    return {"id": record.id, "achievement_key": record.achievement_key, "status": record.status, "payload": record.payload}
+
+
+def _feedback_payload(record: ExerciseFeedback) -> dict[str, Any]:
+    return {"id": record.id, "exercise_id": record.exercise_id, "session_id": record.session_id, "feedback_type": record.feedback_type, "payload": record.payload}
+
+
+def _diabetes_context_payload(record: DiabetesContextEntry) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "session_id": record.session_id,
+        "timing": record.timing,
+        "source": record.source,
+        "unit": record.unit,
+        "canonical_mg_dl": record.canonical_mg_dl,
+        "sensor_timestamp": record.sensor_timestamp.isoformat() if record.sensor_timestamp else None,
+        "payload": record.payload,
+    }
+
+
+def _provider_connection_payload(record: ProviderConnection) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "provider_key": record.provider_key,
+        "category": record.category,
+        "status": record.status,
+        "scopes": record.scopes,
+        "sync_cursor": record.sync_cursor,
+        "provenance": record.provenance,
+    }
+
+
+def _provider_sync_payload(record: ProviderSyncRecord) -> dict[str, Any]:
+    return {"id": record.id, "status": record.status, "records_seen": record.records_seen, "duplicates_skipped": record.duplicates_skipped, "cursor_after": record.cursor_after, "payload": record.payload}
+
+
+def _wearable_sample_payload(record: WearableSample) -> dict[str, Any]:
+    return {"id": record.id, "provider_key": record.provider_key, "sample_type": record.sample_type, "observed_at": record.observed_at.isoformat(), "value_payload": record.value_payload, "provenance": record.provenance, "stale": record.stale}
+
+
+def _notification_preference_payload(record: NotificationPreference) -> dict[str, Any]:
+    return {"id": record.id, "category": record.category, "enabled": record.enabled, "quiet_hours": record.quiet_hours, "channel": record.channel, "preview_policy": record.preview_policy}
+
+
+def _notification_job_payload(record: NotificationJob) -> dict[str, Any]:
+    return {"id": record.id, "category": record.category, "provider": record.provider, "scheduled_for": record.scheduled_for.isoformat(), "status": record.status, "retry_count": record.retry_count, "payload": record.payload}
+
+
+def _export_job_payload(record: DataExportJob) -> dict[str, Any]:
+    return {"id": record.id, "status": record.status, "archive_format": record.archive_format, "payload": record.payload, "created_at": record.created_at.isoformat() if record.created_at else None}
+
+
+def _deletion_job_payload(record: DeletionJob) -> dict[str, Any]:
+    return {"id": record.id, "deletion_type": record.deletion_type, "status": record.status, "cancellation_deadline": record.cancellation_deadline.isoformat() if record.cancellation_deadline else None, "payload": record.payload}
+
+
+def _caregiver_payload(record: CaregiverRelationship) -> dict[str, Any]:
+    return {"id": record.id, "caregiver_email": _mask_email(record.caregiver_email), "status": record.status, "shared_scopes": record.shared_scopes, "expires_at": record.expires_at.isoformat() if record.expires_at else None}
+
+
+def _professional_payload(record: ProfessionalRelationship) -> dict[str, Any]:
+    return {"id": record.id, "professional_email": _mask_email(record.professional_email), "role": record.role, "organization": record.organization, "verification_status": record.verification_status, "status": record.status, "consent_scopes": record.consent_scopes, "expires_at": record.expires_at.isoformat() if record.expires_at else None}
+
+
+def _professional_restriction_payload(record: ProfessionalRestriction) -> dict[str, Any]:
+    return {"id": record.id, "relationship_id": record.relationship_id, "restriction_type": record.restriction_type, "payload": record.payload, "status": record.status, "review_date": record.review_date}
+
+
+def _professional_note_payload(record: ProfessionalNote) -> dict[str, Any]:
+    return {"id": record.id, "relationship_id": record.relationship_id, "note_type": record.note_type, "note": record.note, "redacted_payload": record.redacted_payload}
+
+
+def _camera_payload(record: CameraAnalysisSession) -> dict[str, Any]:
+    return {"id": record.id, "session_id": record.session_id, "exercise_id": record.exercise_id, "provider": record.provider, "privacy_mode": record.privacy_mode, "status": record.status, "recording_stored": record.recording_stored, "result": record.result_payload}
 
 
 def _profile_for(user_id: str, db: Session) -> Profile:
