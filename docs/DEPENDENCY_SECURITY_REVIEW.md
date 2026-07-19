@@ -30,3 +30,12 @@ GitHub Actions `security` passed after the update. Local Windows `pip-audit -r s
 | `xcode` | `@expo/config-plugins -> xcode` | iOS prebuild tooling | Local native project generation path. | Expo 57 major upgrade. | Deferred. |
 
 No safe non-breaking npm upgrade was available for these findings. `npm.cmd audit --audit-level=high` remains the gating command and passes because no high or critical npm vulnerabilities are reported.
+
+Release-candidate classification:
+
+- Runtime reachable: `expo`, `expo-asset`, `expo-constants`, `expo-notifications`, `next`, `postcss` through admin/mobile runtime or build output paths.
+- Build-time only: `@expo/cli`, `@expo/config`, `@expo/config-plugins`, `@expo/metro-config`, `@expo/prebuild-config`, `xcode`, `uuid`.
+- Transitive: all findings except direct `expo`, `expo-notifications`, and `next`.
+- Requires major upgrade: Expo 57 and/or Next major modernization paths.
+- Not currently exploitable through user content ingestion: `postcss` because the MVP does not accept user-authored CSS; `uuid` because the vulnerable buffer path is not called directly.
+- Requires follow-up: all 13 moderate findings should be revisited in a dedicated Expo/Next modernization PR with Android and admin browser regression coverage.

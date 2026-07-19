@@ -9,3 +9,5 @@ Hardening notes:
 - `app.privacy.redact_for_log` provides a defensive redaction helper for request-shaped data.
 - Admin support views must remain role-protected and should prefer aggregate or redacted data.
 - Mobile token storage uses SecureStore where available; unsupported runtimes fall back only for local usability and must not be described as durable secure persistence.
+- Admin refresh tokens are kept in HttpOnly cookies and are not exposed to browser JavaScript.
+- Offline queued items are scoped by account id so another signed-in user does not submit the previous user's queued health events.

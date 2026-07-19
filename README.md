@@ -49,6 +49,14 @@ LOCAL_ADMIN_PASSWORD=MoveInRangeAdminLocal!
 
 Do not expose these values through `NEXT_PUBLIC_*`. Production must set a long random `AUTH_SECRET`, explicit `CORS_ORIGINS`, and real admin credentials.
 
+The normal admin flow is:
+
+```text
+http://localhost:3200/login
+```
+
+The admin app stores backend admin credentials in HttpOnly cookies through `/api/admin-session/login`; it does not auto-login with environment passwords inside the rendered page.
+
 ## Dataset Import
 
 Relative path:
@@ -107,11 +115,31 @@ python -m pytest services/api/tests
 
 CI uses the dedicated database `moveinrange_test` and the PostgreSQL integration test fails if `TEST_DATABASE_URL` points to SQLite.
 
+When Docker Desktop is available, run the release-candidate PostgreSQL/Redis validation script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\validate-postgres.ps1
+```
+
+Runtime readiness:
+
+```powershell
+Invoke-RestMethod http://localhost:8200/api/v1/health
+Invoke-RestMethod http://localhost:8200/api/v1/ready
+```
+
 ## Applications
 
 - `apps/mobile`: Expo Router mobile MVP with API-backed profile, readiness, plans, exercise library, guided workout actions, glucose logging, insights, and offline outbox helpers.
 - `apps/admin`: Next.js admin console that reads policy, exercise, audit, and simulator data from the API when it is running.
 - `services/api`: FastAPI backend with local auth, SQLAlchemy persistence, exercise import, safety, planning, sessions, glucose, insights, and admin endpoints.
+
+## Release Candidate Notes
+
+- Access-token revocation uses Redis when available and refuses in-memory fallback in production.
+- Refresh tokens are tracked by DB-backed token family records; replay revokes the family.
+- SQLite remains a local fallback only. PostgreSQL is the authoritative CI path.
+- Real Android/emulator validation must use the URL guidance below; Metro startup alone is not a device pass.
 
 ## Mobile Device URLs
 

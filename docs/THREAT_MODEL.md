@@ -5,13 +5,14 @@ Threats include account takeover, role escalation, unsafe policy publication, me
 MVP hardening mitigations:
 
 - Role escalation through browser-controlled headers is blocked; admin roles are loaded from the database after token validation.
-- Replay of refresh tokens is blocked by rotation and hash comparison.
+- Replay of refresh tokens is blocked by DB-backed token family rotation; replay revokes the family.
+- Access-token logout revocation uses Redis when available and refuses development-only fallback in production.
 - Offline event replay is constrained by a unique `(user_id, idempotency_key)` database rule.
 - Production startup rejects weak signing-secret and wildcard CORS configurations.
 - Object identifiers use an anti-enumeration policy: cross-user access returns 404 for user-owned health records.
 
 Remaining risks:
 
-- Local access-token revocation is process-local until backed by Redis or persistent storage.
+- Local access-token revocation is in-memory only when Redis is unavailable in development/test.
 - Device SecureStore, backgrounding, and app restart behavior require real-device validation before production claims.
 - Clinical policy publication remains draft-only and needs reviewer workflow completion.

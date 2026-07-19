@@ -8,8 +8,6 @@ from typing import Any
 from fastapi import HTTPException, status
 from .settings import get_settings
 
-revoked_access_token_hashes: set[str] = set()
-
 
 def hash_password(password: str, salt: str | None = None, iterations: int = 210_000) -> str:
     salt = salt or secrets.token_hex(16)
@@ -53,7 +51,7 @@ def _unb64(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def create_token(subject: str, token_type: str = "access") -> str:
+def create_token(subject: str, token_type: str = "access", family_id: str | None = None, token_id: str | None = None) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
     expires = datetime.now(UTC) + (
@@ -61,6 +59,7 @@ def create_token(subject: str, token_type: str = "access") -> str:
         if token_type == "access"
         else timedelta(days=settings.refresh_token_days)
     )
+    jti = token_id or secrets.token_hex(12)
     payload = {
         "iss": settings.token_issuer,
         "aud": settings.token_audience,
@@ -68,8 +67,10 @@ def create_token(subject: str, token_type: str = "access") -> str:
         "typ": token_type,
         "iat": int(now.timestamp()),
         "exp": int(expires.timestamp()),
-        "jti": secrets.token_hex(12),
+        "jti": jti,
     }
+    if family_id:
+        payload["fam"] = family_id
     body = _b64(json.dumps(payload, separators=(",", ":")).encode())
     signature = hmac.new(settings.auth_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
     return f"mir.{body}.{signature}"
@@ -83,8 +84,6 @@ def decode_token(token: str, expected_type: str = "access") -> dict[str, Any]:
     expected = hmac.new(get_settings().auth_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
     if prefix != "mir" or not hmac.compare_digest(signature, expected):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_token"})
-    if expected_type == "access" and token_hash(token) in revoked_access_token_hashes:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "revoked_token"})
     payload = json.loads(_unb64(body))
     settings = get_settings()
     if payload.get("iss") != settings.token_issuer or payload.get("aud") != settings.token_audience:
@@ -96,7 +95,3 @@ def decode_token(token: str, expected_type: str = "access") -> dict[str, Any]:
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
-
-
-def revoke_access_token(token: str) -> None:
-    revoked_access_token_hashes.add(token_hash(token))

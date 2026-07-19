@@ -1,15 +1,15 @@
 # Admin Authorization Model
 
-MoveInRange admin authorization is enforced by the FastAPI backend on every protected admin endpoint.
+MoveInRange admin authorization is enforced by the FastAPI backend on every protected admin endpoint. The Next.js admin app adds a server-side cookie session wrapper around the backend token API.
 
 ## Authentication
 
-- Admins sign in through `POST /api/v1/admin/auth/login`.
+- Admins sign in through the visible `/login` form, which posts to `/api/admin-session/login`; that route calls `POST /api/v1/admin/auth/login`.
 - The local MVP bootstrap account is read from server-only environment variables: `LOCAL_ADMIN_EMAIL` and `LOCAL_ADMIN_PASSWORD`.
 - Admin credentials are never read from `NEXT_PUBLIC_*` variables.
-- A successful admin login returns the same signed token shape as local user auth, with issuer, audience, expiration, token type, issued-at, and token id claims.
-- Refresh tokens are stored only as SHA-256 hashes in the database.
-- `POST /api/v1/admin/auth/logout` revokes the presented access token in the local revocation set and clears the stored refresh token hash.
+- A successful admin login returns the same signed token shape as local user auth, with issuer, audience, expiration, token type, issued-at, token id, and refresh family claims where applicable.
+- Refresh tokens are stored only as SHA-256 hashes in DB-backed token family records.
+- `POST /api/v1/admin/auth/logout` revokes the presented access token through the configured revocation store and clears stored refresh-token family state.
 
 ## Roles
 
@@ -30,7 +30,7 @@ The previous `x-admin-role` development shortcut is no longer authoritative. Bro
 
 ## Session Security
 
-The current MVP uses Bearer tokens instead of cookies, so CSRF and cookie flags are not part of the implemented flow. If cookie-backed admin sessions are added later, they must use HttpOnly, SameSite, Secure-in-production cookies and rotation after login.
+The admin app uses HttpOnly SameSite=Lax cookies for access and refresh credentials. State-changing admin session routes use double-submit CSRF protection. See `docs/ADMIN_SESSION_MODEL.md`.
 
 ## Auditing
 
