@@ -1,13 +1,19 @@
 # Android Beta Build Handoff
 
-Current artifact status: blocked external. No APK or AAB was produced because this workstation has no Android SDK, no Java/Gradle toolchain, no `adb`, no `emulator`, and no EAS CLI/authenticated session.
+Current artifact status: blocked external. Failed EAS build `f19b94bf-f646-499f-86dd-258a50d516b6` used the repository root as a traditional Expo app and tried `expo/AppEntry.js` -> `../../App`. The source fix makes `apps/mobile` the authoritative EAS app root.
 
 Validated locally:
 
-- `npm --workspace @moveinrange/mobile exec -- expo-doctor`: 18/18 checks passed.
-- `npm --workspace @moveinrange/mobile exec -- expo config --type public`: package `com.moveinrange.app`, scheme `moveinrange`, version `0.1.0`.
-- `npm --workspace @moveinrange/mobile exec -- expo export --platform android`: Android bundle export succeeded to `dist`.
-- `npm --workspace @moveinrange/mobile exec -- expo prebuild --platform android --no-install`: generated Gradle project structure, `applicationId 'com.moveinrange.app'`, `versionCode 1`, `versionName "0.1.0"`, deep-link scheme `moveinrange`.
+- Mobile app root: `apps/mobile`.
+- EAS project: `@sekiphayit/move-in-range`.
+- EAS project ID: `30719dd8-101e-4acd-8d2a-e5880d60b721`.
+- Android package identifier: `com.moveinrange.app`.
+- `npm.cmd exec expo-doctor` from `apps/mobile`: checks passed.
+- `npm.cmd exec expo config --type public` from `apps/mobile`: package `com.moveinrange.app`, scheme `moveinrange`, version `0.1.0`, Expo Router entry from `package.json`.
+- `npm.cmd exec expo export --platform android --clear` from `apps/mobile`: Android bundle export succeeded and bundled `apps/mobile/node_modules/expo-router/entry.js`.
+- `npm.cmd exec expo export:embed -- --eager --platform android --dev false` from `apps/mobile`: Android embed bundle succeeded and wrote bundle output without `expo/AppEntry.js`.
+- `npx.cmd eas-cli build:inspect --platform android --profile preview --stage archive --output ..\..\.local\eas-archive --force` from `apps/mobile`: archive contains `apps/mobile/package.json` with `main=expo-router/entry`, `apps/mobile/app/_layout.tsx`, mobile routes, Metro/Babel configs, root lockfile, and shared workspace packages; archive excludes root `App.tsx`, `.git`, `.local`, `node_modules`, and generated `apps/mobile/android`.
+- `npm.cmd exec expo prebuild --platform android --no-install`: generated Gradle project structure, `applicationId 'com.moveinrange.app'`, `versionCode 1`, `versionName "0.1.0"`, deep-link scheme `moveinrange`.
 - Manifest permissions observed after permission audit: `INTERNET`, `VIBRATE`; `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, and `SYSTEM_ALERT_WINDOW` are generated only with `tools:node="remove"` from Expo `blockedPermissions`.
 - Prebuild warnings to resolve before production: configure Android edge-to-edge for target SDK 36; install/configure `expo-system-ui` if automatic user interface style is required.
 
@@ -18,8 +24,8 @@ Environment and toolchain result:
 - `JAVA_HOME`: not set.
 - `eas`, `adb`, `emulator`, `java`, `gradle`: not found on PATH.
 - `npx eas-cli --version`: `eas-cli/21.0.2 win32-x64 node-v24.14.0`.
-- `npx eas-cli whoami`: blocked with `Not logged in`.
-- `eas build:list`: not run because EAS authentication is unavailable.
+- `npx eas-cli whoami`: rerun from `apps/mobile` before retrying cloud build.
+- `eas build:list`: run only after authentication is confirmed.
 
 Install Android Studio and SDK:
 
@@ -61,14 +67,18 @@ npm.cmd --workspace @moveinrange/mobile run android
 EAS preview build:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\apps\mobile
 npm.cmd install
-npm.cmd install --save-dev eas-cli
-eas login
-eas build --platform android --profile preview
+npx.cmd eas-cli whoami
+npx.cmd eas-cli build --platform android --profile preview --clear-cache
 ```
 
-Do not run a paid build without confirming the account plan and build cost.
+Use the existing EAS project and remote keystore. Do not create a second EAS project, regenerate credentials, submit to Google Play, or run a paid build without confirming the account plan and build cost.
+
+Preview API configuration:
+
+- `apps/mobile/eas.json` intentionally does not embed localhost for preview/production.
+- Until a real staging API exists, preview uses `https://api.moveinrange.invalid`; APK runtime validation remains blocked because the app cannot reach a real API.
 
 APK installation:
 

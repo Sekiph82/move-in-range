@@ -21,12 +21,14 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://api.moveinrange.invalid",
         "EXPO_PUBLIC_ENABLE_DEMO_LOGIN": "false"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://api.moveinrange.invalid",
         "EXPO_PUBLIC_ENABLE_DEMO_LOGIN": "false"
       }
     }

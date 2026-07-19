@@ -2080,6 +2080,13 @@ def admin_e2e_seed(admin=Depends(require_admin_role("super_admin")), db: Session
             source_metadata={"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"},
         )
         db.add(exercise)
+    else:
+        exercise.name = "000 Closed beta admin exercise"
+        exercise.body_part = "legs"
+        exercise.equipment = "chair"
+        exercise.target = "mobility"
+        exercise.secondary_muscles = []
+        exercise.source_metadata = {"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"}
     substitution = db.get(Exercise, "exercise-closed-beta-admin-substitution")
     if not substitution:
         substitution = Exercise(
@@ -2094,6 +2101,13 @@ def admin_e2e_seed(admin=Depends(require_admin_role("super_admin")), db: Session
             source_metadata={"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"},
         )
         db.add(substitution)
+    else:
+        substitution.name = "001 Closed beta substitution exercise"
+        substitution.body_part = "legs"
+        substitution.equipment = "chair"
+        substitution.target = "mobility"
+        substitution.secondary_muscles = []
+        substitution.source_metadata = {"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"}
     for seeded in [exercise, substitution]:
         if not db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == seeded.id, ExerciseLocalization.locale == "en").one_or_none():
             db.add(ExerciseLocalization(exercise_id=seeded.id, locale="en", instructions="Move with control.", instruction_steps=["Move with control."]))

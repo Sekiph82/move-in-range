@@ -21,7 +21,10 @@
       ]
     },
     "extra": {
-      "apiBaseUrl": "http://localhost:8200"
+      "apiBaseUrl": "http://localhost:8200",
+      "eas": {
+        "projectId": "30719dd8-101e-4acd-8d2a-e5880d60b721"
+      }
     }
   }
 }

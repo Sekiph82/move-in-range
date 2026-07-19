@@ -17,7 +17,7 @@ Date: 2026-07-19
 | Admin | GO | Role-separated policy/admin/exercise mutation tests passed | None |
 | Privacy | GO WITH MANUAL CONDITION | Export checksum, secret exclusion, ownership isolation, deletion processing, session revocation tested | Native/device privacy flow pending |
 | Email | GO | SMTP/Mailpit reset flow passed; production console sender rejected | Production SMTP credentials external |
-| Android artifact | BLOCKED EXTERNAL | Expo prebuild permission audit passed; no APK/AAB | EAS auth or local Android build tooling unavailable |
+| Android artifact | BLOCKED EXTERNAL | Failed EAS build root cause fixed in source; mobile root is `apps/mobile`; package `com.moveinrange.app`; no successful APK/AAB yet | Retry EAS preview build and capture artifact evidence |
 | Android runtime | BLOCKED EXTERNAL | No emulator/device available | Requires device/emulator run |
 | Accessibility | GO WITH MANUAL CONDITION | Web labels used in E2E | TalkBack/manual dynamic text pass required |
 | Security | GO WITH MANUAL CONDITION | High/critical audit clean; release review complete | Moderate dependency advisories need scheduled upgrade |
@@ -29,5 +29,5 @@ Date: 2026-07-19
 Final decision:
 
 - Closed beta web/API/admin release rehearsal: GO.
-- Android closed beta installable artifact: BLOCKED EXTERNAL until EAS or local Android toolchain is available and an APK/AAB is produced.
+- Android closed beta installable artifact: BLOCKED EXTERNAL until the EAS preview retry succeeds and an APK URL/checksum is recorded.
 - Android runtime acceptance: BLOCKED EXTERNAL until emulator or physical device validation is completed.
