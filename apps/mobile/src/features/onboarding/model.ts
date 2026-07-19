@@ -30,6 +30,11 @@ export const CONDITIONS = ["type 2 diabetes", "hypertension", "arthritis", "oste
 export const GOALS = ["mobility", "strength", "balance", "consistency", "energy", "pain-aware movement"];
 export const MUSCLES = ["core", "back", "glutes", "quads", "hamstrings", "shoulders", "calves", "chest"];
 export const EQUIPMENT = ["body weight", "chair", "wall", "resistance band", "light dumbbells"];
+export const MOVEMENT_PATTERNS = ["squat", "lunge", "hinge", "twist", "push", "pull", "jump"];
+export const POSITIONS = ["standing", "seated", "kneeling", "supine", "prone", "side lying"];
+export const MOBILITY_AIDS = ["none", "cane", "crutches", "walker", "wheelchair", "brace", "prosthesis", "balance support", "other"];
+export const EXPERIENCE_LEVELS = ["none", "beginner", "some experience", "confident"];
+export const CAPACITY_LEVELS = ["not today", "with support", "limited", "comfortable"];
 
 export type OnboardingDraft = {
   language: "en" | "tr";
@@ -48,6 +53,47 @@ export type OnboardingDraft = {
   side: string;
   severity: string;
   clinicianRestriction: boolean;
+  prohibitedRegions: string[];
+  prohibitedMovements: string[];
+  prohibitedPositions: string[];
+  maxDuration: string;
+  maxIntensity: string;
+  noFloor: boolean;
+  noImpact: boolean;
+  noOverhead: boolean;
+  restrictionStartDate: string;
+  restrictionReviewDate: string;
+  injuryRegion: string;
+  injurySide: string;
+  injuryKind: string;
+  injuryType: string;
+  injuryDate: string;
+  injuryStatus: string;
+  injuryPainSeverity: string;
+  injuryRomLimitation: string;
+  injuryClinicianCleared: boolean;
+  mobilityAids: string[];
+  mobilityAidUse: string;
+  mobilityAidSide: string;
+  dailyStepRange: string;
+  weeklyExerciseFrequency: string;
+  lastRegularExerciseDate: string;
+  strengthExperience: string;
+  cardioExperience: string;
+  mobilityExperience: string;
+  balanceExperience: string;
+  sedentaryHours: string;
+  preferredIntensity: string;
+  chairRise: string;
+  floorRise: string;
+  stairs: string;
+  singleLegStanding: string;
+  walkingTolerance: string;
+  prolongedStanding: string;
+  overheadReach: string;
+  gripPerception: string;
+  confidence: string;
+  capacitySymptoms: string[];
   notes: string;
   goals: string[];
   targets: string[];
@@ -74,6 +120,47 @@ export const initialOnboardingDraft: OnboardingDraft = {
   side: "bilateral",
   severity: "0",
   clinicianRestriction: false,
+  prohibitedRegions: [],
+  prohibitedMovements: [],
+  prohibitedPositions: [],
+  maxDuration: "",
+  maxIntensity: "",
+  noFloor: false,
+  noImpact: false,
+  noOverhead: false,
+  restrictionStartDate: "",
+  restrictionReviewDate: "",
+  injuryRegion: "",
+  injurySide: "bilateral",
+  injuryKind: "injury",
+  injuryType: "",
+  injuryDate: "",
+  injuryStatus: "",
+  injuryPainSeverity: "0",
+  injuryRomLimitation: "",
+  injuryClinicianCleared: false,
+  mobilityAids: [],
+  mobilityAidUse: "sometimes",
+  mobilityAidSide: "bilateral",
+  dailyStepRange: "",
+  weeklyExerciseFrequency: "",
+  lastRegularExerciseDate: "",
+  strengthExperience: "beginner",
+  cardioExperience: "beginner",
+  mobilityExperience: "beginner",
+  balanceExperience: "beginner",
+  sedentaryHours: "",
+  preferredIntensity: "low",
+  chairRise: "with support",
+  floorRise: "with support",
+  stairs: "with support",
+  singleLegStanding: "with support",
+  walkingTolerance: "",
+  prolongedStanding: "",
+  overheadReach: "with support",
+  gripPerception: "comfortable",
+  confidence: "3",
+  capacitySymptoms: [],
   notes: "",
   goals: [],
   targets: [],
@@ -95,5 +182,10 @@ export function validateOnboardingStepPayload(stepKey: string, draft: Onboarding
   if (stepKey === "goals" && draft.goals.length === 0) errors.push("goal_required");
   if (stepKey === "target_muscles" && draft.targets.length === 0) errors.push("target_required");
   if (stepKey === "schedule_time" && Number(draft.minutes) < 5) errors.push("minimum_five_minutes");
+  if (stepKey === "clinician_restrictions" && draft.clinicianRestriction && !draft.restrictionReviewDate) errors.push("restriction_review_date_required");
+  if (stepKey === "injuries_surgery" && draft.injuryRegion && !draft.injuryStatus) errors.push("injury_status_required");
+  if (stepKey === "mobility_aids" && draft.mobilityAids.length > 0 && !draft.mobilityAidUse) errors.push("mobility_aid_use_required");
+  if (stepKey === "activity_experience" && Number(draft.sedentaryHours) > 24) errors.push("sedentary_hours_invalid");
+  if (stepKey === "functional_capacity" && Number(draft.confidence) < 1) errors.push("confidence_required");
   return errors;
 }

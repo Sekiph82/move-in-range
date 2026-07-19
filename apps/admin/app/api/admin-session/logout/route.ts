@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBase, csrfCookie, sessionCookie } from "../../../session";
 import { clearSessionCookies } from "../cookies";
+import { adminRedirect } from "../redirect";
 
 export async function POST(request: NextRequest) {
   const form = await request.formData();
@@ -16,7 +17,7 @@ export async function POST(request: NextRequest) {
       headers: { authorization: `Bearer ${token}` }
     }).catch(() => null);
   }
-  const redirect = NextResponse.redirect(new URL("/login", request.url), 303);
+  const redirect = adminRedirect(request, "/login");
   clearSessionCookies(redirect);
   return redirect;
 }

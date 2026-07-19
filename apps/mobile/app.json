@@ -5,7 +5,6 @@
     "scheme": "moveinrange",
     "version": "0.1.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "plugins": ["expo-router", "expo-secure-store", "expo-localization", "expo-notifications"],
     "ios": {
@@ -13,11 +12,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.moveinrange.app",
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#126B5E"
-      }
+      "package": "com.moveinrange.app"
     },
     "extra": {
       "apiBaseUrl": "http://localhost:8200"

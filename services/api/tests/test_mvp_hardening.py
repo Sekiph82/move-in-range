@@ -1,6 +1,7 @@
 import hashlib
 import importlib
-from datetime import UTC, datetime
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,7 @@ def _client(tmp_path, monkeypatch, **env):
 
 
 def _register(client, email):
-    response = client.post("/api/v1/auth/register", json={"email": email, "password": "safe-local-passphrase"})
+    response = client.post("/api/v1/auth/register", json={"email": email, "password": "MoveInRange1"})
     assert response.status_code == 201, response.text
     payload = response.json()
     return payload, {"Authorization": f"Bearer {payload['access_token']}"}
@@ -51,7 +52,7 @@ def _create_admin_user(email, role):
             models.User(
                 id="adm_" + hashlib.sha256(email.encode()).hexdigest()[:16],
                 email=email,
-                password_hash=auth_mod.hash_password("safe-admin-passphrase"),
+                password_hash=auth_mod.hash_password("MoveInRangeAdmin1"),
                 auth_provider="local",
                 role=role,
             )
@@ -60,7 +61,7 @@ def _create_admin_user(email, role):
 
 
 def _admin_headers(client, email):
-    response = client.post("/api/v1/admin/auth/login", json={"email": email, "password": "safe-admin-passphrase"})
+    response = client.post("/api/v1/admin/auth/login", json={"email": email, "password": "MoveInRangeAdmin1"})
     assert response.status_code == 200, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
@@ -96,7 +97,7 @@ def test_admin_local_login_bootstraps_super_admin_without_role_header(tmp_path, 
 def test_refresh_rotation_logout_and_legacy_password_upgrade(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     salt = "legacy-local-salt"
-    digest = hashlib.pbkdf2_hmac("sha256", b"legacy-passphrase", salt.encode(), 120_000).hex()
+    digest = hashlib.pbkdf2_hmac("sha256", b"LegacyPassphrase1", salt.encode(), 120_000).hex()
     session_mod = importlib.import_module("app.db.session")
     models = importlib.import_module("app.db.models")
     with session_mod.SessionLocal() as db:
@@ -111,7 +112,7 @@ def test_refresh_rotation_logout_and_legacy_password_upgrade(tmp_path, monkeypat
         )
         db.commit()
 
-    login = client.post("/api/v1/auth/login", json={"email": "legacy@example.test", "password": "legacy-passphrase"})
+    login = client.post("/api/v1/auth/login", json={"email": "legacy@example.test", "password": "LegacyPassphrase1"})
     assert login.status_code == 200, login.text
     first = login.json()
     with session_mod.SessionLocal() as db:
@@ -130,6 +131,46 @@ def test_refresh_rotation_logout_and_legacy_password_upgrade(tmp_path, monkeypat
     logout = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {second['access_token']}"})
     assert logout.status_code == 200
     assert client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {second['access_token']}"}).status_code == 401
+
+
+def test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    registered, headers = _register(client, "reset@example.test")
+    assert client.get("/api/v1/auth/me", headers=headers).status_code == 200
+
+    unknown = client.post("/api/v1/auth/forgot-password", json={"email": "missing@example.test"})
+    assert unknown.status_code == 200
+    assert unknown.json() == {"accepted": True, "message": "If an account exists, password reset instructions have been sent."}
+
+    known = client.post("/api/v1/auth/forgot-password", json={"email": "reset@example.test"})
+    assert known.status_code == 200, known.text
+    reset_token = known.json()["development_reset_token"]
+    assert "access_token" not in known.json()
+    assert "refresh_token" not in known.json()
+    assert client.post("/api/v1/auth/reset-password/validate", json={"token": "invalid-reset-token-value"}).status_code == 401
+    assert client.post("/api/v1/auth/reset-password", json={"token": reset_token, "password": "weak"}).status_code == 422
+
+    session_mod = importlib.import_module("app.db.session")
+    models = importlib.import_module("app.db.models")
+    with session_mod.SessionLocal() as db:
+        record = db.query(models.PasswordResetToken).filter(models.PasswordResetToken.user_id == registered["user"]["id"]).order_by(models.PasswordResetToken.id).first()
+        assert record.token_hash != reset_token
+        record.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        db.commit()
+    assert client.post("/api/v1/auth/reset-password/validate", json={"token": reset_token}).status_code == 401
+
+    fresh = client.post("/api/v1/auth/forgot-password", json={"email": "reset@example.test"})
+    reset_token = fresh.json()["development_reset_token"]
+    assert client.post("/api/v1/auth/reset-password/validate", json={"token": reset_token}).status_code == 200
+    time.sleep(1.05)
+    reset = client.post("/api/v1/auth/reset-password", json={"token": reset_token, "password": "MoveInRange2"})
+    assert reset.status_code == 200, reset.text
+    assert client.post("/api/v1/auth/reset-password", json={"token": reset_token, "password": "MoveInRange3"}).status_code == 401
+    assert client.post("/api/v1/auth/login", json={"email": "reset@example.test", "password": "MoveInRange1"}).status_code == 401
+    new_login = client.post("/api/v1/auth/login", json={"email": "reset@example.test", "password": "MoveInRange2"})
+    assert new_login.status_code == 200, new_login.text
+    assert client.post("/api/v1/auth/refresh", json={"refresh_token": registered["refresh_token"]}).status_code in {401, 403}
+    assert client.get("/api/v1/auth/me", headers=headers).status_code == 401
 
 
 def test_token_claims_signature_expiry_and_disabled_user_are_rejected(tmp_path, monkeypatch):

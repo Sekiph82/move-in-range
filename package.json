@@ -11,6 +11,8 @@
   "scripts": {
     "dev": "npm run api",
     "mobile": "npm --workspace @moveinrange/mobile run start",
+    "mobile:web": "npm --workspace @moveinrange/mobile run web",
+    "mobile:web:build": "npm --workspace @moveinrange/mobile run web:build",
     "admin": "npm --workspace @moveinrange/admin run dev",
     "api": "python -m uvicorn app.main:app --reload --app-dir services/api --host 0.0.0.0 --port 8200",
     "lint": "node scripts/check-no-placeholders.mjs",
@@ -22,14 +24,21 @@
     "db:migrate": "node scripts/migration-check.mjs",
     "security:check": "node scripts/security-check.mjs",
     "checklist:check": "node scripts/check-complete-product-checklist.mjs",
-    "e2e:browser": "node --test tests/browser-e2e.test.mjs"
+    "e2e:browser": "node --test tests/browser-e2e.test.mjs",
+    "e2e:product": "node --test tests/product-e2e.test.mjs"
   },
   "engines": {
     "node": ">=20",
     "python": ">=3.12"
   },
   "devDependencies": {
+    "@types/react": "19.0.14",
+    "@types/react-dom": "19.0.6",
     "@playwright/test": "^1.57.0",
-    "typescript": "^5.8.3"
+    "typescript": "~5.8.3"
+  },
+  "overrides": {
+    "@types/react": "19.0.14",
+    "@types/react-dom": "19.0.6"
   }
 }

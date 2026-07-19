@@ -10,6 +10,13 @@ const enableDemoLogin = process.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN === "true";
 
 const memoryTokens: Record<string, string | null> = { access_token: null, refresh_token: null };
 
+export type AuthTokenResponse = {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  user: { id: string; email?: string; role?: string; auth_provider?: string };
+};
+
 const tokenStore = new TokenStore({
   async getItem(key: string) {
     try {
@@ -40,7 +47,38 @@ async function storeTokens(payload: { access_token: string; refresh_token: strin
   await tokenStore.save(payload);
 }
 
-async function authRequest(path: string, body: Record<string, unknown>) {
+function normalizeApiError(statusCode: number, payload: string) {
+  let code = "";
+  try {
+    const parsed = JSON.parse(payload) as { detail?: { code?: string } | string; code?: string };
+    code = typeof parsed.detail === "object" ? parsed.detail.code ?? "" : parsed.code ?? "";
+  } catch {
+    code = payload;
+  }
+  const messages: Record<string, string> = {
+    account_disabled: "This account is disabled. Contact support if you believe this is a mistake.",
+    email_exists: "An account with this email already exists.",
+    expired_token: "Your session expired. Sign in again to continue.",
+    invalid_credentials: "Email or password is incorrect.",
+    invalid_refresh: "Your session expired. Sign in again to continue.",
+    invalid_reset_token: "This reset link is invalid or expired.",
+    rate_limited: "Too many attempts. Wait a moment and try again.",
+    revoked_token: "Your session expired. Sign in again to continue.",
+    session_expired: "Your session expired. Sign in again to continue.",
+    weak_password: "Use at least 10 characters with uppercase, lowercase, and a number."
+  };
+  return messages[code] ?? (statusCode >= 500 ? "MoveInRange is temporarily unavailable." : "The request could not be completed.");
+}
+
+function requireAuthTokenResponse(payload: unknown): AuthTokenResponse {
+  const value = payload as Partial<AuthTokenResponse>;
+  if (!value || typeof value.access_token !== "string" || typeof value.refresh_token !== "string" || value.token_type !== "bearer" || !value.user?.id) {
+    throw new Error("Authentication response was incomplete. Try again.");
+  }
+  return value as AuthTokenResponse;
+}
+
+async function postJson(path: string, body: Record<string, unknown>) {
   const response = await fetch(`${API_V1}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -49,30 +87,46 @@ async function authRequest(path: string, body: Record<string, unknown>) {
   if (!response) throw new Error("API unavailable. Check your connection and try again.");
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Authentication failed (${response.status})`);
+    throw new Error(normalizeApiError(response.status, text));
   }
-  const payload = await response.json();
+  return response.json();
+}
+
+async function authTokenRequest(path: string, body: Record<string, unknown>) {
+  const payload = requireAuthTokenResponse(await postJson(path, body));
   await storeTokens(payload);
   return payload;
 }
 
 export function registerUser(payload: { email: string; password: string; preferredName: string; marketingConsent?: boolean }) {
-  return authRequest("/auth/register", { email: payload.email, password: payload.password, preferred_name: payload.preferredName, marketing_consent: Boolean(payload.marketingConsent) });
+  return authTokenRequest("/auth/register", { email: payload.email, password: payload.password, preferred_name: payload.preferredName, marketing_consent: Boolean(payload.marketingConsent) });
 }
 
 export function loginUser(payload: { email: string; password: string }) {
-  return authRequest("/auth/login", payload);
+  return authTokenRequest("/auth/login", payload);
 }
 
 export async function refreshSession() {
   const refresh_token = await tokenStore.loadRefreshToken();
   if (!refresh_token) return null;
   try {
-    return await authRequest("/auth/refresh", { refresh_token });
+    return await authTokenRequest("/auth/refresh", { refresh_token });
   } catch {
     await tokenStore.clear();
     return null;
   }
+}
+
+export function requestPasswordReset(email: string) {
+  return postJson("/auth/forgot-password", { email }) as Promise<{ accepted: boolean; message: string; development_reset_token?: string; development_reset_link?: string }>;
+}
+
+export function validatePasswordResetToken(token: string) {
+  return postJson("/auth/reset-password/validate", { token }) as Promise<{ valid: boolean; expires_at: string }>;
+}
+
+export function resetPassword(payload: { token: string; password: string }) {
+  return postJson("/auth/reset-password", payload) as Promise<{ reset: boolean }>;
 }
 
 export async function restoreSession() {
@@ -80,6 +134,23 @@ export async function restoreSession() {
   if (existing) return existing;
   const refreshed = await refreshSession();
   return refreshed?.access_token ?? null;
+}
+
+export async function getSessionSnapshot() {
+  const token = await restoreSession();
+  if (!token) return { hasSession: false, onboardingComplete: false };
+  try {
+    const response = await fetch(`${API_V1}/profile`, { headers: { authorization: `Bearer ${token}` } });
+    if (response.status === 401 || response.status === 403) {
+      await tokenStore.clear();
+      return { hasSession: false, onboardingComplete: false, sessionExpired: true };
+    }
+    if (!response.ok) return { hasSession: true, onboardingComplete: false, offline: true };
+    const profile = await response.json();
+    return { hasSession: true, onboardingComplete: Boolean(profile.profile?.onboarding_complete) };
+  } catch {
+    return { hasSession: true, onboardingComplete: false, offline: true };
+  }
 }
 
 export async function logoutUser() {

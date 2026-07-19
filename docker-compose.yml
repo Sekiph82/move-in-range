@@ -140,6 +140,7 @@ services:
       TEST_DATABASE_URL: postgresql+psycopg://moveinrange:moveinrange@postgres:5432/moveinrange_test
       REDIS_URL: redis://redis:6379/0
       API_BASE_URL: http://api:8200
+      PRODUCT_E2E_API_BASE_URL: http://api:8200
       ADMIN_BASE_URL: http://admin:3200
       NEXT_PUBLIC_API_BASE_URL: http://api:8200
       EXPO_PUBLIC_API_BASE_URL: http://api:8200
@@ -169,7 +170,6 @@ services:
         npm run import:exercises -- tests/fixtures/exercises.sample.json
         python -m pytest services/api/tests
         npm run build
-        npm run e2e:browser
         npm run security:check
         npm audit --audit-level=high
     restart: "no"

@@ -5,7 +5,8 @@ const checklistPaths = [
   "docs/COMPLETE_PRODUCT_MASTER_CHECKLIST.md",
   "docs/FUNCTIONAL_PRODUCT_COMPLETION_CHECKLIST.md",
   "docs/PRODUCT_ACCEPTANCE_CHECKLIST.md",
-  "docs/REAL_BETA_COMPLETION_CHECKLIST.md"
+  "docs/REAL_BETA_COMPLETION_CHECKLIST.md",
+  "docs/CLOSED_BETA_READINESS_CHECKLIST.md"
 ];
 
 for (const checklistPath of checklistPaths) {
@@ -24,7 +25,9 @@ for (const checklistPath of checklistPaths) {
     const header = block.split("\n")[0] ?? "";
     if (!header.startsWith("- [")) continue;
     if (header.includes("[x] COMPLETE")) {
-      const requiredFields = checklistPath.includes("REAL_BETA")
+      const requiredFields = checklistPath.includes("CLOSED_BETA")
+        ? ["route:", "component:", "user action:", "API endpoint:", "persistence:", "authorization:", "validation:", "unit test:", "integration test:", "product E2E:", "admin E2E:", "Android validation:", "manual evidence:", "blocker:"]
+        : checklistPath.includes("REAL_BETA")
         ? ["route:", "component:", "user action:", "API endpoint:", "persistence:", "validation:", "loading state:", "empty state:", "error state:", "success state:", "unit test:", "integration test:", "browser E2E:", "device validation:", "blocker:"]
         : checklistPath.includes("PRODUCT_ACCEPTANCE")
         ? ["feature:", "route:", "component:", "API endpoint:", "persistence:", "validation:", "unit-test evidence:", "integration-test evidence:", "E2E evidence:", "manual validation:", "blocker:"]
@@ -49,12 +52,19 @@ for (const checklistPath of checklistPaths) {
       if (checklistPath.includes("REAL_BETA") && /\b(mock|internal fallback pending|not loaded|achievement_key|event_type|value: 112)\b/i.test(block)) {
         errors.push(`Completed beta item exposes internal or sample wording: ${header}`);
       }
+      if (checklistPath.includes("CLOSED_BETA") && /product E2E: (None|TBD|N\/A)\b/i.test(block)) {
+        errors.push(`Completed closed-beta item lacks product E2E evidence: ${header}`);
+      }
+      if (checklistPath.includes("CLOSED_BETA") && /admin CRUD|admin mutation/i.test(header) && !/admin E2E: .*Playwright/i.test(block)) {
+        errors.push(`Completed admin item lacks mutation E2E evidence: ${header}`);
+      }
     }
     if (header.includes("[!] BLOCKED")) {
       if (/Blockers: (None|TBD)\b/.test(block)) errors.push(`Blocked task has no blocker: ${header}`);
       if (/Implementation files: TBD|Tests: TBD/.test(block)) errors.push(`Blocked task missing interface/mock evidence: ${header}`);
       if (checklistPath.includes("PRODUCT_ACCEPTANCE") && !/blocker: .+/i.test(block)) errors.push(`Blocked acceptance item missing blocker field: ${header}`);
       if (checklistPath.includes("REAL_BETA") && !/blocker: .+/i.test(block)) errors.push(`Blocked beta item missing blocker field: ${header}`);
+      if (checklistPath.includes("CLOSED_BETA") && !/blocker: .+/i.test(block)) errors.push(`Blocked closed-beta item missing blocker field: ${header}`);
     }
   }
 }

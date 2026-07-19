@@ -36,7 +36,7 @@ def test_postgres_migrated_mvp_workflow(monkeypatch):
     suffix = uuid.uuid4().hex
     registered = client.post(
         "/api/v1/auth/register",
-        json={"email": f"postgres-{suffix}@example.test", "password": "safe-postgres-passphrase"},
+        json={"email": f"postgres-{suffix}@example.test", "password": "MoveInRange1"},
     )
     assert registered.status_code == 201, registered.text
     headers = {"Authorization": f"Bearer {registered.json()['access_token']}"}

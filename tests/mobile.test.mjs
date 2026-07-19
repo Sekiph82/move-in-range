@@ -5,11 +5,12 @@ const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
 const { emptyOnboardingDraft, isOnboardingComplete, saveStep, validateOnboardingStep } = await import("../apps/mobile/src/onboarding/onboardingState.ts");
-const { ONBOARDING_STEPS, BODY_REGIONS, GENDER_OPTIONS, validateOnboardingStepPayload } = await import("../apps/mobile/src/features/onboarding/model.ts");
-const { loginSchema, registerSchema, glucoseSchema, inviteSchema } = await import("../apps/mobile/src/features/validation/schemas.ts");
+const { ONBOARDING_STEPS, BODY_REGIONS, GENDER_OPTIONS, MOBILITY_AIDS, MOVEMENT_PATTERNS, POSITIONS, validateOnboardingStepPayload } = await import("../apps/mobile/src/features/onboarding/model.ts");
+const { loginSchema, registerSchema, resetPasswordSchema, glucoseSchema, inviteSchema } = await import("../apps/mobile/src/features/validation/schemas.ts");
 const { resolveWorkoutMedia, scheduleLocalVoiceCues } = await import("../apps/mobile/src/guidance/mediaVoice.ts");
 const { canActivateProvider, providerBlockedReason } = await import("../apps/mobile/src/integrations/providerState.ts");
 const { paramsFor } = await import("../apps/mobile/src/features/exercises/filters.ts");
+const { resolveSessionGate } = await import("../apps/mobile/src/features/auth/sessionGate.ts");
 
 function mirToken(exp) {
   const body = btoa(JSON.stringify({ exp })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -160,6 +161,8 @@ test("Expo Router exposes the functional product route family", () => {
     "auth/login.tsx",
     "auth/register.tsx",
     "auth/forgot-password.tsx",
+    "auth/reset-password.tsx",
+    "auth/reset-password-success.tsx",
     "auth/session-expired.tsx",
     "onboarding.tsx",
     "readiness.tsx",
@@ -227,6 +230,8 @@ test("beta validation schemas reject malformed auth, glucose, and sharing payloa
     acceptedTerms: true,
     marketingConsent: false
   }).success, true);
+  assert.equal(resetPasswordSchema.safeParse({ token: "short", password: "MoveInRange1", confirmPassword: "MoveInRange1" }).success, false);
+  assert.equal(resetPasswordSchema.safeParse({ token: "abcdefghijklmnopqrstuvwxyz123456", password: "MoveInRange2", confirmPassword: "MoveInRange2" }).success, true);
   assert.equal(glucoseSchema.safeParse({ timing: "pre", value: "", unit: "mg/dL", trend: "steady", source: "manual" }).success, false);
   assert.equal(glucoseSchema.safeParse({ timing: "post", value: "118", unit: "mg/dL", trend: "steady", source: "manual" }).success, true);
   assert.equal(inviteSchema.safeParse({ email: "helper@example.com", scopes: [], expiryDays: 30 }).success, false);
@@ -241,6 +246,14 @@ test("beta exercise filters alter the supported API query", () => {
   assert.equal(params.get("page"), "2");
   assert.equal(params.get("page_size"), "24");
   assert.equal(params.get("language"), "en");
+});
+
+test("session gate protects auth, onboarding, and app routes centrally", () => {
+  assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: false, onboardingComplete: false }), { state: "SIGNED_OUT", redirectTo: "/auth/login" });
+  assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: false }), { state: "AUTHENTICATED_ONBOARDING_INCOMPLETE", redirectTo: "/onboarding" });
+  assert.deepEqual(resolveSessionGate("/onboarding", { hasSession: true, onboardingComplete: true }), { state: "AUTHENTICATED_READY", redirectTo: "/(tabs)" });
+  assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: true, offline: true }), { state: "OFFLINE_WITH_VALID_SESSION" });
+  assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: true, sessionExpired: true }), { state: "SESSION_EXPIRED", redirectTo: "/auth/session-expired" });
 });
 
 test("beta mobile UI does not expose old demo wording or fixed glucose defaults", () => {
@@ -284,6 +297,9 @@ test("real onboarding metadata covers required acceptance steps and validation",
   ]);
   assert.deepEqual(GENDER_OPTIONS, ["Woman", "Man", "Non-binary", "Prefer not to say", "Self-described"]);
   assert.equal(BODY_REGIONS.length, 11);
+  assert.ok(MOVEMENT_PATTERNS.includes("jump"));
+  assert.ok(POSITIONS.includes("kneeling"));
+  assert.ok(MOBILITY_AIDS.includes("walker"));
   const baseDraft = {
     language: "en",
     preferredName: "Aylin",
@@ -311,4 +327,6 @@ test("real onboarding metadata covers required acceptance steps and validation",
   };
   assert.deepEqual(validateOnboardingStepPayload("gender", baseDraft), ["self_description_required"]);
   assert.deepEqual(validateOnboardingStepPayload("physiological_contexts", baseDraft), ["trimester_required_when_pregnancy_selected"]);
+  assert.deepEqual(validateOnboardingStepPayload("clinician_restrictions", { ...baseDraft, clinicianRestriction: true, restrictionReviewDate: "" }), ["restriction_review_date_required"]);
+  assert.deepEqual(validateOnboardingStepPayload("injuries_surgery", { ...baseDraft, injuryRegion: "knees", injuryStatus: "" }), ["injury_status_required"]);
 });

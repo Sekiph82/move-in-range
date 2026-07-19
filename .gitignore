@@ -29,6 +29,7 @@ dist/
 build/
 .next/
 .expo/
+.expo-web-export/
 coverage/
 htmlcov/
 *.tsbuildinfo

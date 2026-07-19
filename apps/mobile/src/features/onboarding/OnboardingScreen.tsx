@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { View } from "react-native";
+import { router } from "expo-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiFetch, saveOnboardingStep } from "../../api";
 import { ActionButton, BodyText, ChipGroup, ChoiceChip, ErrorText, LoadingState, Panel, TextField } from "../shared/ui";
-import { BODY_REGIONS, CONDITIONS, EQUIPMENT, GENDER_OPTIONS, GOALS, initialOnboardingDraft, MUSCLES, ONBOARDING_STEPS, PHYSIOLOGICAL_CONTEXTS, type OnboardingDraft, validateOnboardingStepPayload } from "./model";
+import { BODY_REGIONS, CAPACITY_LEVELS, CONDITIONS, EQUIPMENT, EXPERIENCE_LEVELS, GENDER_OPTIONS, GOALS, initialOnboardingDraft, MOBILITY_AIDS, MOVEMENT_PATTERNS, MUSCLES, ONBOARDING_STEPS, PHYSIOLOGICAL_CONTEXTS, POSITIONS, type OnboardingDraft, validateOnboardingStepPayload } from "./model";
 
 function toggle(values: string[], value: string) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
@@ -19,7 +20,12 @@ const errorCopy: Record<string, string> = {
   side_required: "Choose a side for the selected sensitive region.",
   goal_required: "Choose at least one goal.",
   target_required: "Choose at least one target muscle.",
-  minimum_five_minutes: "Choose at least 5 minutes."
+  minimum_five_minutes: "Choose at least 5 minutes.",
+  restriction_review_date_required: "Add a review date for active clinician restrictions.",
+  injury_status_required: "Choose the current status for this injury or surgery entry.",
+  mobility_aid_use_required: "Choose when this mobility aid is used.",
+  sedentary_hours_invalid: "Sedentary hours must be 24 or less.",
+  confidence_required: "Choose confidence from 1 to 5."
 };
 
 function StepFields({ stepKey, draft, setDraft }: { stepKey: string; draft: OnboardingDraft; setDraft: (draft: OnboardingDraft) => void }) {
@@ -83,6 +89,81 @@ function StepFields({ stepKey, draft, setDraft }: { stepKey: string; draft: Onbo
       </>
     );
   }
+  if (stepKey === "clinician_restrictions") {
+    return (
+      <>
+        <ChoiceChip label="Clinician restriction applies" selected={draft.clinicianRestriction} onPress={() => patch({ clinicianRestriction: !draft.clinicianRestriction })} />
+        <ChipGroup labels={BODY_REGIONS} selected={draft.prohibitedRegions} onToggle={(value) => patch({ prohibitedRegions: toggle(draft.prohibitedRegions, value) })} />
+        <ChipGroup labels={MOVEMENT_PATTERNS} selected={draft.prohibitedMovements} onToggle={(value) => patch({ prohibitedMovements: toggle(draft.prohibitedMovements, value) })} />
+        <ChipGroup labels={POSITIONS} selected={draft.prohibitedPositions} onToggle={(value) => patch({ prohibitedPositions: toggle(draft.prohibitedPositions, value) })} />
+        <TextField label="Maximum duration minutes" keyboardType="number-pad" value={draft.maxDuration} onChangeText={(maxDuration) => patch({ maxDuration })} />
+        <TextField label="Maximum intensity" value={draft.maxIntensity} onChangeText={(maxIntensity) => patch({ maxIntensity })} />
+        <ChoiceChip label="No floor work" selected={draft.noFloor} onPress={() => patch({ noFloor: !draft.noFloor })} />
+        <ChoiceChip label="No impact" selected={draft.noImpact} onPress={() => patch({ noImpact: !draft.noImpact })} />
+        <ChoiceChip label="No overhead" selected={draft.noOverhead} onPress={() => patch({ noOverhead: !draft.noOverhead })} />
+        <TextField label="Restriction start date YYYY-MM-DD" value={draft.restrictionStartDate} onChangeText={(restrictionStartDate) => patch({ restrictionStartDate })} />
+        <TextField label="Review date YYYY-MM-DD" value={draft.restrictionReviewDate} onChangeText={(restrictionReviewDate) => patch({ restrictionReviewDate })} />
+        <TextField label="Clinician note and attachment metadata" value={draft.notes} onChangeText={(notes) => patch({ notes })} multiline />
+      </>
+    );
+  }
+  if (stepKey === "injuries_surgery") {
+    return (
+      <>
+        <ChipGroup labels={BODY_REGIONS} selected={draft.injuryRegion ? [draft.injuryRegion] : []} onToggle={(injuryRegion) => patch({ injuryRegion })} />
+        <ChipGroup labels={["left", "right", "bilateral"]} selected={[draft.injurySide]} onToggle={(injurySide) => patch({ injurySide })} />
+        <ChipGroup labels={["injury", "surgery"]} selected={[draft.injuryKind]} onToggle={(injuryKind) => patch({ injuryKind })} />
+        <TextField label="Type" value={draft.injuryType} onChangeText={(injuryType) => patch({ injuryType })} />
+        <TextField label="Date YYYY-MM-DD" value={draft.injuryDate} onChangeText={(injuryDate) => patch({ injuryDate })} />
+        <TextField label="Current status" value={draft.injuryStatus} onChangeText={(injuryStatus) => patch({ injuryStatus })} />
+        <TextField label="Pain severity 0-10" keyboardType="number-pad" value={draft.injuryPainSeverity} onChangeText={(injuryPainSeverity) => patch({ injuryPainSeverity })} />
+        <TextField label="Range-of-motion limitation" value={draft.injuryRomLimitation} onChangeText={(injuryRomLimitation) => patch({ injuryRomLimitation })} />
+        <ChoiceChip label="Clinician cleared" selected={draft.injuryClinicianCleared} onPress={() => patch({ injuryClinicianCleared: !draft.injuryClinicianCleared })} />
+        <TextField label="Notes" value={draft.notes} onChangeText={(notes) => patch({ notes })} multiline />
+      </>
+    );
+  }
+  if (stepKey === "mobility_aids") {
+    return (
+      <>
+        <ChipGroup labels={MOBILITY_AIDS} selected={draft.mobilityAids} onToggle={(value) => patch({ mobilityAids: toggle(draft.mobilityAids, value) })} />
+        <ChipGroup labels={["always", "sometimes", "exercise only"]} selected={[draft.mobilityAidUse]} onToggle={(mobilityAidUse) => patch({ mobilityAidUse })} />
+        <ChipGroup labels={["left", "right", "bilateral", "not applicable"]} selected={[draft.mobilityAidSide]} onToggle={(mobilityAidSide) => patch({ mobilityAidSide })} />
+        <TextField label="Mobility aid notes" value={draft.notes} onChangeText={(notes) => patch({ notes })} multiline />
+      </>
+    );
+  }
+  if (stepKey === "activity_experience") {
+    return (
+      <>
+        <TextField label="Daily step range" value={draft.dailyStepRange} onChangeText={(dailyStepRange) => patch({ dailyStepRange })} />
+        <TextField label="Weekly exercise frequency" keyboardType="number-pad" value={draft.weeklyExerciseFrequency} onChangeText={(weeklyExerciseFrequency) => patch({ weeklyExerciseFrequency })} />
+        <TextField label="Last regular exercise date YYYY-MM-DD" value={draft.lastRegularExerciseDate} onChangeText={(lastRegularExerciseDate) => patch({ lastRegularExerciseDate })} />
+        <ChipGroup labels={EXPERIENCE_LEVELS} selected={[draft.strengthExperience]} onToggle={(strengthExperience) => patch({ strengthExperience })} />
+        <ChipGroup labels={EXPERIENCE_LEVELS} selected={[draft.cardioExperience]} onToggle={(cardioExperience) => patch({ cardioExperience })} />
+        <ChipGroup labels={EXPERIENCE_LEVELS} selected={[draft.mobilityExperience]} onToggle={(mobilityExperience) => patch({ mobilityExperience })} />
+        <ChipGroup labels={EXPERIENCE_LEVELS} selected={[draft.balanceExperience]} onToggle={(balanceExperience) => patch({ balanceExperience })} />
+        <TextField label="Sedentary hours per day" keyboardType="number-pad" value={draft.sedentaryHours} onChangeText={(sedentaryHours) => patch({ sedentaryHours })} />
+        <TextField label="Preferred intensity" value={draft.preferredIntensity} onChangeText={(preferredIntensity) => patch({ preferredIntensity })} />
+      </>
+    );
+  }
+  if (stepKey === "functional_capacity") {
+    return (
+      <>
+        <ChipGroup labels={CAPACITY_LEVELS} selected={[draft.chairRise]} onToggle={(chairRise) => patch({ chairRise })} />
+        <ChipGroup labels={CAPACITY_LEVELS} selected={[draft.floorRise]} onToggle={(floorRise) => patch({ floorRise })} />
+        <ChipGroup labels={CAPACITY_LEVELS} selected={[draft.stairs]} onToggle={(stairs) => patch({ stairs })} />
+        <ChipGroup labels={CAPACITY_LEVELS} selected={[draft.singleLegStanding]} onToggle={(singleLegStanding) => patch({ singleLegStanding })} />
+        <TextField label="Walking tolerance minutes" keyboardType="number-pad" value={draft.walkingTolerance} onChangeText={(walkingTolerance) => patch({ walkingTolerance })} />
+        <TextField label="Prolonged standing minutes" keyboardType="number-pad" value={draft.prolongedStanding} onChangeText={(prolongedStanding) => patch({ prolongedStanding })} />
+        <ChipGroup labels={CAPACITY_LEVELS} selected={[draft.overheadReach]} onToggle={(overheadReach) => patch({ overheadReach })} />
+        <ChipGroup labels={CAPACITY_LEVELS} selected={[draft.gripPerception]} onToggle={(gripPerception) => patch({ gripPerception })} />
+        <TextField label="Confidence 1-5" keyboardType="number-pad" value={draft.confidence} onChangeText={(confidence) => patch({ confidence })} />
+        <ChipGroup labels={["dizziness", "shortness of breath", "pain change", "fatigue"]} selected={draft.capacitySymptoms} onToggle={(value) => patch({ capacitySymptoms: toggle(draft.capacitySymptoms, value) })} />
+      </>
+    );
+  }
   if (stepKey === "sensitivity_regions") {
     return (
       <>
@@ -126,7 +207,13 @@ export function OnboardingScreen() {
   const errors = useMemo(() => validateOnboardingStepPayload(current.key, draft), [current.key, draft]);
   const saveStepMutation = useMutation({
     mutationFn: () => saveOnboardingStep(current.key, { ...draft, step_number: stepIndex + 1, labels: { en: current.en, tr: current.tr } }, stepIndex === ONBOARDING_STEPS.length - 1, draft.language),
-    onSuccess: () => setStepIndex((value) => Math.min(value + 1, ONBOARDING_STEPS.length - 1))
+    onSuccess: () => {
+      if (stepIndex === ONBOARDING_STEPS.length - 1) {
+        router.replace("/(tabs)");
+      } else {
+        setStepIndex((value) => Math.min(value + 1, ONBOARDING_STEPS.length - 1));
+      }
+    }
   });
 
   return (

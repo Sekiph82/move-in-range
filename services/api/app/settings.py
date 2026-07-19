@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
     auth_rate_limit: int = 20
     service_version: str = "0.1.0-rc"
+    enable_development_reset_preview: bool = True
 
     @property
     def cors_origin_list(self) -> list[str]:
