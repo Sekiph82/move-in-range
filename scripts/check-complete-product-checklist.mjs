@@ -6,7 +6,8 @@ const checklistPaths = [
   "docs/FUNCTIONAL_PRODUCT_COMPLETION_CHECKLIST.md",
   "docs/PRODUCT_ACCEPTANCE_CHECKLIST.md",
   "docs/REAL_BETA_COMPLETION_CHECKLIST.md",
-  "docs/CLOSED_BETA_READINESS_CHECKLIST.md"
+  "docs/CLOSED_BETA_READINESS_CHECKLIST.md",
+  "docs/RELEASE_REHEARSAL_CHECKLIST.md"
 ];
 
 for (const checklistPath of checklistPaths) {
@@ -27,6 +28,8 @@ for (const checklistPath of checklistPaths) {
     if (header.includes("[x] COMPLETE")) {
       const requiredFields = checklistPath.includes("CLOSED_BETA")
         ? ["route:", "component:", "user action:", "API endpoint:", "persistence:", "authorization:", "validation:", "unit test:", "integration test:", "product E2E:", "admin E2E:", "Android validation:", "manual evidence:", "blocker:"]
+        : checklistPath.includes("RELEASE_REHEARSAL")
+        ? ["code evidence:", "role:", "API endpoint:", "UI route:", "persisted result:", "unit test:", "PostgreSQL integration test:", "browser E2E:", "Docker result:", "Android artifact evidence:", "blocker:", "go/no-go result:"]
         : checklistPath.includes("REAL_BETA")
         ? ["route:", "component:", "user action:", "API endpoint:", "persistence:", "validation:", "loading state:", "empty state:", "error state:", "success state:", "unit test:", "integration test:", "browser E2E:", "device validation:", "blocker:"]
         : checklistPath.includes("PRODUCT_ACCEPTANCE")
@@ -58,6 +61,12 @@ for (const checklistPath of checklistPaths) {
       if (checklistPath.includes("CLOSED_BETA") && /admin CRUD|admin mutation/i.test(header) && !/admin E2E: .*Playwright/i.test(block)) {
         errors.push(`Completed admin item lacks mutation E2E evidence: ${header}`);
       }
+      if (checklistPath.includes("RELEASE_REHEARSAL") && /full dataset/i.test(header) && /SQLite/i.test(block)) {
+        errors.push(`Release rehearsal dataset item references SQLite acceptance: ${header}`);
+      }
+      if (checklistPath.includes("RELEASE_REHEARSAL") && /Android installable preview artifact/i.test(header)) {
+        errors.push(`Android installable artifact is marked complete without APK/build evidence: ${header}`);
+      }
     }
     if (header.includes("[!] BLOCKED")) {
       if (/Blockers: (None|TBD)\b/.test(block)) errors.push(`Blocked task has no blocker: ${header}`);
@@ -65,6 +74,7 @@ for (const checklistPath of checklistPaths) {
       if (checklistPath.includes("PRODUCT_ACCEPTANCE") && !/blocker: .+/i.test(block)) errors.push(`Blocked acceptance item missing blocker field: ${header}`);
       if (checklistPath.includes("REAL_BETA") && !/blocker: .+/i.test(block)) errors.push(`Blocked beta item missing blocker field: ${header}`);
       if (checklistPath.includes("CLOSED_BETA") && !/blocker: .+/i.test(block)) errors.push(`Blocked closed-beta item missing blocker field: ${header}`);
+      if (checklistPath.includes("RELEASE_REHEARSAL") && !/blocker: .+/i.test(block)) errors.push(`Blocked release rehearsal item missing blocker field: ${header}`);
     }
   }
 }
@@ -91,6 +101,62 @@ if (/x-admin-role/i.test(repoText)) {
 
 if (/MoveInRangeAdminLocal!(?![A-Za-z])/.test(readFileSync("apps/admin/app/page.tsx", "utf8"))) {
   errors.push("Admin page embeds the local admin password.");
+}
+
+const rbacMatrix = readFileSync("docs/RBAC_OPERATION_MATRIX.md", "utf8");
+const matrixRows = Object.fromEntries(
+  rbacMatrix
+    .split("\n")
+    .filter((line) => line.startsWith("| "))
+    .map((line) => line.split("|").map((cell) => cell.trim()))
+    .filter((cells) => cells.length >= 8)
+    .map((cells) => [cells[1], { super_admin: cells[2], clinical_reviewer: cells[3], exercise_reviewer: cells[4], content_editor: cells[5], support: cells[6], analyst: cells[7] }])
+);
+if (matrixRows.user_role_update?.support === "ALLOWED") {
+  errors.push("RBAC matrix allows support role updates.");
+}
+if (matrixRows.integration_disable?.analyst === "ALLOWED") {
+  errors.push("RBAC matrix allows analyst integration disable.");
+}
+if (matrixRows.policy_publish?.clinical_reviewer === "ALLOWED") {
+  errors.push("RBAC matrix allows clinical reviewer policy publish.");
+}
+
+const productUiE2e = readFileSync("tests/product-ui-e2e.test.mjs", "utf8");
+const productUiScenarios = [
+  "product password reset",
+  "product auth and route guards",
+  "product readiness and plans",
+  "product workout and feedback",
+  "product diabetes and calendar",
+  "product privacy logout and persistence",
+  "product web UI closed beta flow"
+];
+for (const scenario of productUiScenarios) {
+  if (!productUiE2e.includes(scenario)) errors.push(`Product UI E2E missing scenario: ${scenario}`);
+}
+
+const platformTests = readFileSync("services/api/tests/test_complete_product_platform.py", "utf8");
+if (!/password_hash.*not in archive_text/s.test(platformTests) || !/refresh_token.*not in archive_text/s.test(platformTests)) {
+  errors.push("Privacy export lacks explicit secret-exclusion test evidence.");
+}
+if (!/sessions_revoked/.test(platformTests) || !/auth\/refresh/.test(platformTests)) {
+  errors.push("Deletion lacks session-revocation test evidence.");
+}
+
+const releaseChecklist = readFileSync("docs/RELEASE_REHEARSAL_CHECKLIST.md", "utf8");
+if (/PostgreSQL full dataset acceptance[\s\S]*SQLite/i.test(releaseChecklist)) {
+  errors.push("Release checklist uses SQLite for full dataset acceptance.");
+}
+const androidArtifactBlock = releaseChecklist.split(/\n(?=- \[[ x!~-]\])/).find((block) => /Android installable preview artifact/i.test(block)) ?? "";
+if (/go\/no-go result: GO\b/i.test(androidArtifactBlock)) {
+  errors.push("Android artifact is marked GO without APK/build evidence.");
+}
+if (!/Backup and restore rehearsal[\s\S]*restore/i.test(releaseChecklist)) {
+  errors.push("Backup rehearsal lacks restore verification.");
+}
+if (!/Stacked Merge Rehearsal/i.test(readFileSync("docs/STACKED_MERGE_REHEARSAL.md", "utf8"))) {
+  errors.push("Merge rehearsal lacks command evidence.");
 }
 
 if (errors.length) {

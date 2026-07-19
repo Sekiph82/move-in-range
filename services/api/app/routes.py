@@ -58,7 +58,7 @@ from .db.models import (
 )
 from .db.session import get_db
 from .revocation import RedisTokenRevocationStore, get_token_revocation_store
-from .security import require_admin_role, require_user
+from .security import require_admin_role, require_admin_roles, require_user
 from .settings import get_settings
 from .services.safety import EMERGENCY_MESSAGE, evaluate_safety
 from .services.platform import (
@@ -764,6 +764,42 @@ def exercise_search(
     }
 
 
+@router.get("/exercises/favorites")
+def favorite_exercises(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    rows = (
+        db.query(FavoriteExercise)
+        .filter(FavoriteExercise.user_id == user.id)
+        .order_by(desc(FavoriteExercise.created_at))
+        .limit(50)
+        .all()
+    )
+    exercises = [db.get(Exercise, row.exercise_id) for row in rows]
+    return {"items": [_exercise_brief_payload(item) for item in exercises if item]}
+
+
+@router.get("/exercises/recent")
+def recent_exercises(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    rows = (
+        db.query(AuditLog)
+        .filter(AuditLog.actor_id == user.id, AuditLog.action == "exercise.view", AuditLog.target_type == "exercise")
+        .order_by(desc(AuditLog.created_at))
+        .limit(100)
+        .all()
+    )
+    seen: set[str] = set()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        if not row.target_id or row.target_id in seen:
+            continue
+        exercise = db.get(Exercise, row.target_id)
+        if exercise:
+            items.append(_exercise_brief_payload(exercise))
+            seen.add(row.target_id)
+        if len(items) >= 20:
+            break
+    return {"items": items}
+
+
 @router.get("/exercises/{exercise_id}")
 def exercise_detail(exercise_id: str, language: str = "en", user: User = Depends(require_user), db: Session = Depends(get_db)):
     exercise = _get_exercise(exercise_id, db)
@@ -826,6 +862,14 @@ def favorite(exercise_id: str, user: User = Depends(require_user), db: Session =
         db.add(FavoriteExercise(user_id=user.id, exercise_id=exercise.id))
     db.commit()
     return {"favorited": True, "exercise_id": exercise.id}
+
+
+@router.delete("/exercises/{exercise_id}/favorite")
+def unfavorite(exercise_id: str, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    db.query(FavoriteExercise).filter(FavoriteExercise.user_id == user.id, FavoriteExercise.exercise_id == exercise.id).delete(synchronize_session=False)
+    db.commit()
+    return {"favorited": False, "exercise_id": exercise.id}
 
 
 @router.post("/plans/daily/generate", status_code=status.HTTP_201_CREATED)
@@ -1524,7 +1568,7 @@ def camera_analyze(payload: ProductPayload, user: User = Depends(require_user), 
 
 
 @router.get("/admin/policies")
-def policies(admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def policies(admin=Depends(require_admin_roles("clinical_reviewer", "content_editor", "super_admin", required_label="policy_access")), db: Session = Depends(get_db)):
     items = db.query(PolicyVersion).order_by(desc(PolicyVersion.created_at)).limit(50).all()
     if not items:
         items = [PolicyVersion(version="draft-2026-07-18", status="draft", rules={"source": "seed"}, clinical_review_state="draft")]
@@ -1532,11 +1576,11 @@ def policies(admin=Depends(require_admin_role("clinical_reviewer")), db: Session
 
 
 @router.post("/admin/policies", status_code=status.HTTP_201_CREATED)
-def create_policy(payload: PolicyCreatePayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def create_policy(payload: PolicyCreatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="policy_draft_create")), db: Session = Depends(get_db)):
     existing = db.query(PolicyVersion).filter(PolicyVersion.version == payload.version).one_or_none()
     if existing:
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "policy_version_exists"})
-    policy = PolicyVersion(version=payload.version, status="draft", rules=payload.rules, clinical_review_state=payload.clinical_review_state)
+    policy = PolicyVersion(version=payload.version, status="draft", rules=payload.rules, clinical_review_state=payload.clinical_review_state, creator_id=admin.id)
     db.add(policy)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.create", target_type="policy", target_id=policy.version, redacted_payload={"status": policy.status}))
     db.commit()
@@ -1544,14 +1588,14 @@ def create_policy(payload: PolicyCreatePayload, admin=Depends(require_admin_role
 
 
 @router.get("/admin/policies/{policy_id}")
-def policy_detail(policy_id: str, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def policy_detail(policy_id: str, admin=Depends(require_admin_roles("clinical_reviewer", "content_editor", "super_admin", required_label="policy_access")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
     approvals = db.query(PolicyApproval).filter(PolicyApproval.policy_version_id == policy.id).order_by(desc(PolicyApproval.created_at)).all()
     return {"policy": _policy_payload(policy, include_rules=True), "approvals": [_policy_approval_payload(item) for item in approvals]}
 
 
 @router.patch("/admin/policies/{policy_id}")
-def update_policy(policy_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def update_policy(policy_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="policy_draft_update")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
     if "rules" in payload.payload and isinstance(payload.payload["rules"], dict):
         policy.rules = payload.payload["rules"]
@@ -1559,26 +1603,34 @@ def update_policy(policy_id: str, payload: AdminUpdatePayload, admin=Depends(req
         policy.clinical_review_state = str(payload.payload["clinical_review_state"])
     if "status" in payload.payload:
         policy.status = str(payload.payload["status"])
+        if policy.status == "submitted":
+            policy.submitter_id = admin.id
+            policy.submitted_at = datetime.now(UTC)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.update", target_type="policy", target_id=policy.version, redacted_payload={"fields": sorted(payload.payload.keys())}))
     db.commit()
     return {"policy": _policy_payload(policy, include_rules=True)}
 
 
 @router.post("/admin/policies/{policy_id}/approve")
-def approve_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
-    return _policy_action(policy_id, "approved", payload.rationale, admin.id, db)
+def approve_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("clinical_reviewer", required_label="policy_approve")), db: Session = Depends(get_db)):
+    return _policy_action(policy_id, "approved", payload.rationale, admin, db)
 
 
 @router.post("/admin/policies/{policy_id}/reject")
-def reject_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
-    return _policy_action(policy_id, "rejected", payload.rationale, admin.id, db)
+def reject_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("clinical_reviewer", required_label="policy_reject")), db: Session = Depends(get_db)):
+    return _policy_action(policy_id, "rejected", payload.rationale, admin, db)
 
 
 @router.post("/admin/policies/{policy_id}/publish")
-def publish_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def publish_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("super_admin", required_label="policy_publish")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
+    if policy.clinical_review_state != "approved" or not policy.approver_id:
+        db.add(AuditLog(actor_id=admin.id, action="admin.policy.publish.denied", target_type="policy", target_id=policy.version, redacted_payload={"reason": "missing_clinical_approval"}))
+        db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "policy_requires_clinical_approval"})
     policy.status = "published"
-    policy.clinical_review_state = "approved"
+    policy.publisher_id = admin.id
+    policy.published_at = datetime.now(UTC)
     approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=admin.id, decision="published", rationale=payload.rationale)
     db.add(approval)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.publish", target_type="policy", target_id=policy.version, redacted_payload={"decision": "published"}))
@@ -1587,9 +1639,11 @@ def publish_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(r
 
 
 @router.post("/admin/policies/{policy_id}/rollback")
-def rollback_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def rollback_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("super_admin", required_label="policy_rollback")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
     policy.status = "rolled_back"
+    policy.rollback_actor_id = admin.id
+    policy.rolled_back_at = datetime.now(UTC)
     approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=admin.id, decision="rolled_back", rationale=payload.rationale)
     db.add(approval)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.rollback", target_type="policy", target_id=policy.version, redacted_payload={"decision": "rolled_back"}))
@@ -1598,12 +1652,12 @@ def rollback_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(
 
 
 @router.get("/admin/exercises")
-def admin_exercises(admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
+def admin_exercises(admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_access")), db: Session = Depends(get_db)):
     return exercise_search(page=1, page_size=25, db=db)
 
 
 @router.get("/admin/exercises/{exercise_id}")
-def admin_exercise_detail(exercise_id: str, admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
+def admin_exercise_detail(exercise_id: str, admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_access")), db: Session = Depends(get_db)):
     exercise = _get_exercise(exercise_id, db)
     approvals = db.query(MediaApproval).filter(MediaApproval.exercise_id == exercise.id).order_by(desc(MediaApproval.created_at)).all()
     tags = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).order_by(desc(ExerciseTag.created_at)).all()
@@ -1611,8 +1665,19 @@ def admin_exercise_detail(exercise_id: str, admin=Depends(require_admin_role("ex
 
 
 @router.patch("/admin/exercises/{exercise_id}")
-def update_admin_exercise(exercise_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
+def update_admin_exercise(exercise_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_update")), db: Session = Depends(get_db)):
     exercise = _get_exercise(exercise_id, db)
+    safety_fields = {"safety_tags", "restricted_regions", "substitution_id", "publish_state", "review_status"}
+    content_fields = {"turkish_title", "turkish_instructions", "name", "body_part", "equipment", "target"}
+    requested = set(payload.payload)
+    if requested & safety_fields and admin.role not in {"exercise_reviewer", "super_admin"}:
+        db.add(AuditLog(actor_id=admin.id, action="admin.exercise.update.denied", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": "safety_role_required", "fields": sorted(requested & safety_fields)}))
+        db.commit()
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "exercise_safety_role_required"})
+    if requested & content_fields and not requested & safety_fields and admin.role not in {"content_editor", "super_admin"}:
+        db.add(AuditLog(actor_id=admin.id, action="admin.exercise.update.denied", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": "content_role_required", "fields": sorted(requested & content_fields)}))
+        db.commit()
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "exercise_content_role_required"})
     metadata = {**(exercise.source_metadata or {})}
     if "safety_tags" in payload.payload:
         tag = ExerciseTag(exercise_id=exercise.id, classifier_version="manual-admin", tags={"safety_tags": payload.payload["safety_tags"]}, provenance="admin", confidence=100, manual_review_status="approved")
@@ -1695,6 +1760,10 @@ def update_admin_user(user_id: str, payload: AdminUpdatePayload, admin=Depends(r
     elif action == "enable":
         user.deleted_at = None
     elif action == "update_role":
+        if admin.role != "super_admin":
+            db.add(AuditLog(actor_id=admin.id, action="admin.user.update_role.denied", target_type="user", target_id=user.id, redacted_payload={"reason": "super_admin_required"}))
+            db.commit()
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "super_admin_required"})
         next_role = str(payload.payload.get("role", "user"))
         if next_role not in ADMIN_ROLES | {"user"}:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_role"})
@@ -1766,13 +1835,13 @@ def admin_import_jobs(admin=Depends(require_admin_role("content_editor")), db: S
 
 
 @router.get("/admin/notifications")
-def admin_notifications(admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+def admin_notifications(admin=Depends(require_admin_roles("analyst", "support", "super_admin", required_label="notification_access")), db: Session = Depends(get_db)):
     jobs = db.query(NotificationJob).order_by(desc(NotificationJob.created_at)).limit(50).all()
     return {"items": [_notification_job_payload(item) for item in jobs], "provider": "mock_or_local"}
 
 
 @router.post("/admin/notifications/{job_id}/{action}")
-def admin_notification_action(job_id: int, action: str, admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+def admin_notification_action(job_id: int, action: str, admin=Depends(require_admin_roles("analyst", "support", "super_admin", required_label="notification_action")), db: Session = Depends(get_db)):
     job = db.get(NotificationJob, job_id)
     if not job:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "notification_job_not_found"})
@@ -1780,6 +1849,10 @@ def admin_notification_action(job_id: int, action: str, admin=Depends(require_ad
         job.status = "scheduled"
         job.retry_count += 1
     elif action == "cancel":
+        if admin.role not in {"support", "super_admin"}:
+            db.add(AuditLog(actor_id=admin.id, action="admin.notification.cancel.denied", target_type="notification_job", target_id=str(job.id), redacted_payload={"reason": "support_or_super_admin_required"}))
+            db.commit()
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "support_or_super_admin_required"})
         job.status = "cancelled"
     else:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_notification_action"})
@@ -1800,11 +1873,15 @@ def admin_integrations(admin=Depends(require_admin_role("analyst")), db: Session
 
 
 @router.post("/admin/integrations/{connection_id}/{action}")
-def admin_integration_action(connection_id: int, action: str, admin=Depends(require_admin_role("analyst")), db: Session = Depends(get_db)):
+def admin_integration_action(connection_id: int, action: str, admin=Depends(require_admin_roles("analyst", "super_admin", required_label="integration_action")), db: Session = Depends(get_db)):
     connection = db.get(ProviderConnection, connection_id)
     if not connection:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "integration_connection_not_found"})
-    if action == "disable":
+    if action in {"disable", "revoke"}:
+        if admin.role != "super_admin":
+            db.add(AuditLog(actor_id=admin.id, action=f"admin.integration.{action}.denied", target_type="provider_connection", target_id=str(connection.id), redacted_payload={"reason": "super_admin_required"}))
+            db.commit()
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "super_admin_required"})
         connection.status = "disabled"
         connection.token_reference = None
     elif action == "retry-sync":
@@ -1825,6 +1902,14 @@ def admin_e2e_seed(admin=Depends(require_admin_role("super_admin")), db: Session
         user = User(id="usr_closed_beta_e2e", email="closed-beta-e2e@example.test", password_hash=hash_password("MoveInRange1"), auth_provider="local", role="user")
         db.add(user)
         db.flush()
+    for email, role in {
+        "closed-beta-clinical@example.test": "clinical_reviewer",
+        "closed-beta-content@example.test": "content_editor",
+        "closed-beta-support@example.test": "support",
+        "closed-beta-analyst@example.test": "analyst",
+    }.items():
+        if not db.query(User).filter(User.email == email).one_or_none():
+            db.add(User(id="adm_" + hashlib.sha256(email.encode()).hexdigest()[:16], email=email, password_hash=hash_password("MoveInRangeAdmin1"), auth_provider="local", role=role))
     exercise = db.query(Exercise).order_by(Exercise.id).first()
     if exercise:
         media = MediaApproval(exercise_id=exercise.id, media_type="silhouette", license_state="internal", source="closed_beta_seed", status="pending", metadata_payload={})
@@ -1991,6 +2076,15 @@ def _policy_payload(record: PolicyVersion, include_rules: bool = False) -> dict[
         "version": record.version,
         "status": record.status,
         "clinical_review_state": record.clinical_review_state,
+        "creator_id": record.creator_id,
+        "submitter_id": record.submitter_id,
+        "approver_id": record.approver_id,
+        "publisher_id": record.publisher_id,
+        "rollback_actor_id": record.rollback_actor_id,
+        "submitted_at": record.submitted_at.isoformat() if record.submitted_at else None,
+        "approved_at": record.approved_at.isoformat() if record.approved_at else None,
+        "published_at": record.published_at.isoformat() if record.published_at else None,
+        "rolled_back_at": record.rolled_back_at.isoformat() if record.rolled_back_at else None,
         "created_at": record.created_at.isoformat() if record.created_at else None,
     }
     if include_rules:
@@ -2014,14 +2108,25 @@ def _policy_approval_payload(record: PolicyApproval) -> dict[str, Any]:
     return {"id": record.id, "reviewer_id": record.reviewer_id, "decision": record.decision, "rationale": record.rationale, "created_at": record.created_at.isoformat() if record.created_at else None}
 
 
-def _policy_action(policy_id: str, decision: str, rationale: str, reviewer_id: str, db: Session) -> dict[str, Any]:
+def _policy_action(policy_id: str, decision: str, rationale: str, admin: User, db: Session) -> dict[str, Any]:
     policy = _admin_policy_lookup(policy_id, db)
+    if admin.role != "clinical_reviewer":
+        db.add(AuditLog(actor_id=admin.id, action=f"admin.policy.{decision}.denied", target_type="policy", target_id=policy.version, redacted_payload={"reason": "clinical_reviewer_required"}))
+        db.commit()
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "clinical_reviewer_required"})
+    if policy.creator_id == admin.id:
+        db.add(AuditLog(actor_id=admin.id, action=f"admin.policy.{decision}.denied", target_type="policy", target_id=policy.version, redacted_payload={"reason": "self_approval_blocked"}))
+        db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "self_approval_blocked"})
     policy.clinical_review_state = decision
+    if decision == "approved":
+        policy.approver_id = admin.id
+        policy.approved_at = datetime.now(UTC)
     if decision == "rejected":
         policy.status = "changes_requested"
-    approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=reviewer_id, decision=decision, rationale=rationale)
+    approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=admin.id, decision=decision, rationale=rationale)
     db.add(approval)
-    db.add(AuditLog(actor_id=reviewer_id, action=f"admin.policy.{decision}", target_type="policy", target_id=policy.version, redacted_payload={"decision": decision}))
+    db.add(AuditLog(actor_id=admin.id, action=f"admin.policy.{decision}", target_type="policy", target_id=policy.version, redacted_payload={"decision": decision}))
     db.commit()
     return {"policy": _policy_payload(policy, include_rules=True), "approval": _policy_approval_payload(approval)}
 
@@ -2134,6 +2239,9 @@ def _process_deletion_job(job: DeletionJob, db: Session) -> dict[str, int]:
             health.pop(key, None)
         profile.health_payload = health
         counts["profile_health_fields"] = 1
+    active_sessions = db.query(AuthRefreshToken).filter(AuthRefreshToken.user_id == user_id, AuthRefreshToken.revoked_at.is_(None)).count()
+    _revoke_user_refresh_tokens(user_id, db)
+    counts["sessions_revoked"] = active_sessions
     return counts
 
 

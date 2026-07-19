@@ -57,6 +57,18 @@ test("Playwright admin acceptance performs login, navigation, screenshots, logou
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+    async function loginAs(loginEmail, loginPassword) {
+      await page.goto(`${baseUrl}/login`);
+      await page.getByLabel("Email").fill(loginEmail);
+      await page.getByLabel("Password").fill(loginPassword);
+      await page.getByRole("button", { name: /sign in/i }).click({ noWaitAfter: true });
+      await page.waitForTimeout(1000);
+    }
+    async function logoutByCsrf() {
+      const csrf = (await page.context().cookies()).find((cookie) => cookie.name === "mir_admin_csrf")?.value;
+      const response = await page.request.post(`${baseUrl}/api/admin-session/logout`, { form: { csrf }, maxRedirects: 0 });
+      assert.equal(response.status(), 303);
+    }
     await page.goto(`${baseUrl}/dashboard`);
     await assert.doesNotReject(page.getByRole("heading", { name: /moveinrange admin/i }).waitFor({ timeout: 5000 }));
 
@@ -67,11 +79,7 @@ test("Playwright admin acceptance performs login, navigation, screenshots, logou
     assert.equal(invalid.status(), 303);
     assert.match(invalid.headers().location ?? "", /\/login\?error=(invalid_credentials|rate_limited|api_unavailable)/);
 
-    await page.goto(`${baseUrl}/login`);
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: /sign in/i }).click({ noWaitAfter: true });
-    await page.waitForTimeout(1000);
+    await loginAs(email, password);
     await page.goto(`${baseUrl}/dashboard`);
     await assert.doesNotReject(page.getByRole("heading", { name: /dashboard/i }).waitFor({ timeout: 8000 }));
     await page.getByRole("button", { name: /prepare disposable test records/i }).click();
@@ -122,8 +130,14 @@ test("Playwright admin acceptance performs login, navigation, screenshots, logou
     await page.getByLabel("Clinical review").selectOption("submitted");
     await page.getByRole("button", { name: /save policy edit/i }).click();
     await assert.doesNotReject(page.getByText(/saved/i).waitFor({ timeout: 8000 }));
+    await logoutByCsrf();
+    await loginAs("closed-beta-clinical@example.test", "MoveInRangeAdmin1");
+    await page.goto(`${baseUrl}/policies/${policyVersion}`);
     await page.getByRole("button", { name: /^approve$/i }).click();
     await assert.doesNotReject(page.getByText(/saved/i).waitFor({ timeout: 8000 }));
+    await logoutByCsrf();
+    await loginAs(email, password);
+    await page.goto(`${baseUrl}/policies/${policyVersion}`);
     await page.getByRole("button", { name: /^publish$/i }).click();
     await assert.doesNotReject(page.getByText(/saved/i).waitFor({ timeout: 8000 }));
     await page.getByRole("button", { name: /^rollback$/i }).click();
@@ -147,12 +161,7 @@ test("Playwright admin acceptance performs login, navigation, screenshots, logou
     const csrfResponse = await page.request.post(`${baseUrl}/api/admin-session/logout`, { form: { csrf: "wrong" } });
     assert.equal(csrfResponse.status(), 403);
 
-    const csrf = (await page.context().cookies()).find((cookie) => cookie.name === "mir_admin_csrf")?.value;
-    const logout = await page.request.post(`${baseUrl}/api/admin-session/logout`, {
-      form: { csrf },
-      maxRedirects: 0
-    });
-    assert.equal(logout.status(), 303);
+    await logoutByCsrf();
     await page.goto(`${baseUrl}/dashboard`);
     await assert.doesNotReject(page.getByRole("heading", { name: /moveinrange admin/i }).waitFor({ timeout: 8000 }));
   } finally {

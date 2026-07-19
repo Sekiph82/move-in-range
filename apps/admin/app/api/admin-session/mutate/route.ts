@@ -7,7 +7,7 @@ type RequiredRole = AdminIdentity["role"];
 
 type Operation = {
   method: Method;
-  requiredRole: RequiredRole;
+  allowedRoles: readonly RequiredRole[];
   fields: readonly string[];
   required?: readonly string[];
   enums?: Record<string, readonly string[]>;
@@ -41,7 +41,7 @@ function payload(fields: Record<string, string>, names: readonly string[]) {
 const operations = {
   e2e_seed: {
     method: "POST",
-    requiredRole: "super_admin",
+    allowedRoles: ["super_admin"],
     fields: [],
     path: () => "/admin/e2e-seed",
     redirectTo: () => "/dashboard",
@@ -49,7 +49,7 @@ const operations = {
   },
   user_disable: {
     method: "PATCH",
-    requiredRole: "support",
+    allowedRoles: ["support", "super_admin"],
     fields: ["user_id", "reason"],
     required: ["user_id", "reason"],
     path: (fields) => `/admin/users/${segment(fields.user_id, "user_id")}`,
@@ -58,7 +58,7 @@ const operations = {
   },
   user_enable: {
     method: "PATCH",
-    requiredRole: "support",
+    allowedRoles: ["support", "super_admin"],
     fields: ["user_id", "reason"],
     required: ["user_id", "reason"],
     path: (fields) => `/admin/users/${segment(fields.user_id, "user_id")}`,
@@ -67,7 +67,7 @@ const operations = {
   },
   user_role_update: {
     method: "PATCH",
-    requiredRole: "support",
+    allowedRoles: ["super_admin"],
     fields: ["user_id", "role", "reason"],
     required: ["user_id", "role", "reason"],
     enums: { role: userAssignableRoles },
@@ -77,7 +77,7 @@ const operations = {
   },
   exercise_content_update: {
     method: "PATCH",
-    requiredRole: "exercise_reviewer",
+    allowedRoles: ["content_editor", "exercise_reviewer", "super_admin"],
     fields: ["exercise_id", "turkish_title", "turkish_instructions", "body_part", "equipment", "safety_tags", "restricted_regions", "substitution_id", "publish_state"],
     required: ["exercise_id"],
     enums: { publish_state: publishStates },
@@ -89,7 +89,7 @@ const operations = {
   },
   policy_draft_create: {
     method: "POST",
-    requiredRole: "clinical_reviewer",
+    allowedRoles: ["content_editor", "super_admin"],
     fields: ["version", "clinical_review_state"],
     required: ["version", "clinical_review_state"],
     enums: { clinical_review_state: clinicalReviewStates },
@@ -99,7 +99,7 @@ const operations = {
   },
   policy_draft_update: {
     method: "PATCH",
-    requiredRole: "clinical_reviewer",
+    allowedRoles: ["content_editor", "super_admin"],
     fields: ["policy_id", "status", "clinical_review_state"],
     required: ["policy_id", "status", "clinical_review_state"],
     enums: { status: policyStatuses, clinical_review_state: clinicalReviewStates },
@@ -113,7 +113,7 @@ const operations = {
   policy_rollback: policyAction("rollback"),
   privacy_job_action: {
     method: "POST",
-    requiredRole: "support",
+    allowedRoles: ["support", "super_admin"],
     fields: ["kind", "job_id", "action", "rationale"],
     required: ["kind", "job_id", "action"],
     enums: { kind: privacyKinds, action: privacyActions },
@@ -128,9 +128,10 @@ const operations = {
 } satisfies Record<string, Operation>;
 
 function policyAction(action: "approve" | "reject" | "publish" | "rollback"): Operation {
+  const allowedRoles = action === "approve" || action === "reject" ? ["clinical_reviewer"] as const : ["super_admin"] as const;
   return {
     method: "POST",
-    requiredRole: "clinical_reviewer",
+    allowedRoles,
     fields: ["policy_id", "rationale"],
     required: ["policy_id", "rationale"],
     path: (fields) => `/admin/policies/${segment(fields.policy_id, "policy_id")}/${action}`,
@@ -142,7 +143,7 @@ function policyAction(action: "approve" | "reject" | "publish" | "rollback"): Op
 function notificationAction(action: "retry" | "cancel"): Operation {
   return {
     method: "POST",
-    requiredRole: "support",
+    allowedRoles: action === "retry" ? ["analyst", "support", "super_admin"] : ["support", "super_admin"],
     fields: ["job_id"],
     required: ["job_id"],
     path: (fields) => `/admin/notifications/${segment(fields.job_id, "job_id")}/${action}`,
@@ -154,7 +155,7 @@ function notificationAction(action: "retry" | "cancel"): Operation {
 function integrationAction(action: "disable" | "retry-sync"): Operation {
   return {
     method: "POST",
-    requiredRole: "analyst",
+    allowedRoles: action === "retry-sync" ? ["analyst", "super_admin"] : ["super_admin"],
     fields: ["connection_id"],
     required: ["connection_id"],
     path: (fields) => `/admin/integrations/${segment(fields.connection_id, "connection_id")}/${action}`,
@@ -163,8 +164,8 @@ function integrationAction(action: "disable" | "retry-sync"): Operation {
   };
 }
 
-function hasRole(admin: AdminIdentity, requiredRole: RequiredRole) {
-  return admin.role === "super_admin" || admin.role === requiredRole;
+function hasRole(admin: AdminIdentity, allowedRoles: readonly RequiredRole[]) {
+  return allowedRoles.includes(admin.role);
 }
 
 async function loadAdmin(token: string) {
@@ -216,7 +217,7 @@ export async function POST(request: NextRequest) {
 
   const admin = await loadAdmin(token);
   if (!admin) return adminRedirect(request, "/login?error=session_expired");
-  if (!hasRole(admin, operation.requiredRole)) return adminRedirect(request, "/forbidden?error=insufficient_role");
+  if (!hasRole(admin, operation.allowedRoles)) return adminRedirect(request, "/forbidden?error=insufficient_role");
 
   let fields: Record<string, string>;
   let path: string;

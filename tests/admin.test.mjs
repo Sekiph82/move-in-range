@@ -54,8 +54,14 @@ test("backend exposes admin CRUD and operations used by the console", () => {
 test("admin mutation proxy uses typed allowlisted operations instead of browser supplied backend paths", () => {
   const route = readFileSync("apps/admin/app/api/admin-session/mutate/route.ts", "utf8");
   assert.match(route, /const operations = \{/);
-  assert.match(route, /requiredRole/);
+  assert.match(route, /allowedRoles/);
+  assert.doesNotMatch(route, /requiredRole/);
   assert.match(route, /unknown_fields/);
+  assert.match(route, /user_role_update:[\s\S]*allowedRoles: \["super_admin"\]/);
+  assert.match(route, /integration_disable: integrationAction\("disable"\)/);
+  assert.match(route, /action === "retry-sync" \? \["analyst", "super_admin"\] : \["super_admin"\]/);
+  assert.match(route, /policy_publish: policyAction\("publish"\)/);
+  assert.match(route, /action === "approve" \|\| action === "reject" \? \["clinical_reviewer"\] as const : \["super_admin"\] as const/);
   assert.doesNotMatch(route, /form\.get\("path"\)/);
   assert.doesNotMatch(route, /form\.get\("method"\)/);
   assert.doesNotMatch(route, /payload_json/);

@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     smtp_password: str | None = None
     smtp_use_tls: bool = False
     smtp_timeout_seconds: int = 10
+    admin_cookie_secure: bool = False
+    enable_e2e_seed: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -56,6 +58,20 @@ class Settings(BaseSettings):
             raise ValueError("Production requires a non-default LOCAL_ADMIN_PASSWORD")
         if production and self.email_sender == "console":
             raise ValueError("Production requires a non-console EMAIL_SENDER")
+        if production and self.enable_development_reset_preview:
+            raise ValueError("Development reset preview is not allowed in production")
+        if production and self.enable_e2e_seed:
+            raise ValueError("E2E seed mode is not allowed in production")
+        if production and not self.admin_cookie_secure:
+            raise ValueError("Production requires ADMIN_COOKIE_SECURE=true")
+        if production and self.smtp_host.lower() in {"localhost", "127.0.0.1", "mailpit"}:
+            raise ValueError("Production requires a non-local SMTP_HOST")
+        if production and self.product_web_base_url.startswith("http://localhost"):
+            raise ValueError("Production requires a public PRODUCT_WEB_BASE_URL")
+        if production and self.api_base_url.startswith("http://localhost"):
+            raise ValueError("Production requires a public API_BASE_URL")
+        if "\n" in self.email_from or "\r" in self.email_from:
+            raise ValueError("EMAIL_FROM may not contain header control characters")
         return self
 
 

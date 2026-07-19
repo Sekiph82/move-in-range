@@ -174,6 +174,15 @@ class PolicyVersion(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(40), default="draft")
     rules: Mapped[dict] = mapped_column(JSON)
     clinical_review_state: Mapped[str] = mapped_column(String(40), default="draft")
+    creator_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    submitter_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    approver_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    publisher_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    rollback_actor_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    submitted_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rolled_back_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class SafetyDecision(TimestampMixin, Base):
     __tablename__ = "safety_decisions"

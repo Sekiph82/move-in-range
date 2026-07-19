@@ -21,6 +21,11 @@ def require_user(authorization: str | None = Header(default=None), db: Session =
     raise HTTPException(status_code=401, detail={"code": "missing_token"})
 
 def require_admin_role(role: str) -> Callable:
+    allowed = ADMIN_PERMISSIONS.get(role, {role})
+    return require_admin_roles(*allowed, required_label=role)
+
+def require_admin_roles(*roles: str, required_label: str | None = None) -> Callable:
+    allowed = set(roles)
     def dependency(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail={"code": "missing_admin_token"})
@@ -32,9 +37,8 @@ def require_admin_role(role: str) -> Callable:
             raise HTTPException(status_code=401, detail={"code": "admin_not_found"})
         if _token_issued_before_auth_invalidation(payload, admin):
             raise HTTPException(status_code=401, detail={"code": "session_expired"})
-        allowed = ADMIN_PERMISSIONS.get(role, {role})
         if admin.role != "super_admin" and admin.role not in allowed:
-            raise HTTPException(status_code=403, detail={"code": "forbidden", "required_role": role})
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "required_role": required_label or ",".join(sorted(allowed))})
         return admin
     return dependency
 

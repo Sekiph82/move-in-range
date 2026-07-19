@@ -94,6 +94,62 @@ def test_admin_local_login_bootstraps_super_admin_without_role_header(tmp_path, 
     assert client.get("/api/v1/admin/audit-logs", headers=headers).status_code == 200
 
 
+def test_release_rehearsal_admin_rbac_matrix_and_separation(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    for email, role in {
+        "super@example.test": "super_admin",
+        "clinical-rbac@example.test": "clinical_reviewer",
+        "content-rbac@example.test": "content_editor",
+        "support-rbac@example.test": "support",
+        "analyst-rbac@example.test": "analyst",
+    }.items():
+        _create_admin_user(email, role)
+    user_payload, _ = _register(client, "rbac-user@example.test")
+    super_headers = _admin_headers(client, "super@example.test")
+    clinical_headers = _admin_headers(client, "clinical-rbac@example.test")
+    content_headers = _admin_headers(client, "content-rbac@example.test")
+    support_headers = _admin_headers(client, "support-rbac@example.test")
+    analyst_headers = _admin_headers(client, "analyst-rbac@example.test")
+
+    assert client.patch(f"/api/v1/admin/users/{user_payload['user']['id']}", headers=support_headers, json={"payload": {"action": "update_role", "role": "analyst", "reason": "not allowed"}}).status_code == 403
+    role_update = client.patch(f"/api/v1/admin/users/{user_payload['user']['id']}", headers=super_headers, json={"payload": {"action": "update_role", "role": "analyst", "reason": "release rehearsal"}})
+    assert role_update.status_code == 200, role_update.text
+    assert role_update.json()["user"]["role"] == "analyst"
+
+    session_mod = importlib.import_module("app.db.session")
+    models = importlib.import_module("app.db.models")
+    with session_mod.SessionLocal() as db:
+        user = db.get(models.User, user_payload["user"]["id"])
+        connection = models.ProviderConnection(user_id=user.id, provider_key="nightscout", category="glucose", status="mock_connected", scopes=["read"], token_reference="token_ref")
+        db.add(connection)
+        clinical = db.query(models.User).filter(models.User.email == "clinical-rbac@example.test").one()
+        self_policy = models.PolicyVersion(version="self-approval-rbac", status="submitted", rules={"source": "test"}, clinical_review_state="submitted", creator_id=clinical.id, submitter_id=clinical.id)
+        db.add(self_policy)
+        db.commit()
+        connection_id = connection.id
+
+    assert client.post(f"/api/v1/admin/integrations/{connection_id}/disable", headers=analyst_headers).status_code == 403
+    assert client.post(f"/api/v1/admin/integrations/{connection_id}/retry-sync", headers=analyst_headers).status_code == 200
+    assert client.post(f"/api/v1/admin/integrations/{connection_id}/disable", headers=super_headers).status_code == 200
+
+    policy_version = "release-rbac-policy"
+    created = client.post("/api/v1/admin/policies", headers=content_headers, json={"version": policy_version, "clinical_review_state": "submitted", "rules": {"source": "rbac"}})
+    assert created.status_code == 201, created.text
+    assert client.post(f"/api/v1/admin/policies/{policy_version}/approve", headers=content_headers, json={"rationale": "content cannot approve"}).status_code == 403
+    assert client.post(f"/api/v1/admin/policies/{policy_version}/publish", headers=clinical_headers, json={"rationale": "clinical cannot publish"}).status_code == 403
+    approved = client.post(f"/api/v1/admin/policies/{policy_version}/approve", headers=clinical_headers, json={"rationale": "clinical approval"})
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["policy"]["approver_id"]
+    published = client.post(f"/api/v1/admin/policies/{policy_version}/publish", headers=super_headers, json={"rationale": "super-admin publish"})
+    assert published.status_code == 200, published.text
+    assert published.json()["policy"]["publisher_id"]
+    assert client.post("/api/v1/admin/policies/self-approval-rbac/approve", headers=clinical_headers, json={"rationale": "self approve"}).status_code == 409
+
+    with session_mod.SessionLocal() as db:
+        denied = db.query(models.AuditLog).filter(models.AuditLog.action.like("%.denied")).all()
+        assert {item.action for item in denied} >= {"admin.user.update_role.denied", "admin.integration.disable.denied", "admin.policy.approved.denied"}
+
+
 def test_refresh_rotation_logout_and_legacy_password_upgrade(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     salt = "legacy-local-salt"
@@ -219,6 +275,39 @@ def test_production_rejects_default_secret_and_wildcard_cors(monkeypatch):
     with pytest.raises(ValueError):
         settings_mod.get_settings()
 
+    safe_production = {
+        "AUTH_SECRET": "strong-production-secret",
+        "LOCAL_ADMIN_PASSWORD": "strong-admin-password",
+        "CORS_ORIGINS": "https://admin.example.com",
+        "EMAIL_SENDER": "smtp",
+        "ENABLE_DEVELOPMENT_RESET_PREVIEW": "false",
+        "ENABLE_E2E_SEED": "false",
+        "ADMIN_COOKIE_SECURE": "true",
+        "SMTP_HOST": "smtp.example.com",
+        "PRODUCT_WEB_BASE_URL": "https://app.example.com",
+        "API_BASE_URL": "https://api.example.com",
+    }
+    for key, value in safe_production.items():
+        monkeypatch.setenv(key, value)
+
+    for key, bad_value in {
+        "ENABLE_DEVELOPMENT_RESET_PREVIEW": "true",
+        "ENABLE_E2E_SEED": "true",
+        "ADMIN_COOKIE_SECURE": "false",
+        "SMTP_HOST": "mailpit",
+        "PRODUCT_WEB_BASE_URL": "http://localhost:3210",
+        "API_BASE_URL": "http://localhost:8200",
+        "EMAIL_FROM": "no-reply@example.com\nbcc: attacker@example.com",
+    }.items():
+        monkeypatch.setenv(key, bad_value)
+        settings_mod.get_settings.cache_clear()
+        with pytest.raises(ValueError):
+            settings_mod.get_settings()
+        monkeypatch.setenv(key, safe_production.get(key, "no-reply@example.com"))
+
+    settings_mod.get_settings.cache_clear()
+    assert settings_mod.get_settings().environment == "production"
+
     monkeypatch.setenv("AUTH_SECRET", "strong-production-secret")
     monkeypatch.setenv("LOCAL_ADMIN_PASSWORD", "MoveInRangeAdminLocal!")
     monkeypatch.setenv("CORS_ORIGINS", "https://admin.example.com")
@@ -252,6 +341,11 @@ def test_ready_endpoint_and_production_revocation_require_redis(tmp_path, monkey
     monkeypatch.setenv("LOCAL_ADMIN_PASSWORD", "strong-admin-password")
     monkeypatch.setenv("CORS_ORIGINS", "https://admin.example.com")
     monkeypatch.setenv("EMAIL_SENDER", "smtp")
+    monkeypatch.setenv("ENABLE_DEVELOPMENT_RESET_PREVIEW", "false")
+    monkeypatch.setenv("ADMIN_COOKIE_SECURE", "true")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("PRODUCT_WEB_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("API_BASE_URL", "https://api.example.com")
     monkeypatch.setenv("REDIS_URL", "redis://localhost:1/0")
     settings_mod.get_settings.cache_clear()
     revocation_mod = importlib.reload(revocation_mod)
