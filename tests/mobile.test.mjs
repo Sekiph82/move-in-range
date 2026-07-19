@@ -5,6 +5,7 @@ const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
 const { emptyOnboardingDraft, isOnboardingComplete, saveStep, validateOnboardingStep } = await import("../apps/mobile/src/onboarding/onboardingState.ts");
+const { ONBOARDING_STEPS, BODY_REGIONS, GENDER_OPTIONS, validateOnboardingStepPayload } = await import("../apps/mobile/src/features/onboarding/model.ts");
 const { resolveWorkoutMedia, scheduleLocalVoiceCues } = await import("../apps/mobile/src/guidance/mediaVoice.ts");
 const { canActivateProvider, providerBlockedReason } = await import("../apps/mobile/src/integrations/providerState.ts");
 
@@ -179,10 +180,82 @@ test("Expo Router exposes the functional product route family", () => {
   for (const route of routes) {
     assert.equal(existsSync(`apps/mobile/app/${route}`), true, route);
   }
+});
+
+test("product workflow is decomposed into feature-specific screens", () => {
   const workflow = readFileSync("apps/mobile/src/screens/ProductWorkflowScreen.tsx", "utf8");
-  assert.match(workflow, /const onboardingSteps = \[/);
-  const steps = workflow.match(/const onboardingSteps = \[([\s\S]*?)\];/)?.[1] ?? "";
-  assert.equal(steps.split("\n").filter((line) => line.trim().startsWith("\"")).length, 22);
-  assert.match(workflow, /camera_consent: true/);
-  assert.match(workflow, /does not change medication guidance/);
+  assert.ok(workflow.split("\n").length <= 120, "ProductWorkflowScreen must remain a small dispatcher");
+  assert.doesNotMatch(workflow, /function renderBody/);
+  const featureFiles = [
+    "apps/mobile/src/features/onboarding/OnboardingScreen.tsx",
+    "apps/mobile/src/features/readiness/ReadinessScreen.tsx",
+    "apps/mobile/src/features/plans/PlanScreens.tsx",
+    "apps/mobile/src/features/workout/WorkoutScreens.tsx",
+    "apps/mobile/src/features/exercises/ExerciseScreens.tsx",
+    "apps/mobile/src/features/diabetes/DiabetesScreen.tsx",
+    "apps/mobile/src/features/integrations/IntegrationsScreen.tsx",
+    "apps/mobile/src/features/privacy/PrivacyScreen.tsx",
+    "apps/mobile/src/features/sharing/SharingScreens.tsx",
+    "apps/mobile/src/features/shared/ui.tsx"
+  ];
+  for (const file of featureFiles) assert.equal(existsSync(file), true, file);
+  assert.match(readFileSync("apps/mobile/src/features/exercises/ExerciseScreens.tsx", "utf8"), /camera_consent: true/);
+  assert.match(readFileSync("apps/mobile/src/features/diabetes/DiabetesScreen.tsx", "utf8"), /never calculates insulin or treatment/);
+});
+
+test("real onboarding metadata covers required acceptance steps and validation", () => {
+  assert.equal(ONBOARDING_STEPS.length, 22);
+  assert.deepEqual(ONBOARDING_STEPS.map((step) => step.en), [
+    "Welcome",
+    "Product boundary",
+    "Consent",
+    "Preferred name",
+    "Date of birth",
+    "Gender",
+    "Physiological contexts",
+    "Height and weight",
+    "Country, timezone, language",
+    "Health conditions",
+    "Sensitivity regions",
+    "Clinician restrictions",
+    "Previous injuries and surgery",
+    "Mobility aids",
+    "Activity and experience",
+    "Functional capacity",
+    "Goals",
+    "Target muscles",
+    "Environment and equipment",
+    "Schedule and time",
+    "Diabetes and notification settings",
+    "Review and complete"
+  ]);
+  assert.deepEqual(GENDER_OPTIONS, ["Woman", "Man", "Non-binary", "Prefer not to say", "Self-described"]);
+  assert.equal(BODY_REGIONS.length, 11);
+  const baseDraft = {
+    language: "en",
+    preferredName: "Aylin",
+    dateOfBirth: "1982-04-20",
+    gender: "Self-described",
+    selfDescribe: "",
+    contexts: ["pregnancy"],
+    trimester: "",
+    heightCm: "168",
+    weightKg: "72",
+    country: "US",
+    timezone: "America/New_York",
+    conditions: [],
+    sensitivityRegions: [],
+    side: "bilateral",
+    severity: "2",
+    clinicianRestriction: false,
+    notes: "",
+    goals: ["mobility"],
+    targets: ["core"],
+    equipment: ["chair"],
+    minutes: "15",
+    diabetesEnabled: false,
+    quietHours: true
+  };
+  assert.deepEqual(validateOnboardingStepPayload("gender", baseDraft), ["self_description_required"]);
+  assert.deepEqual(validateOnboardingStepPayload("physiological_contexts", baseDraft), ["trimester_required_when_pregnancy_selected"]);
 });

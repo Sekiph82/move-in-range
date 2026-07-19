@@ -32,6 +32,7 @@ build/
 coverage/
 htmlcov/
 *.tsbuildinfo
+test-results/
 
 # databases and generated health exports
 *.sqlite
@@ -48,3 +49,4 @@ services/api/media/
 .DS_Store
 .idea/
 .vscode/
+.local/

@@ -56,6 +56,7 @@ services:
       dockerfile: apps/admin/Dockerfile
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${API_BASE_URL}
+      ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-true}
     ports:
       - "3200:3200"
     depends_on:
