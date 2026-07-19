@@ -17,3 +17,6 @@ Future agents must preserve these boundaries:
 - Do not restore browser-controlled admin role headers such as `x-admin-role`; backend role checks must use authenticated admin tokens and database roles.
 - Treat PostgreSQL as the authoritative integration path; SQLite is a limited local fallback only.
 - Keep `AUTH_SECRET`, admin credentials, tokens, refresh tokens, exact glucose values, and raw health payloads out of ordinary logs.
+- Keep admin login user-driven through `/login`; do not reintroduce environment-password auto-login into rendered admin pages.
+- Preserve Redis-backed token revocation for production and DB-backed refresh token family replay protection.
+- Keep release-candidate merge order documented in `docs/STACKED_PR_MERGE_PLAN.md`; do not merge stacked PRs out of order.

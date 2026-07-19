@@ -4,10 +4,13 @@ from sqlalchemy.orm import Session
 from .auth import decode_token
 from .db.models import User
 from .db.session import get_db
+from .revocation import get_token_revocation_store
 
 def require_user(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
     if authorization and authorization.startswith("Bearer "):
         payload = decode_token(authorization.removeprefix("Bearer ").strip(), "access")
+        if get_token_revocation_store().is_access_token_revoked(payload["jti"]):
+            raise HTTPException(status_code=401, detail={"code": "revoked_token"})
         user = db.get(User, payload["sub"])
         if not user or user.deleted_at is not None:
             raise HTTPException(status_code=401, detail={"code": "user_not_found"})
@@ -19,6 +22,8 @@ def require_admin_role(role: str) -> Callable:
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail={"code": "missing_admin_token"})
         payload = decode_token(authorization.removeprefix("Bearer ").strip(), "access")
+        if get_token_revocation_store().is_access_token_revoked(payload["jti"]):
+            raise HTTPException(status_code=401, detail={"code": "revoked_token"})
         admin = db.get(User, payload["sub"])
         if not admin or admin.deleted_at is not None:
             raise HTTPException(status_code=401, detail={"code": "admin_not_found"})

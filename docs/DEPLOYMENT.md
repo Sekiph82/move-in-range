@@ -21,6 +21,17 @@ ENABLE_DEVELOPMENT_ADMIN_OVERRIDE=false
 
 Production startup must fail if `AUTH_SECRET` is empty/default, `CORS_ORIGINS=*`, or a development admin override is enabled. SQLite is not a production database; it is only a local fallback for lightweight developer runs.
 
+Production startup must also fail if `LOCAL_ADMIN_PASSWORD` is still the documented development password or if Redis token revocation cannot initialize.
+
+Readiness endpoints:
+
+```text
+/api/v1/health
+/api/v1/ready
+```
+
+`/ready` checks database connectivity and reports whether the revocation store is Redis or development-only in-memory. Do not expose connection strings or secrets.
+
 For mobile testing before release:
 
 - Android emulator API URL: `http://10.0.2.2:8200`.

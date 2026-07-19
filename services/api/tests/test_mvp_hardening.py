@@ -14,6 +14,9 @@ def _client(tmp_path, monkeypatch, **env):
     settings_mod = importlib.import_module("app.settings")
     importlib.reload(settings_mod)
     settings_mod.get_settings.cache_clear()
+    revocation_mod = importlib.import_module("app.revocation")
+    importlib.reload(revocation_mod)
+    revocation_mod.get_token_revocation_store.cache_clear()
     auth_mod = importlib.import_module("app.auth")
     importlib.reload(auth_mod)
     session_mod = importlib.import_module("app.db.session")
@@ -119,10 +122,14 @@ def test_refresh_rotation_logout_and_legacy_password_upgrade(tmp_path, monkeypat
     assert refreshed.status_code == 200, refreshed.text
     assert client.post("/api/v1/auth/refresh", json={"refresh_token": first["refresh_token"]}).status_code == 401
     second = refreshed.json()
+    with session_mod.SessionLocal() as db:
+        records = db.query(models.AuthRefreshToken).filter(models.AuthRefreshToken.user_id == "usr_legacy").all()
+        assert len(records) == 2
+        assert all(record.revoked_at is not None for record in records)
+    assert client.post("/api/v1/auth/refresh", json={"refresh_token": second["refresh_token"]}).status_code == 401
     logout = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {second['access_token']}"})
     assert logout.status_code == 200
     assert client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {second['access_token']}"}).status_code == 401
-    assert client.post("/api/v1/auth/refresh", json={"refresh_token": second["refresh_token"]}).status_code == 401
 
 
 def test_token_claims_signature_expiry_and_disabled_user_are_rejected(tmp_path, monkeypatch):
@@ -172,10 +179,37 @@ def test_production_rejects_default_secret_and_wildcard_cors(monkeypatch):
         settings_mod.get_settings()
 
     monkeypatch.setenv("AUTH_SECRET", "strong-production-secret")
+    monkeypatch.setenv("LOCAL_ADMIN_PASSWORD", "MoveInRangeAdminLocal!")
+    monkeypatch.setenv("CORS_ORIGINS", "https://admin.example.com")
+    settings_mod.get_settings.cache_clear()
+    with pytest.raises(ValueError):
+        settings_mod.get_settings()
+
+    monkeypatch.setenv("LOCAL_ADMIN_PASSWORD", "strong-admin-password")
     monkeypatch.setenv("CORS_ORIGINS", "*")
     settings_mod.get_settings.cache_clear()
     with pytest.raises(ValueError):
         settings_mod.get_settings()
+
+
+def test_ready_endpoint_and_production_revocation_require_redis(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch, REDIS_URL="redis://localhost:1/0")
+    ready = client.get("/api/v1/ready")
+    assert ready.status_code == 200
+    assert ready.json()["revocation_store"] == "development_in_memory"
+
+    settings_mod = importlib.import_module("app.settings")
+    revocation_mod = importlib.import_module("app.revocation")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("AUTH_SECRET", "strong-production-secret")
+    monkeypatch.setenv("LOCAL_ADMIN_PASSWORD", "strong-admin-password")
+    monkeypatch.setenv("CORS_ORIGINS", "https://admin.example.com")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:1/0")
+    settings_mod.get_settings.cache_clear()
+    revocation_mod = importlib.reload(revocation_mod)
+    revocation_mod.get_token_revocation_store.cache_clear()
+    with pytest.raises(RuntimeError):
+        revocation_mod.get_token_revocation_store()
 
 
 def test_log_redaction_removes_tokens_passwords_and_health_values():

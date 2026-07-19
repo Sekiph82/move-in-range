@@ -3,11 +3,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, or_
+from sqlalchemy import desc, func, or_, text
 from sqlalchemy.orm import Session
-from .auth import create_token, hash_password, password_needs_upgrade, revoke_access_token, token_hash, verify_password
+from .auth import create_token, decode_token, hash_password, password_needs_upgrade, token_hash, verify_password
 from .db.models import (
     AuditLog,
+    AuthRefreshToken,
     Exercise,
     ExerciseLocalization,
     ExerciseMedia,
@@ -23,6 +24,7 @@ from .db.models import (
     User,
 )
 from .db.session import get_db
+from .revocation import RedisTokenRevocationStore, get_token_revocation_store
 from .security import require_admin_role, require_user
 from .settings import get_settings
 from .services.safety import EMERGENCY_MESSAGE, evaluate_safety
@@ -149,7 +151,21 @@ class GlucosePayload(BaseModel):
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "service": "moveinrange-api", "api_base_url": "http://localhost:8200"}
+    settings = get_settings()
+    return {"status": "ok", "service": "moveinrange-api", "version": settings.service_version, "environment": settings.environment, "api_base_url": "http://localhost:8200"}
+
+
+@router.get("/ready")
+def ready(db: Session = Depends(get_db)):
+    db.execute(text("select 1"))
+    store = get_token_revocation_store()
+    return {
+        "status": "ready",
+        "database": "ok",
+        "revocation_store": "redis" if isinstance(store, RedisTokenRevocationStore) else "development_in_memory",
+        "service": "moveinrange-api",
+        "version": get_settings().service_version,
+    }
 
 
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
@@ -165,9 +181,10 @@ def register(payload: Credentials, request: Request, db: Session = Depends(get_d
         auth_provider="local",
         role="user",
     )
-    refresh = create_token(user.id, "refresh")
-    user.refresh_token_hash = token_hash(refresh)
     db.add(user)
+    db.flush()
+    refresh = _issue_refresh_token(user, db, "mobile")
+    user.refresh_token_hash = token_hash(refresh)
     db.add(AuditLog(actor_id=user.id, action="auth.register", target_type="user", target_id=user.id, redacted_payload={}))
     db.commit()
     return _auth_response(user, refresh)
@@ -181,7 +198,7 @@ def login(payload: Credentials, request: Request, db: Session = Depends(get_db))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_credentials"})
     if password_needs_upgrade(user.password_hash):
         user.password_hash = hash_password(payload.password)
-    refresh = create_token(user.id, "refresh")
+    refresh = _issue_refresh_token(user, db, "mobile")
     user.refresh_token_hash = token_hash(refresh)
     db.add(AuditLog(actor_id=user.id, action="auth.login", target_type="user", target_id=user.id, redacted_payload={}))
     db.commit()
@@ -191,13 +208,15 @@ def login(payload: Credentials, request: Request, db: Session = Depends(get_db))
 @router.post("/auth/refresh")
 def refresh(payload: RefreshPayload, request: Request, db: Session = Depends(get_db)):
     _rate_limit(f"refresh:{request.client.host if request.client else 'unknown'}", get_settings().auth_rate_limit)
-    from .auth import decode_token
-
     decoded = decode_token(payload.refresh_token, "refresh")
     user = db.get(User, decoded["sub"])
     if not user or user.refresh_token_hash != token_hash(payload.refresh_token):
+        if decoded.get("fam"):
+            _revoke_refresh_family(decoded["fam"], db)
+            db.add(AuditLog(actor_id=decoded["sub"], action="auth.refresh_replay", target_type="refresh_family", target_id=decoded["fam"], redacted_payload={}))
+            db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_refresh"})
-    next_refresh = create_token(user.id, "refresh")
+    next_refresh = _rotate_refresh_token(user, decoded, payload.refresh_token, db)
     user.refresh_token_hash = token_hash(next_refresh)
     db.commit()
     return _auth_response(user, next_refresh)
@@ -205,8 +224,8 @@ def refresh(payload: RefreshPayload, request: Request, db: Session = Depends(get
 
 @router.post("/auth/logout")
 def logout(authorization: str | None = Header(default=None), user: User = Depends(require_user), db: Session = Depends(get_db)):
-    if authorization and authorization.startswith("Bearer "):
-        revoke_access_token(authorization.removeprefix("Bearer ").strip())
+    _revoke_authorization_header(authorization)
+    _revoke_user_refresh_tokens(user.id, db)
     user.refresh_token_hash = None
     db.add(AuditLog(actor_id=user.id, action="auth.logout", target_type="user", target_id=user.id, redacted_payload={}))
     db.commit()
@@ -239,7 +258,7 @@ def admin_login(payload: Credentials, request: Request, db: Session = Depends(ge
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_admin_credentials"})
     if password_needs_upgrade(user.password_hash):
         user.password_hash = hash_password(payload.password)
-    refresh = create_token(user.id, "refresh")
+    refresh = _issue_refresh_token(user, db, "admin")
     user.refresh_token_hash = token_hash(refresh)
     db.add(AuditLog(actor_id=user.id, action="admin.auth.login", target_type="admin", target_id=user.id, redacted_payload={"role": user.role}))
     db.commit()
@@ -253,8 +272,8 @@ def admin_me(admin: User = Depends(require_admin_role("admin"))):
 
 @router.post("/admin/auth/logout")
 def admin_logout(authorization: str | None = Header(default=None), admin: User = Depends(require_admin_role("admin")), db: Session = Depends(get_db)):
-    if authorization and authorization.startswith("Bearer "):
-        revoke_access_token(authorization.removeprefix("Bearer ").strip())
+    _revoke_authorization_header(authorization)
+    _revoke_user_refresh_tokens(admin.id, db)
     admin.refresh_token_hash = None
     db.add(AuditLog(actor_id=admin.id, action="admin.auth.logout", target_type="admin", target_id=admin.id, redacted_payload={}))
     db.commit()
@@ -373,7 +392,7 @@ def exercise_search(
     total = query.count()
     items = query.order_by(Exercise.name).offset((page - 1) * page_size).limit(page_size).all()
     return {
-        "items": [_exercise_payload(item, db, language, brief=True) for item in items],
+        "items": [_exercise_brief_payload(item) for item in items],
         "pagination": {"page": page, "page_size": page_size, "total": total},
         "filters": {"body_part": body_part, "equipment": equipment, "target": target},
         "media_policy": "external-license-required",
@@ -711,6 +730,83 @@ def _auth_response(user: User, refresh: str) -> dict[str, Any]:
     return {"user": _user_payload(user), "access_token": create_token(user.id), "refresh_token": refresh, "token_type": "bearer"}
 
 
+def _issue_refresh_token(user: User, db: Session, session_label: str, family_id: str | None = None) -> str:
+    family = family_id or "fam_" + secrets.token_hex(12)
+    token_id = "rt_" + secrets.token_hex(12)
+    token = create_token(user.id, "refresh", family_id=family, token_id=token_id)
+    issued_at = datetime.now(UTC)
+    expires_at = issued_at + timedelta(days=get_settings().refresh_token_days)
+    db.add(
+        AuthRefreshToken(
+            user_id=user.id,
+            family_id=family,
+            token_id=token_id,
+            token_hash=token_hash(token),
+            session_label=session_label,
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
+    )
+    return token
+
+
+def _validate_refresh_family(decoded: dict[str, Any], refresh_token: str, db: Session) -> AuthRefreshToken:
+    family_id = decoded.get("fam")
+    token_id = decoded.get("jti")
+    if not family_id or not token_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_refresh_claims"})
+    if get_token_revocation_store().is_refresh_family_revoked(family_id):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "refresh_family_revoked"})
+    record = db.query(AuthRefreshToken).filter(AuthRefreshToken.family_id == family_id, AuthRefreshToken.token_id == token_id).one_or_none()
+    now = datetime.now(UTC)
+    if not record or record.token_hash != token_hash(refresh_token) or record.revoked_at is not None or _as_utc(record.expires_at) < now:
+        _revoke_refresh_family(family_id, db)
+        db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_refresh"})
+    if record.rotated_at is not None:
+        _revoke_refresh_family(family_id, db)
+        db.add(AuditLog(actor_id=record.user_id, action="auth.refresh_replay", target_type="refresh_family", target_id=family_id, redacted_payload={}))
+        db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "refresh_replay"})
+    return record
+
+
+def _rotate_refresh_token(user: User, decoded: dict[str, Any], refresh_token: str, db: Session) -> str:
+    record = _validate_refresh_family(decoded, refresh_token, db)
+    next_refresh = _issue_refresh_token(user, db, record.session_label or "mobile", family_id=record.family_id)
+    next_decoded = decode_token(next_refresh, "refresh")
+    record.rotated_at = datetime.now(UTC)
+    record.replacement_token_id = next_decoded["jti"]
+    return next_refresh
+
+
+def _revoke_refresh_family(family_id: str, db: Session) -> None:
+    now = datetime.now(UTC)
+    records = db.query(AuthRefreshToken).filter(AuthRefreshToken.family_id == family_id).all()
+    for record in records:
+        record.revoked_at = record.revoked_at or now
+    get_token_revocation_store().revoke_refresh_family(family_id, get_settings().refresh_token_days * 24 * 60 * 60)
+
+
+def _revoke_user_refresh_tokens(user_id: str, db: Session) -> None:
+    records = db.query(AuthRefreshToken).filter(AuthRefreshToken.user_id == user_id, AuthRefreshToken.revoked_at.is_(None)).all()
+    for record in records:
+        _revoke_refresh_family(record.family_id, db)
+
+
+def _revoke_authorization_header(authorization: str | None) -> None:
+    if not authorization or not authorization.startswith("Bearer "):
+        return
+    token = authorization.removeprefix("Bearer ").strip()
+    decoded = decode_token(token, "access")
+    ttl = max(1, int(decoded.get("exp", 0)) - int(datetime.now(UTC).timestamp()))
+    get_token_revocation_store().revoke_access_token(decoded["jti"], ttl)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
 def _rate_limit(key: str, limit: int) -> None:
     settings = get_settings()
     now = datetime.now(UTC)
@@ -791,6 +887,19 @@ def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: boo
             "license_status": media.license_status if media else "external_terms_required",
         }
     return payload
+
+
+def _exercise_brief_payload(exercise: Exercise) -> dict[str, Any]:
+    return {
+        "id": exercise.id,
+        "slug": exercise.slug,
+        "name": exercise.name,
+        "body_part": exercise.body_part,
+        "equipment": exercise.equipment,
+        "target": exercise.target,
+        "secondary_muscles": exercise.secondary_muscles or [],
+        "media_policy": "detail_endpoint_only",
+    }
 
 
 def _record_recent(user_id: str, exercise_id: str, db: Session) -> None:

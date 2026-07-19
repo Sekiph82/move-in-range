@@ -7,12 +7,13 @@ MVP hardening changes:
 - Admin role headers are no longer accepted as proof of role. Admin endpoints require a signed Bearer token and database-backed role lookup.
 - Local access and refresh tokens include issuer, audience, type, issued-at, expiration, and token id claims.
 - Refresh tokens rotate on use, replay is rejected, and only token hashes are stored.
-- Logout clears the stored refresh token hash and revokes the presented access token for the current process.
+- Logout clears stored refresh-token family records and revokes the presented access token through Redis when available.
+- Refresh-token replay revokes the entire token family and records a security audit event.
 - Production settings reject the default signing secret, wildcard CORS, and development admin override.
 - Login, registration, refresh, readiness, plan generation, glucose, offline ingestion, admin login, and policy simulation have local fallback rate limits.
 - Audit payloads are redacted; `app.privacy.redact_for_log` must be used before writing arbitrary request-shaped data to ordinary logs.
 
 Known MVP limits:
 
-- Access-token revocation is in-memory for the local MVP. A Redis-backed or database-backed revocation store is required before multi-instance production use.
-- The admin app uses Bearer tokens in server-side fetches. If cookie sessions are added, HttpOnly, SameSite, Secure-in-production cookies and CSRF protection are required.
+- Access-token revocation falls back to in-memory only in development/test when Redis is unavailable. Production rejects that fallback.
+- The admin app now uses HttpOnly cookies and double-submit CSRF for state-changing admin session requests.

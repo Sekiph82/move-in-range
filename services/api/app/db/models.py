@@ -12,6 +12,20 @@ class User(TimestampMixin, Base):
     refresh_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deleted_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+class AuthRefreshToken(TimestampMixin, Base):
+    __tablename__ = "auth_refresh_tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    family_id: Mapped[str] = mapped_column(String(64), index=True)
+    token_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    session_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    issued_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    rotated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replacement_token_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
 class Profile(TimestampMixin, Base):
     __tablename__ = "profiles"
     id: Mapped[int] = mapped_column(primary_key=True)

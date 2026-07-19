@@ -1,6 +1,6 @@
 # Manual Mobile Test Checklist
 
-No Android emulator or physical device was used during this implementation pass. Automated Node tests cover timestamp timer behavior; real backgrounding, SecureStore persistence, and networking still require device validation.
+No Android emulator or physical device was used during this implementation pass. `adb` and `emulator` were not found on PATH, and Docker Desktop was not available for the local PostgreSQL runtime. Automated Node tests cover timestamp timer behavior, restart snapshot restore, token restoration, and account-scoped offline queue behavior; real backgrounding, SecureStore persistence, and networking still require device validation.
 
 ## Before Testing
 
@@ -48,4 +48,5 @@ Allow Windows Firewall access to port `8200`.
 | Glucose log and insights | NOT RUN | Backend and PostgreSQL integration tests cover write/read path. |
 | Offline queue retry | NOT RUN | Unit/API tests cover failed state, retry count, and duplicate handling. |
 | App restart resume | NOT RUN | API session resume exists; local persisted workout snapshot remains future work. |
+| Account switch with pending offline items | NOT RUN | Node outbox test covers account isolation; device storage behavior remains manual. |
 | Accessibility labels | NOT RUN | Static/manual device pass still required. |

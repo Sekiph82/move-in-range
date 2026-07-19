@@ -10,10 +10,28 @@ function mirToken(exp) {
 }
 
 test("offline queue never silently discards pending health records", () => {
-  const outbox = new OfflineOutbox();
+  const outbox = new OfflineOutbox("user-a");
   const item = outbox.enqueue("glucose", { value: 110, unit: "mg/dL" });
-  outbox.markFailed(item.id);
+  outbox.markFailed(item.id, "network");
   assert.equal(outbox.pending().length, 1);
+  assert.equal(outbox.pending()[0].lastError, "network");
+  assert.equal(outbox.queueCount(), 1);
+});
+
+test("offline queue isolates pending items by account and uses capped retry timing", () => {
+  let now = 1000;
+  const outbox = new OfflineOutbox("user-a", () => now);
+  const item = outbox.enqueue("workout_event", { session_id: "a" });
+  outbox.markFailed(item.id, "offline");
+  assert.equal(outbox.retryDue().length, 0);
+  now += 3000;
+  assert.equal(outbox.retryDue().length, 1);
+  outbox.switchAccount("user-b");
+  assert.equal(outbox.pending().length, 0);
+  outbox.enqueue("glucose", { value: 120 });
+  assert.equal(outbox.queueCount(), 1);
+  outbox.switchAccount("user-a");
+  assert.equal(outbox.queueCount(), 1);
 });
 
 test("pain flow pauses and offers substitution or stop", () => {
@@ -47,6 +65,29 @@ test("symptom flow invalidates active timer until a new readiness flow starts", 
   now = 15000;
   assert.equal(player.resume(), false);
   assert.equal(player.elapsedSeconds, 3);
+});
+
+test("workout snapshot restores active state without duplicate completion", () => {
+  let now = 0;
+  const player = new GuidedWorkoutPlayerState(() => now);
+  now = 4000;
+  player.skip();
+  assert.equal(player.recordCompletionSubmitted("complete-1"), true);
+  assert.equal(player.recordCompletionSubmitted("complete-1"), false);
+  const snapshot = player.snapshot("session-1");
+  now = 9000;
+  const restored = GuidedWorkoutPlayerState.restore(snapshot, () => now);
+  assert.equal(restored.currentIndex, 1);
+  assert.equal(restored.elapsedSeconds, 4);
+  assert.equal(restored.recordCompletionSubmitted("complete-1"), false);
+});
+
+test("stopped symptom snapshots do not resume normally after restart", () => {
+  const player = new GuidedWorkoutPlayerState(() => 1000);
+  player.reportSymptoms(["faintness"]);
+  const restored = GuidedWorkoutPlayerState.restore(player.snapshot("session-2"), () => 2000);
+  assert.equal(restored.timerInvalidated, true);
+  assert.equal(restored.resume(), false);
 });
 
 test("token store restores valid access tokens and rejects expired or invalid stored values", async () => {

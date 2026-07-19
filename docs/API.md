@@ -18,5 +18,17 @@ Implemented MVP endpoints include:
 - `POST /glucose`, `GET /insights/summary`
 - `POST /offline-events`
 - `GET /admin/policies`, `GET /admin/exercises`, `GET /admin/audit-logs`, `POST /admin/policy-simulator`
+- `GET /health`, `GET /ready`
 
 User-specific endpoints require Bearer tokens from local auth. Admin endpoints require Bearer tokens from `/admin/auth/login`; browser-controlled role headers such as `x-admin-role` are not trusted.
+
+Errors use:
+
+```json
+{
+  "code": "machine_readable_code",
+  "message": "safe user-facing message",
+  "correlation_id": "identifier",
+  "details": {}
+}
+```

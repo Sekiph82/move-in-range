@@ -21,3 +21,13 @@ test("MoveInRange local service URLs use canonical MVP ports", () => {
   }
   assert.deepEqual(offenders, []);
 });
+
+test("admin environment variables use canonical LOCAL_ADMIN names", () => {
+  const offenders = [];
+  for (const file of files) {
+    if (file.replace(/\\/g, "/").endsWith("tests/config.test.mjs")) continue;
+    const text = readFileSync(file, "utf8");
+    if (/ADMIN_LOCAL_EMAIL|ADMIN_LOCAL_PASSWORD/.test(text)) offenders.push(relative(process.cwd(), file));
+  }
+  assert.deepEqual(offenders, []);
+});
