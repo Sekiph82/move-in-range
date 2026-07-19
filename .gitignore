@@ -27,6 +27,7 @@ GoogleService-Info.plist
 
 # build outputs
 dist/
+**/dist/
 build/
 .next/
 .expo/

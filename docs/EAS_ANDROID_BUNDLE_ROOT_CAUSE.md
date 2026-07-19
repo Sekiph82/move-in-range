@@ -107,4 +107,4 @@ The archive does not contain a root `App.tsx`, `.git`, `.local`, `node_modules`,
 
 ## Runtime API Note
 
-Preview and production EAS profiles intentionally avoid localhost. Until a real staging API exists, the preview build uses `https://api.moveinrange.invalid` as an explicit non-local placeholder and native runtime validation remains blocked.
+Preview and production EAS profiles intentionally avoid localhost and committed placeholder API URLs. Set `EXPO_PUBLIC_API_BASE_URL` in the EAS preview environment after the Vercel API is deployed, then rebuild the fully working phone beta APK.

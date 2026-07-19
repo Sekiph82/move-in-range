@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from .auth import create_token, decode_token, hash_password, password_needs_upgrade, token_hash, verify_password
 from .email import get_email_sender
@@ -52,12 +53,14 @@ from .db.models import (
     ReadinessCheck,
     SessionEvent,
     SessionRecord,
+    SessionRevocation,
     SystemIncident,
     User,
     WearableSample,
 )
 from .db.session import get_db
-from .revocation import RedisTokenRevocationStore, get_token_revocation_store
+from .rate_limit import RateLimitExceeded, get_rate_limiter
+from .revocation import InMemoryTokenRevocationStore, PostgresTokenRevocationStore, RedisTokenRevocationStore, get_token_revocation_store
 from .security import require_admin_role, require_admin_roles, require_user
 from .settings import get_settings
 from .services.safety import EMERGENCY_MESSAGE, evaluate_safety
@@ -81,7 +84,6 @@ from .services.platform import (
 )
 
 router = APIRouter()
-_rate_limits: dict[str, list[datetime]] = {}
 ADMIN_ROLES = {"super_admin", "clinical_reviewer", "exercise_reviewer", "content_editor", "support", "analyst"}
 
 CONDITIONS = [
@@ -343,19 +345,32 @@ class RelationshipPayload(BaseModel):
 @router.get("/health")
 def health():
     settings = get_settings()
-    return {"status": "ok", "service": "moveinrange-api", "version": settings.service_version, "environment": settings.environment, "api_base_url": "http://localhost:8200"}
+    return {"status": "ok", "service": "moveinrange-api", "version": settings.service_version, "environment": settings.deployment_environment, "api_base_url": settings.api_base_url}
 
 
 @router.get("/ready")
 def ready(db: Session = Depends(get_db)):
     db.execute(text("select 1"))
     store = get_token_revocation_store()
+    limiter = get_rate_limiter()
+    exercise_count = db.query(Exercise.id).count()
+    try:
+        migration = db.execute(text("select version_num from alembic_version")).scalar_one_or_none()
+    except SQLAlchemyError:
+        migration = None
+    settings = get_settings()
     return {
         "status": "ready",
+        "postgresql": "connected" if "postgresql" in settings.database_url else "not_current_backend",
         "database": "ok",
-        "revocation_store": "redis" if isinstance(store, RedisTokenRevocationStore) else "development_in_memory",
+        "session_revocation": _revocation_store_name(store),
+        "revocation_store": _revocation_store_name(store),
+        "rate_limiter": limiter.backend,
+        "email": "resend_configured" if settings.email_sender == "resend" and settings.resend_api_key and settings.resend_from_email else f"{settings.email_sender}_configured",
+        "migration_head": migration,
+        "dataset": {"exercise_count": exercise_count, "available": exercise_count >= 1324},
         "service": "moveinrange-api",
-        "version": get_settings().service_version,
+        "version": settings.service_version,
     }
 
 
@@ -451,7 +466,8 @@ def forgot_password(payload: PasswordResetRequestPayload, request: Request, db: 
                 updated_at=datetime.now(UTC),
             )
         )
-        reset_link = f"{get_settings().product_web_base_url.rstrip('/')}/auth/reset-password?token={token}"
+        reset_base = (get_settings().password_reset_url_base or get_settings().product_web_base_url).rstrip("/")
+        reset_link = f"{reset_base}/auth/reset-password?token={token}"
         sender = get_email_sender()
         result = sender.send_password_reset(user.email or email, reset_link)
         db.add(
@@ -463,7 +479,7 @@ def forgot_password(payload: PasswordResetRequestPayload, request: Request, db: 
                 status=result.status,
                 provider_message_id=result.provider_message_id,
                 error_code=result.error_code,
-                redacted_payload={"expires_minutes": 30, "link_host": get_settings().product_web_base_url.rstrip("/")},
+                redacted_payload={"expires_minutes": 30, "link_host": reset_base},
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -1933,11 +1949,14 @@ def update_admin_user(user_id: str, payload: AdminUpdatePayload, admin=Depends(r
 @router.get("/admin/system")
 def admin_system(admin=Depends(require_admin_role("analyst")), db: Session = Depends(get_db)):
     store = get_token_revocation_store()
+    limiter = get_rate_limiter()
     return {
         "api": health(),
         "ready": ready(db),
         "postgresql": "configured" if "postgresql" in get_settings().database_url else "not_current_backend",
-        "redis": "configured" if isinstance(store, RedisTokenRevocationStore) else "development_fallback",
+        "redis": "configured_optional" if isinstance(store, RedisTokenRevocationStore) else "not_required",
+        "revocation": _revocation_store_name(store),
+        "rate_limiter": limiter.backend,
         "import_jobs": {"latest": "see audit logs"},
         "provider_status": [{"key": key, "status": value["status"]} for key, value in PROVIDER_REGISTRY.items()],
         "incidents": [_system_incident_payload(item) for item in db.query(SystemIncident).order_by(desc(SystemIncident.created_at)).limit(10).all()],
@@ -2225,7 +2244,12 @@ def _revoke_refresh_family(family_id: str, db: Session) -> None:
     records = db.query(AuthRefreshToken).filter(AuthRefreshToken.family_id == family_id).all()
     for record in records:
         record.revoked_at = record.revoked_at or now
-    get_token_revocation_store().revoke_refresh_family(family_id, get_settings().refresh_token_days * 24 * 60 * 60)
+    user_id = records[0].user_id if records else None
+    store = get_token_revocation_store()
+    if isinstance(store, PostgresTokenRevocationStore):
+        _record_postgres_revocation(db, "refresh_family", family_id, get_settings().refresh_token_days * 24 * 60 * 60, session_id=None, user_id=user_id, token_family_id=family_id, reason="refresh_family_revoked", actor_type="system", actor_id=user_id)
+    else:
+        store.revoke_refresh_family(family_id, get_settings().refresh_token_days * 24 * 60 * 60, user_id=user_id, reason="refresh_family_revoked", actor_type="system", actor_id=user_id)
 
 
 def _revoke_user_refresh_tokens(user_id: str, db: Session) -> None:
@@ -2240,7 +2264,48 @@ def _revoke_authorization_header(authorization: str | None) -> None:
     token = authorization.removeprefix("Bearer ").strip()
     decoded = decode_token(token, "access")
     ttl = max(1, int(decoded.get("exp", 0)) - int(datetime.now(UTC).timestamp()))
-    get_token_revocation_store().revoke_access_token(decoded["jti"], ttl)
+    get_token_revocation_store().revoke_access_token(decoded["jti"], ttl, user_id=decoded.get("sub"), reason="logout", actor_type="user", actor_id=decoded.get("sub"))
+
+
+def _record_postgres_revocation(
+    db: Session,
+    token_type: str,
+    identifier: str,
+    ttl_seconds: int,
+    *,
+    session_id: str | None,
+    user_id: str | None,
+    token_family_id: str | None,
+    reason: str,
+    actor_type: str,
+    actor_id: str | None,
+) -> None:
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(seconds=max(1, ttl_seconds))
+    identifier_hash = token_hash(identifier)
+    existing = db.query(SessionRevocation).filter(SessionRevocation.token_type == token_type, SessionRevocation.token_identifier_hash == identifier_hash).one_or_none()
+    if existing:
+        existing.expires_at = max(_as_utc(existing.expires_at), expires_at)
+        existing.reason = reason
+        existing.actor_type = actor_type
+        existing.actor_id = actor_id
+        existing.metadata_redacted = {"token_material_stored": False}
+    else:
+        db.add(
+            SessionRevocation(
+                session_id=session_id,
+                user_id=user_id,
+                token_family_id=token_family_id,
+                token_type=token_type,
+                token_identifier_hash=identifier_hash,
+                revoked_at=now,
+                expires_at=expires_at,
+                reason=reason,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                metadata_redacted={"token_material_stored": False},
+            )
+        )
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -2248,14 +2313,20 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _rate_limit(key: str, limit: int) -> None:
-    settings = get_settings()
-    now = datetime.now(UTC)
-    window_start = now - timedelta(seconds=settings.rate_limit_window_seconds)
-    hits = [hit for hit in _rate_limits.get(key, []) if hit >= window_start]
-    if len(hits) >= limit:
+    try:
+        get_rate_limiter().check(key, limit)
+    except RateLimitExceeded:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail={"code": "rate_limited"})
-    hits.append(now)
-    _rate_limits[key] = hits
+
+
+def _revocation_store_name(store: object) -> str:
+    if isinstance(store, PostgresTokenRevocationStore):
+        return "postgres"
+    if isinstance(store, RedisTokenRevocationStore):
+        return "redis"
+    if isinstance(store, InMemoryTokenRevocationStore):
+        return "development_in_memory"
+    return "unknown"
 
 
 def _user_payload(user: User) -> dict[str, Any]:

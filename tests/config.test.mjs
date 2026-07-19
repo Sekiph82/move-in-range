@@ -11,7 +11,7 @@ function trackedOrWorkspaceFiles() {
       .split(/\r?\n/)
       .filter(Boolean);
   } catch {
-    const ignoredDirs = new Set([".git", "node_modules", ".next", ".expo", ".pytest_cache", ".ruff_cache", ".local"]);
+    const ignoredDirs = new Set([".git", "node_modules", ".next", ".expo", ".expo-web-export", ".pytest_cache", ".ruff_cache", ".local", "dist", "build"]);
     const ignoredExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".db", ".sqlite"]);
     const found = [];
     const walk = (dir) => {
@@ -73,8 +73,10 @@ test("Android Expo config blocks broad storage and overlay permissions", () => {
   assert.equal(eas.build.preview.android.buildType, "apk");
   assert.equal(eas.build.preview.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN, "false");
   assert.equal(eas.build.production.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN, "false");
+  assert.equal("EXPO_PUBLIC_API_BASE_URL" in eas.build.preview.env, false);
+  assert.equal("EXPO_PUBLIC_API_BASE_URL" in eas.build.production.env, false);
   const releaseText = JSON.stringify([eas.build.preview, eas.build.production]);
-  assert.doesNotMatch(releaseText, /localhost|127\.0\.0\.1|10\.0\.2\.2|mailpit/i);
+  assert.doesNotMatch(releaseText, /localhost|127\.0\.0\.1|10\.0\.2\.2|mailpit|api\.moveinrange\.invalid/i);
 });
 
 test("Android package identifier is consistent across EAS documentation", () => {

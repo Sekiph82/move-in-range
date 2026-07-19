@@ -1,0 +1,25 @@
+.git
+.local
+.pytest-tmp
+.pytest_cache
+.ruff_cache
+.expo
+.expo-web-export
+node_modules
+apps/*/node_modules
+packages/*/node_modules
+test-results
+coverage
+playwright-report
+Docker volumes
+*.dump
+*.sql
+*.sqlite
+*.db
+*.apk
+*.aab
+apps/mobile/android
+apps/mobile/dist
+apps/mobile/.expo
+exercises-dataset-main
+../exercises-dataset-main

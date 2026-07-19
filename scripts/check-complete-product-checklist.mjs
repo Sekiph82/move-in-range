@@ -182,6 +182,45 @@ if (!/Stacked Merge Rehearsal/i.test(readFileSync("docs/STACKED_MERGE_REHEARSAL.
   errors.push("Merge rehearsal lacks command evidence.");
 }
 
+const zeroCostDocs = [
+  "docs/ZERO_COST_BETA_DEPLOYMENT.md",
+  "docs/SUPABASE_SETUP.md",
+  "docs/RESEND_SETUP.md",
+  "docs/VERCEL_DEPLOYMENT.md",
+  "docs/IOS_BETA_OPTIONS.md",
+  "docs/REDIS_TO_POSTGRES_MIGRATION.md"
+].map((path) => readFileSync(path, "utf8")).join("\n");
+const stagingExamples = [
+  ".env.example",
+  "infrastructure/staging.env.example",
+  "infrastructure/production.env.example"
+].map((path) => readFileSync(path, "utf8")).join("\n");
+if (!/SESSION_REVOCATION_BACKEND=postgres/.test(stagingExamples) || !/RATE_LIMIT_BACKEND=postgres/.test(stagingExamples)) {
+  errors.push("Staging examples must use PostgreSQL revocation and rate limiting.");
+}
+if (/REDIS_URL=<managed redis URL>|Upstash/i.test(stagingExamples)) {
+  errors.push("Staging examples require Redis or Upstash.");
+}
+if (!/EMAIL_SENDER=resend/.test(stagingExamples) || !/RESEND_FROM_EMAIL/.test(stagingExamples)) {
+  errors.push("Staging examples must require Resend sender configuration.");
+}
+if (/EMAIL_SENDER=console/i.test(readFileSync("infrastructure/staging.env.example", "utf8")) || /EMAIL_SENDER=console/i.test(readFileSync("infrastructure/production.env.example", "utf8"))) {
+  errors.push("Staging or production examples allow console email.");
+}
+if (!/pooler\.supabase\.com/.test(zeroCostDocs) || !/DATABASE_DISABLE_PREPARED_STATEMENTS=true/.test(zeroCostDocs)) {
+  errors.push("Supabase serverless pooler configuration is not documented.");
+}
+if (!/ENABLE_STARTUP_DB_INIT=false/.test(zeroCostDocs) || !/Alembic is authoritative/i.test(zeroCostDocs)) {
+  errors.push("Serverless docs must forbid request-startup migrations/schema initialization.");
+}
+if (/TestFlight[\s\S]*No Apple Developer membership required/i.test(zeroCostDocs)) {
+  errors.push("iOS docs imply TestFlight is free without Apple Developer membership.");
+}
+const androidHandoff = readFileSync("docs/ANDROID_BETA_BUILD_HANDOFF.md", "utf8");
+if (/Current artifact status: available/i.test(androidHandoff) && /https:\/\/api\.moveinrange\.invalid/i.test(androidHandoff) && /fully working/i.test(androidHandoff)) {
+  errors.push("Android handoff marks a placeholder-API build as fully working.");
+}
+
 if (errors.length) {
   console.error(errors.join("\n"));
   process.exit(1);

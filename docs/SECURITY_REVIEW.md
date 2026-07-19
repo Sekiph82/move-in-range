@@ -15,5 +15,5 @@ MVP hardening changes:
 
 Known MVP limits:
 
-- Access-token revocation falls back to in-memory only in development/test when Redis is unavailable. Production rejects that fallback.
+- Access-token revocation uses PostgreSQL by default for staging/production. In-memory revocation is allowed only when explicitly selected in development/test; deployment rejects that fallback.
 - The admin app now uses HttpOnly cookies and double-submit CSRF for state-changing admin session requests.

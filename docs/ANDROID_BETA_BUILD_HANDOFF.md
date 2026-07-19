@@ -1,6 +1,6 @@
 # Android Beta Build Handoff
 
-Current artifact status: available. Failed EAS build `f19b94bf-f646-499f-86dd-258a50d516b6` used the repository root as a traditional Expo app and tried `expo/AppEntry.js` -> `../../App`; the successful retry below confirms `apps/mobile` is now the authoritative EAS app root.
+Current artifact status: root-cause validation APK available; fully working phone beta APK pending Vercel API URL. Failed EAS build `f19b94bf-f646-499f-86dd-258a50d516b6` used the repository root as a traditional Expo app and tried `expo/AppEntry.js` -> `../../App`; the successful retry below confirms `apps/mobile` is now the authoritative EAS app root.
 
 Successful preview artifact:
 
@@ -16,6 +16,7 @@ Successful preview artifact:
 - SDK/app version/build: Expo SDK `53.0.0`; app version `0.1.0`; Android build version `1`.
 - Created/completed: `2026-07-19T14:41:14.123Z` / `2026-07-19T14:53:34.292Z`; expires `2026-08-02T14:41:14.157Z`.
 - Build retry used remote Android credentials; because no local `keytool` was installed, EAS generated a cloud keystore during the non-interactive preview build.
+- Runtime note: this APK was produced before the zero-cost Vercel API URL existed. It validates EAS app-root and APK generation, but a new fully working phone beta APK must be built after `EXPO_PUBLIC_API_BASE_URL` is set in the EAS preview environment.
 
 Validated locally:
 
@@ -93,8 +94,9 @@ Use the existing EAS project. The successful preview retry used EAS remote Andro
 
 Preview API configuration:
 
-- `apps/mobile/eas.json` intentionally does not embed localhost for preview/production.
-- Until a real staging API exists, preview uses `https://api.moveinrange.invalid`; APK runtime validation remains blocked because the app cannot reach a real API.
+- `apps/mobile/eas.json` intentionally does not embed localhost or placeholder API URLs for preview/production.
+- Set `EXPO_PUBLIC_API_BASE_URL` through EAS environment variables after the Vercel API is deployed.
+- APK runtime validation remains blocked until the app is rebuilt against a real public API and installed on a device.
 
 APK installation:
 

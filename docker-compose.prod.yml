@@ -14,15 +14,6 @@ services:
       retries: 10
     restart: "no"
 
-  redis:
-    image: redis:7-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: "no"
-
   api:
     build:
       context: .
@@ -30,17 +21,19 @@ services:
     environment:
       ENVIRONMENT: production
       DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
+      SESSION_REVOCATION_BACKEND: ${SESSION_REVOCATION_BACKEND:-postgres}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-postgres}
       AUTH_SECRET: ${AUTH_SECRET}
       LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL}
       LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD}
+      EMAIL_SENDER: ${EMAIL_SENDER:-resend}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
       CORS_ORIGINS: ${CORS_ORIGINS}
     ports:
       - "8200:8200"
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8200/api/v1/ready', timeout=5)); raise SystemExit(0 if data.get('status') == 'ready' else 1)\""]

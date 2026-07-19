@@ -18,6 +18,9 @@ def _client(tmp_path, monkeypatch, **env):
     revocation_mod = importlib.import_module("app.revocation")
     importlib.reload(revocation_mod)
     revocation_mod.get_token_revocation_store.cache_clear()
+    rate_limit_mod = importlib.import_module("app.rate_limit")
+    importlib.reload(rate_limit_mod)
+    rate_limit_mod.get_rate_limiter.cache_clear()
     auth_mod = importlib.import_module("app.auth")
     importlib.reload(auth_mod)
     session_mod = importlib.import_module("app.db.session")
@@ -361,26 +364,31 @@ def test_production_rejects_default_secret_and_wildcard_cors(monkeypatch):
         "AUTH_SECRET": "strong-production-secret",
         "LOCAL_ADMIN_PASSWORD": "strong-admin-password",
         "CORS_ORIGINS": "https://admin.example.com",
-        "EMAIL_SENDER": "smtp",
+        "EMAIL_SENDER": "resend",
+        "RESEND_API_KEY": "test_resend_secret",
+        "RESEND_FROM_EMAIL": "MoveInRange <no-reply@example.com>",
         "ENABLE_DEVELOPMENT_RESET_PREVIEW": "false",
         "ENABLE_E2E_SEED": "false",
         "ADMIN_COOKIE_SECURE": "true",
-        "SMTP_HOST": "smtp.example.com",
         "PRODUCT_WEB_BASE_URL": "https://app.example.com",
         "API_BASE_URL": "https://api.example.com",
+        "DATABASE_URL": "postgresql+psycopg://postgres.ref:pw@aws-0-us-east-1.pooler.supabase.com:6543/postgres",
+        "SESSION_REVOCATION_BACKEND": "postgres",
+        "RATE_LIMIT_BACKEND": "postgres",
     }
     for key, value in safe_production.items():
         monkeypatch.setenv(key, value)
 
     for key, bad_value in {
-        "ENABLE_DEVELOPMENT_RESET_PREVIEW": "true",
-        "ENABLE_E2E_SEED": "true",
-        "ADMIN_COOKIE_SECURE": "false",
-        "SMTP_HOST": "mailpit",
-        "PRODUCT_WEB_BASE_URL": "http://localhost:3210",
-        "API_BASE_URL": "http://localhost:8200",
-        "EMAIL_FROM": "no-reply@example.com\nbcc: attacker@example.com",
-    }.items():
+            "ENABLE_DEVELOPMENT_RESET_PREVIEW": "true",
+            "ENABLE_E2E_SEED": "true",
+            "ADMIN_COOKIE_SECURE": "false",
+            "EMAIL_SENDER": "console",
+            "PRODUCT_WEB_BASE_URL": "http://localhost:3210",
+            "API_BASE_URL": "http://localhost:8200",
+            "EMAIL_FROM": "no-reply@example.com\nbcc: attacker@example.com",
+            "DATABASE_URL": "postgresql+psycopg://moveinrange:moveinrange@localhost:5432/moveinrange",
+        }.items():
         monkeypatch.setenv(key, bad_value)
         settings_mod.get_settings.cache_clear()
         with pytest.raises(ValueError):
@@ -410,30 +418,43 @@ def test_production_rejects_default_secret_and_wildcard_cors(monkeypatch):
         settings_mod.get_settings()
 
 
-def test_ready_endpoint_and_production_revocation_require_redis(tmp_path, monkeypatch):
+def test_ready_endpoint_and_production_revocation_use_postgres_without_redis(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, REDIS_URL="redis://localhost:1/0")
     ready = client.get("/api/v1/ready")
     assert ready.status_code == 200
-    assert ready.json()["revocation_store"] == "development_in_memory"
+    assert ready.json()["revocation_store"] == "postgres"
+    assert ready.json()["rate_limiter"] == "postgres"
 
     settings_mod = importlib.import_module("app.settings")
     revocation_mod = importlib.import_module("app.revocation")
-    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("MOVEINRANGE_ENV", "staging")
     monkeypatch.setenv("AUTH_SECRET", "strong-production-secret")
     monkeypatch.setenv("LOCAL_ADMIN_PASSWORD", "strong-admin-password")
     monkeypatch.setenv("CORS_ORIGINS", "https://admin.example.com")
-    monkeypatch.setenv("EMAIL_SENDER", "smtp")
+    monkeypatch.setenv("EMAIL_SENDER", "resend")
+    monkeypatch.setenv("RESEND_API_KEY", "test_resend_secret")
+    monkeypatch.setenv("RESEND_FROM_EMAIL", "MoveInRange <no-reply@example.com>")
     monkeypatch.setenv("ENABLE_DEVELOPMENT_RESET_PREVIEW", "false")
     monkeypatch.setenv("ADMIN_COOKIE_SECURE", "true")
-    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("PRODUCT_WEB_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("API_BASE_URL", "https://api.example.com")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:1/0")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres.ref:pw@aws-0-us-east-1.pooler.supabase.com:6543/postgres")
+    monkeypatch.setenv("SESSION_REVOCATION_BACKEND", "memory")
     settings_mod.get_settings.cache_clear()
+    with pytest.raises(ValueError):
+        settings_mod.get_settings()
+    monkeypatch.setenv("SESSION_REVOCATION_BACKEND", "postgres")
+    monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
+    settings_mod.get_settings.cache_clear()
+    with pytest.raises(ValueError):
+        settings_mod.get_settings()
+    monkeypatch.setenv("RATE_LIMIT_BACKEND", "postgres")
+    settings_mod.get_settings.cache_clear()
+    assert settings_mod.get_settings().session_revocation_backend == "postgres"
     revocation_mod = importlib.reload(revocation_mod)
     revocation_mod.get_token_revocation_store.cache_clear()
-    with pytest.raises(RuntimeError):
-        revocation_mod.get_token_revocation_store()
+    assert revocation_mod.get_token_revocation_store().__class__.__name__ == "PostgresTokenRevocationStore"
 
 
 def test_log_redaction_removes_tokens_passwords_and_health_values():
@@ -459,6 +480,56 @@ def test_rate_limit_blocks_auth_bursts(tmp_path, monkeypatch):
     second = client.post("/api/v1/auth/login", json={"email": "none@example.test", "password": "not-real-pass"})
     assert first.status_code == 401
     assert second.status_code == 429
+
+
+def test_postgres_revocation_store_persists_hashes_and_cleans_expired(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    assert client.get("/api/v1/ready").json()["revocation_store"] == "postgres"
+    payload, _ = _register(client, "revocation-store@example.test")
+    user_id = payload["user"]["id"]
+    revocation_mod = importlib.import_module("app.revocation")
+    store = revocation_mod.get_token_revocation_store()
+    store.revoke_access_token("raw-access-jti", 60, user_id=user_id, reason="logout")
+    store.revoke_refresh_family("raw-family-id", 60, user_id=user_id, reason="password_reset")
+    assert store.is_access_token_revoked("raw-access-jti") is True
+    assert store.is_refresh_family_revoked("raw-family-id") is True
+
+    session_mod = importlib.import_module("app.db.session")
+    models = importlib.import_module("app.db.models")
+    with session_mod.SessionLocal() as db:
+        rows = db.query(models.SessionRevocation).all()
+        assert rows
+        serialized = " ".join(row.token_identifier_hash for row in rows)
+        assert "raw-access-jti" not in serialized
+        assert "raw-family-id" not in serialized
+        for row in rows:
+            row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+    assert store.cleanup_expired() >= 2
+
+
+def test_postgres_rate_limiter_windows_keys_and_cleanup(tmp_path, monkeypatch):
+    _client(tmp_path, monkeypatch, AUTH_RATE_LIMIT="2", RATE_LIMIT_WINDOW_SECONDS="1")
+    rate_limit_mod = importlib.import_module("app.rate_limit")
+    limiter = rate_limit_mod.get_rate_limiter()
+    limiter.check("login:ip:1.2.3.4", 2)
+    limiter.check("login:ip:1.2.3.4", 2)
+    with pytest.raises(rate_limit_mod.RateLimitExceeded):
+        limiter.check("login:ip:1.2.3.4", 2)
+    limiter.check("login:ip:5.6.7.8", 2)
+    time.sleep(1.1)
+    limiter.check("login:ip:1.2.3.4", 2)
+
+    session_mod = importlib.import_module("app.db.session")
+    models = importlib.import_module("app.db.models")
+    with session_mod.SessionLocal() as db:
+        buckets = db.query(models.RateLimitBucket).all()
+        assert buckets
+        assert all("1.2.3.4" not in bucket.bucket_key for bucket in buckets)
+        for bucket in buckets:
+            bucket.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+    assert limiter.cleanup_expired() >= 1
 
 
 def test_safety_stops_object_ownership_and_offline_idempotency(tmp_path, monkeypatch):

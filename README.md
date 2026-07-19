@@ -150,7 +150,7 @@ Invoke-RestMethod http://localhost:8200/api/v1/ready
 
 ## Release Candidate Notes
 
-- Access-token revocation uses Redis when available and refuses in-memory fallback in production.
+- Access-token revocation uses PostgreSQL by default for staging/production, Redis only when explicitly selected, and refuses in-memory fallback in deployment.
 - Refresh tokens are tracked by DB-backed token family records; replay revokes the family.
 - SQLite remains a local fallback only. PostgreSQL is the authoritative CI path.
 - Real Android/emulator validation must use the URL guidance below; Metro startup alone is not a device pass.

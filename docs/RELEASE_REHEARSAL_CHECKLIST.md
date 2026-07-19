@@ -23,9 +23,9 @@ Status key: `[x] COMPLETE`, `[!] BLOCKED`, `[-] NOT APPLICABLE`.
   - UI route: not applicable
   - persisted result: unsafe production configuration fails before serving traffic
   - unit test: `test_production_rejects_default_secret_and_wildcard_cors`
-  - PostgreSQL integration test: production revocation guard requires Redis
+  - PostgreSQL integration test: staging/production revocation guard requires durable PostgreSQL or explicitly configured Redis, with zero-cost staging using PostgreSQL
   - browser E2E: not applicable
-  - Docker result: API health requires Redis revocation store
+  - Docker result: API health requires PostgreSQL revocation and PostgreSQL rate limiting; Redis remains optional local integration coverage
   - Android artifact evidence: environment URL review documented in Android handoff
   - blocker: none
   - go/no-go result: GO
@@ -124,9 +124,9 @@ Status key: `[x] COMPLETE`, `[!] BLOCKED`, `[-] NOT APPLICABLE`.
   - PostgreSQL integration test: backend dependencies passed
   - browser E2E: product web E2E passed
   - Docker result: Docker suite passed
-  - Android artifact evidence: APK URL `https://expo.dev/artifacts/eas/wzoDpl-wBfzaOCmCl2cTJcUUfQZN1W83bf3UjQKDlYQ.apk`; local download `.local/eas-artifacts/MoveInRange-preview-ffa5f78e.apk`; size `83013799` bytes; SHA-256 `32B03B42E89A09255699AA32F9CC938230703AEBD92376FFE5559CBBC296D34E`; package `com.moveinrange.app`; profile `preview`; distribution `INTERNAL`
-  - blocker: none for installable artifact; runtime API is explicit non-local placeholder until staging API exists
-  - go/no-go result: GO for native artifact
+  - Android artifact evidence: APK URL `https://expo.dev/artifacts/eas/wzoDpl-wBfzaOCmCl2cTJcUUfQZN1W83bf3UjQKDlYQ.apk`; local download `.local/eas-artifacts/MoveInRange-preview-ffa5f78e.apk`; size `83013799` bytes; SHA-256 `32B03B42E89A09255699AA32F9CC938230703AEBD92376FFE5559CBBC296D34E`; package `com.moveinrange.app`; profile `preview`; distribution `INTERNAL`; root-cause validation only
+  - blocker: none for root-cause installable artifact; fully working phone beta APK requires Vercel API URL in EAS preview env and a rebuild
+  - go/no-go result: GO for native artifact generation, BLOCKED EXTERNAL for fully working phone beta APK
 
 - [!] BLOCKED Native Android manual device acceptance
   - code evidence: `docs/ANDROID_BETA_BUILD_HANDOFF.md`
@@ -139,7 +139,7 @@ Status key: `[x] COMPLETE`, `[!] BLOCKED`, `[-] NOT APPLICABLE`.
   - browser E2E: web-compatible coverage passed
   - Docker result: local backend stack healthy
   - Android artifact evidence: EAS preview APK `ffa5f78e-d11b-4a42-8bf5-58e6d14e0b2f` is available but not installed locally
-  - blocker: Android SDK/emulator/device unavailable; preview APK API target is `https://api.moveinrange.invalid` until a real staging API is configured
+  - blocker: Android SDK/emulator/device unavailable; a new preview APK must be rebuilt after a real Vercel API URL is configured in EAS
   - go/no-go result: BLOCKED EXTERNAL
 
 - [x] COMPLETE Dependency review

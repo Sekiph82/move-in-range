@@ -25,7 +25,7 @@ Offline ingestion uses the database unique constraint instead of an in-memory de
 
 ## Auth
 
-Refresh-token family records are indexed by `user_id`, `family_id`, `token_id`, `token_hash`, and `expires_at`. Access-token revocation checks use Redis when available, avoiding database reads on every request.
+Refresh-token family records are indexed by `user_id`, `family_id`, `token_id`, `token_hash`, and `expires_at`. Access-token revocation checks use the indexed `session_revocations` PostgreSQL table in staging and production; Redis remains an optional local backend when explicitly selected.
 
 ## PostgreSQL Plans
 

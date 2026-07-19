@@ -48,6 +48,46 @@ class EmailDeliveryAttempt(TimestampMixin, Base):
     error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
     redacted_payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
+class SessionRevocation(TimestampMixin, Base):
+    __tablename__ = "session_revocations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    token_family_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    token_type: Mapped[str] = mapped_column(String(40), index=True)
+    token_identifier_hash: Mapped[str] = mapped_column(String(128), index=True)
+    revoked_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    reason: Mapped[str] = mapped_column(String(80), default="unspecified", index=True)
+    actor_type: Mapped[str] = mapped_column(String(40), default="system", index=True)
+    actor_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    metadata_redacted: Mapped[dict] = mapped_column(JSON, default=dict)
+    __table_args__ = (UniqueConstraint("token_type", "token_identifier_hash"),)
+
+class RateLimitBucket(Base):
+    __tablename__ = "rate_limit_buckets"
+    bucket_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    window_started_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    window_seconds: Mapped[int] = mapped_column(Integer)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    limit_value: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+
+class BackgroundJob(TimestampMixin, Base):
+    __tablename__ = "background_jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(80), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    payload_redacted: Mapped[dict] = mapped_column(JSON, default=dict)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    available_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    locked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    locked_by: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    completed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
 class Profile(TimestampMixin, Base):
     __tablename__ = "profiles"
     id: Mapped[int] = mapped_column(primary_key=True)
