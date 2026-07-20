@@ -21,7 +21,7 @@ export default function MoveScreen() {
             <Text style={{ color: theme.primary, fontWeight: "700" }}>Exercise library</Text>
           </Pressable>
         </Link>
-        <Link href="/workout/library" asChild>
+        <Link href="/quick-session" asChild>
           <Pressable accessibilityRole="link" style={{ minHeight: 40, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface }}>
             <Text style={{ color: theme.primary, fontWeight: "700" }}>Workout player</Text>
           </Pressable>

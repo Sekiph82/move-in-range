@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { Link, router } from "expo-router";
 import { useTheme } from "../../theme";
+import { TABS_ROUTE } from "../auth/sessionGate";
 
 export function ActionButton({ label, onPress, disabled, tone = "primary" }: { label: string; onPress: () => void; disabled?: boolean; tone?: "primary" | "safety" }) {
   const theme = useTheme();
@@ -128,7 +129,7 @@ export function RouteHeader({ title, subtitle }: { title: string; subtitle: stri
   const theme = useTheme();
   return (
     <View style={{ gap: 6 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace("/(tabs)")}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace(TABS_ROUTE)}>
         <Text style={{ color: theme.primary, fontWeight: "700" }}>Back</Text>
       </Pressable>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>{title}</Text>

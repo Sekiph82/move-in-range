@@ -5,6 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { loginUser, logoutUser, registerUser, requestPasswordReset, resetPassword } from "../../api";
 import { forgotPasswordSchema, loginSchema, registerSchema, resetPasswordSchema } from "../validation/schemas";
 import { ActionButton, BodyText, ChoiceChip, ErrorText, Panel, SecondaryLink, TextField } from "../shared/ui";
+import { LOGIN_ROUTE, ONBOARDING_ROUTE, REGISTER_ROUTE } from "./sessionGate";
 
 type AuthMode = "login" | "register" | "forgot-password" | "reset-password" | "reset-password-success" | "session-expired";
 
@@ -28,11 +29,11 @@ export function AuthScreen({ mode = "login" }: { mode?: AuthMode }) {
 
   const login = useMutation({
     mutationFn: () => loginUser({ email, password }),
-    onSuccess: () => router.replace("/onboarding")
+    onSuccess: () => router.replace(ONBOARDING_ROUTE)
   });
   const register = useMutation({
     mutationFn: () => registerUser({ preferredName, email, password, marketingConsent }),
-    onSuccess: () => router.replace("/onboarding")
+    onSuccess: () => router.replace(ONBOARDING_ROUTE)
   });
   const forgot = useMutation({
     mutationFn: () => requestPasswordReset(email),
@@ -42,13 +43,13 @@ export function AuthScreen({ mode = "login" }: { mode?: AuthMode }) {
     mutationFn: () => resetPassword({ token: resetToken, password }),
     onSuccess: () => router.replace("/auth/reset-password-success")
   });
-  const logout = useMutation({ mutationFn: logoutUser, onSuccess: () => router.replace("/auth/login") });
+  const logout = useMutation({ mutationFn: logoutUser, onSuccess: () => router.replace(LOGIN_ROUTE) });
 
   if (mode === "session-expired") {
     return (
       <Panel title="Session expired">
         <BodyText>Your secure session expired. Sign in again to continue where you left off.</BodyText>
-        <ActionButton label="Sign in again" onPress={() => router.replace("/auth/login")} />
+        <ActionButton label="Sign in again" onPress={() => router.replace(LOGIN_ROUTE)} />
       </Panel>
     );
   }
@@ -63,7 +64,7 @@ export function AuthScreen({ mode = "login" }: { mode?: AuthMode }) {
         {resetRequestMessage ? <BodyText>{resetRequestMessage}</BodyText> : null}
         <ActionButton label={forgot.isPending ? "Sending..." : "Send reset instructions"} disabled={!forgotValidation.success} onPress={() => forgot.mutate()} />
         <SecondaryLink href="/auth/reset-password" label="I have a reset token" />
-        <SecondaryLink href="/auth/login" label="Back to sign in" />
+        <SecondaryLink href={LOGIN_ROUTE} label="Back to sign in" />
         <ErrorText error={forgot.error} />
       </Panel>
     );
@@ -79,7 +80,7 @@ export function AuthScreen({ mode = "login" }: { mode?: AuthMode }) {
         <ChoiceChip label={showPassword ? "Hide password" : "Show password"} selected={showPassword} onPress={() => setShowPassword(!showPassword)} />
         {errors.map((error) => <BodyText key={error} muted>{error}</BodyText>)}
         <ActionButton label={reset.isPending ? "Updating..." : "Update password"} disabled={!resetValidation.success} onPress={() => reset.mutate()} />
-        <SecondaryLink href="/auth/login" label="Back to sign in" />
+        <SecondaryLink href={LOGIN_ROUTE} label="Back to sign in" />
         <ErrorText error={reset.error} />
       </Panel>
     );
@@ -89,7 +90,7 @@ export function AuthScreen({ mode = "login" }: { mode?: AuthMode }) {
     return (
       <Panel title="Password updated">
         <BodyText>Your password has been changed and existing sessions were signed out.</BodyText>
-        <ActionButton label="Sign in" onPress={() => router.replace("/auth/login")} />
+        <ActionButton label="Sign in" onPress={() => router.replace(LOGIN_ROUTE)} />
       </Panel>
     );
   }
@@ -109,7 +110,7 @@ export function AuthScreen({ mode = "login" }: { mode?: AuthMode }) {
         </View>
         {errors.map((error) => <BodyText key={error} muted>{error}</BodyText>)}
         <ActionButton label={register.isPending ? "Creating account..." : "Create account"} disabled={!registerValidation.success} onPress={() => register.mutate()} />
-        <SecondaryLink href="/auth/login" label="Already have an account? Sign in" />
+        <SecondaryLink href={LOGIN_ROUTE} label="Already have an account? Sign in" />
         <ErrorText error={register.error} />
       </Panel>
     );
@@ -126,7 +127,7 @@ export function AuthScreen({ mode = "login" }: { mode?: AuthMode }) {
       </View>
       {errors.map((error) => <BodyText key={error} muted>{error}</BodyText>)}
       <ActionButton label={login.isPending ? "Signing in..." : "Sign in"} disabled={!loginValidation.success} onPress={() => login.mutate()} />
-      <SecondaryLink href="/auth/register" label="Create an account" />
+      <SecondaryLink href={REGISTER_ROUTE} label="Create an account" />
       <SecondaryLink href="/auth/forgot-password" label="Forgot password?" />
       {process.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN === "true" ? <BodyText muted>Development-only demo login is enabled for this build.</BodyText> : null}
       <ActionButton label="Clear saved session" onPress={() => logout.mutate()} />

@@ -11,9 +11,8 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
-          <SessionGuard>
-            <Stack screenOptions={{ headerShown: false }} />
-          </SessionGuard>
+          <SessionGuard />
+          <Stack screenOptions={{ headerShown: false }} />
         </ThemeProvider>
       </QueryClientProvider>
     </SafeAreaProvider>

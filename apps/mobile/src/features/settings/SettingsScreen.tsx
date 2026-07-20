@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { apiFetch, logoutUser, recordConsent, saveCapacityProfile, saveGoalsTargets, saveProfile } from "../../api";
+import { LOGIN_ROUTE } from "../auth/sessionGate";
 import { ActionButton, BodyText, ErrorText, LoadingState, Panel } from "../shared/ui";
 
 export function SettingsScreen() {
@@ -15,7 +16,7 @@ export function SettingsScreen() {
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["profile"] })
   });
-  const logoutMutation = useMutation({ mutationFn: logoutUser, onSuccess: () => router.replace("/auth/login") });
+  const logoutMutation = useMutation({ mutationFn: logoutUser, onSuccess: () => router.replace(LOGIN_ROUTE) });
   return (
     <Panel title="Health settings">
       {profile.isLoading ? <LoadingState /> : null}

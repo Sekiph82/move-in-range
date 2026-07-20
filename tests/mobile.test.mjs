@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox.ts");
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
@@ -10,11 +10,55 @@ const { loginSchema, registerSchema, resetPasswordSchema, glucoseSchema, inviteS
 const { resolveWorkoutMedia, scheduleLocalVoiceCues } = await import("../apps/mobile/src/guidance/mediaVoice.ts");
 const { canActivateProvider, providerBlockedReason } = await import("../apps/mobile/src/integrations/providerState.ts");
 const { paramsFor } = await import("../apps/mobile/src/features/exercises/filters.ts");
-const { resolveSessionGate } = await import("../apps/mobile/src/features/auth/sessionGate.ts");
+const { LOGIN_ROUTE, REGISTER_ROUTE, resolveSessionGate } = await import("../apps/mobile/src/features/auth/sessionGate.ts");
 
 function mirToken(exp) {
   const body = btoa(JSON.stringify({ exp })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `mir.${body}.signature`;
+}
+
+function walkMobileFiles(dir = "apps/mobile") {
+  const ignored = new Set(["node_modules", ".expo", ".expo-web-export", "dist"]);
+  const files = [];
+  for (const entry of readdirSync(dir)) {
+    const path = `${dir}/${entry}`;
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      if (!ignored.has(entry)) files.push(...walkMobileFiles(path));
+      continue;
+    }
+    if (/\.(tsx?|jsx?|json|cjs|mjs)$/.test(entry)) files.push(path);
+  }
+  return files;
+}
+
+function routeVariantsForFile(file) {
+  const route = file
+    .replace(/\\/g, "/")
+    .replace(/^apps\/mobile\/app\//, "")
+    .replace(/\.tsx$/, "");
+  if (route === "_layout" || route.endsWith("/_layout")) return [];
+  const stripIndex = (value) => value.replace(/\/index$/, "").replace(/^index$/, "");
+  const toHref = (value) => `/${value}`.replace(/\/$/, "") || "/";
+  const withGroups = toHref(stripIndex(route));
+  const publicRoute = toHref(stripIndex(route.split("/").filter((segment) => !/^\(.+\)$/.test(segment)).join("/")));
+  return [...new Set([withGroups, publicRoute])];
+}
+
+function mobileRoutes() {
+  return new Set(walkMobileFiles("apps/mobile/app").filter((file) => file.endsWith(".tsx")).flatMap(routeVariantsForFile));
+}
+
+function routePatternMatches(routes, target) {
+  if (!target.startsWith("/")) return false;
+  if (routes.has(target)) return true;
+  const normalizedTarget = target.replace(/\$\{[^}]+\}/g, "__dynamic__");
+  for (const route of routes) {
+    const pattern = route.replace(/\[[^\]]+\]/g, "__dynamic__");
+    if (pattern === normalizedTarget) return true;
+    if (normalizedTarget.includes("__dynamic__") && pattern.startsWith(normalizedTarget.split("__dynamic__")[0])) return true;
+  }
+  return false;
 }
 
 test("offline queue never silently discards pending health records", () => {
@@ -191,6 +235,53 @@ test("Expo Router exposes the functional product route family", () => {
   }
 });
 
+test("Expo Router SDK 54 auth routes resolve to valid absolute hrefs", () => {
+  const routes = mobileRoutes();
+  assert.equal(routes.has(LOGIN_ROUTE), true, "login route must be /auth/login");
+  assert.equal(routes.has(REGISTER_ROUTE), true, "registration route must be /auth/register");
+  assert.equal(routes.has("/auth"), true, "auth index route should resolve to /auth");
+  assert.equal(routes.has("/(tabs)"), true, "typed tab group href should resolve for SDK 54");
+  assert.equal(routes.has("/"), true, "tab index public route should resolve to /");
+  assert.equal(routes.has("/(auth)/login"), false, "auth is not currently a route group");
+});
+
+test("mobile hard-coded navigation targets correspond to real Expo Router routes", () => {
+  const routes = mobileRoutes();
+  const targets = [];
+  for (const file of walkMobileFiles()) {
+    const text = readFileSync(file, "utf8");
+    for (const match of text.matchAll(/router\.(?:replace|push|navigate)\(\s*(["'`])([^"'`]+)\1/g)) targets.push({ file, target: match[2] });
+    for (const match of text.matchAll(/\bhref=\{?\s*(["'`])([^"'`]+)\1/g)) targets.push({ file, target: match[2] });
+  }
+  const invalid = targets.filter(({ target }) => target.startsWith("/") && !routePatternMatches(routes, target));
+  assert.deepEqual(invalid, []);
+});
+
+test("auth registration links target register and login routes explicitly", () => {
+  const authScreen = readFileSync("apps/mobile/src/features/auth/AuthScreen.tsx", "utf8");
+  assert.match(authScreen, /<SecondaryLink href=\{REGISTER_ROUTE\} label="Create an account" \/>/);
+  assert.match(authScreen, /<SecondaryLink href=\{LOGIN_ROUTE\} label="Already have an account\? Sign in" \/>/);
+  assert.doesNotMatch(authScreen, /label="Create an account"[\s\S]{0,120}LOGIN_ROUTE/);
+  assert.doesNotMatch(authScreen, /label="Create an account"[\s\S]{0,120}auth\/login/);
+});
+
+test("session gate keeps signed-out auth routes on auth screens", () => {
+  assert.deepEqual(resolveSessionGate("/", { hasSession: false, onboardingComplete: false }), { state: "SIGNED_OUT", redirectTo: LOGIN_ROUTE });
+  assert.deepEqual(resolveSessionGate("auth/login", { hasSession: false, onboardingComplete: false }), { state: "SIGNED_OUT", redirectTo: undefined });
+  assert.deepEqual(resolveSessionGate("/auth/register", { hasSession: false, onboardingComplete: false }), { state: "SIGNED_OUT", redirectTo: undefined });
+  assert.deepEqual(resolveSessionGate("/settings", { hasSession: false, onboardingComplete: true }), { state: "SIGNED_OUT", redirectTo: LOGIN_ROUTE });
+  assert.deepEqual(resolveSessionGate("/settings", { hasSession: true, onboardingComplete: true, sessionExpired: true }), { state: "SESSION_EXPIRED", redirectTo: LOGIN_ROUTE });
+});
+
+test("root layout mounts navigator before session redirects", () => {
+  const rootLayout = readFileSync("apps/mobile/app/_layout.tsx", "utf8");
+  const sessionGuard = readFileSync("apps/mobile/src/features/auth/SessionGuard.tsx", "utf8");
+  assert.match(rootLayout, /<SessionGuard\s*\/>\s*<Stack/s);
+  assert.match(sessionGuard, /useRootNavigationState/);
+  assert.match(sessionGuard, /if \(!rootNavigationReady\) return/);
+  assert.doesNotMatch(rootLayout, /<SessionGuard>\s*<Stack/s);
+});
+
 test("product workflow is decomposed into feature-specific screens", () => {
   const workflow = readFileSync("apps/mobile/src/screens/ProductWorkflowScreen.tsx", "utf8");
   assert.ok(workflow.split("\n").length <= 120, "ProductWorkflowScreen must remain a small dispatcher");
@@ -249,11 +340,11 @@ test("beta exercise filters alter the supported API query", () => {
 });
 
 test("session gate protects auth, onboarding, and app routes centrally", () => {
-  assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: false, onboardingComplete: false }), { state: "SIGNED_OUT", redirectTo: "/auth/login" });
+  assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: false, onboardingComplete: false }), { state: "SIGNED_OUT", redirectTo: LOGIN_ROUTE });
   assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: false }), { state: "AUTHENTICATED_ONBOARDING_INCOMPLETE", redirectTo: "/onboarding" });
   assert.deepEqual(resolveSessionGate("/onboarding", { hasSession: true, onboardingComplete: true }), { state: "AUTHENTICATED_READY", redirectTo: "/(tabs)" });
   assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: true, offline: true }), { state: "OFFLINE_WITH_VALID_SESSION" });
-  assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: true, sessionExpired: true }), { state: "SESSION_EXPIRED", redirectTo: "/auth/session-expired" });
+  assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: true, sessionExpired: true }), { state: "SESSION_EXPIRED", redirectTo: LOGIN_ROUTE });
 });
 
 test("beta mobile UI does not expose old demo wording or fixed glucose defaults", () => {
