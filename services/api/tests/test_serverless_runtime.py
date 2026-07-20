@@ -31,31 +31,28 @@ def test_resend_sender_uses_https_idempotency_and_redacted_templates(monkeypatch
     captured = {}
 
     class FakeResponse:
-        def __enter__(self):
-            return self
+        status_code = 200
+        content = b'{"id":"resend_msg_1"}'
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+        def json(self):
+            return {"id": "resend_msg_1"}
 
-        def read(self):
-            return json.dumps({"id": "resend_msg_1"}).encode()
-
-    def fake_urlopen(request, timeout):
-        captured["url"] = request.full_url
-        captured["headers"] = dict(request.header_items())
-        captured["body"] = request.data.decode()
+    def fake_post(url, *, headers, json, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["body"] = json
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr(email_mod, "urlopen", fake_urlopen)
+    monkeypatch.setattr(email_mod.httpx, "post", fake_post)
     result = email_mod.get_email_sender().send_password_reset("user@example.test", "https://app.example.com/auth/reset-password?token=secret-token")
     assert result.provider == "resend"
     assert result.status == "sent"
     assert captured["url"] == "https://api.resend.com/emails"
-    assert captured["headers"]["Idempotency-key"].startswith("mir-reset-")
+    assert captured["headers"]["Idempotency-Key"].startswith("mir-reset-")
     assert "Bearer test_resend_secret" == captured["headers"]["Authorization"]
-    assert "secret-token" in captured["body"]
-    assert "MoveInRange sifrenizi" in captured["body"]
+    assert "secret-token" in json.dumps(captured["body"])
+    assert "MoveInRange sifrenizi" in json.dumps(captured["body"])
 
 
 def test_vercel_configuration_does_not_capture_non_api_routes():

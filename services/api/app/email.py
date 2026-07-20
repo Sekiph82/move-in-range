@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 from email.message import EmailMessage
 import hashlib
-import json
 import smtplib
 import time
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import httpx
 
 from .settings import get_settings
 
@@ -85,25 +84,28 @@ class ResendEmailSender(EmailSender):
             "text": text_body,
             "html": html_body,
         }
-        encoded = json.dumps(payload).encode()
         idempotency_key = "mir-reset-" + hashlib.sha256(reset_link.encode()).hexdigest()[:32]
         headers = {
             "Authorization": f"Bearer {settings.resend_api_key}",
-            "Content-Type": "application/json",
             "Idempotency-Key": idempotency_key,
         }
         attempts = max(1, settings.resend_max_attempts)
         for attempt in range(attempts):
             try:
-                request = Request(self.endpoint, data=encoded, headers=headers, method="POST")
-                with urlopen(request, timeout=settings.resend_timeout_seconds) as response:
-                    body = json.loads(response.read().decode() or "{}")
-                return EmailResult(provider=self.provider, status="sent", provider_message_id=body.get("id"))
-            except HTTPError as exc:
-                if 400 <= exc.code < 500 and exc.code != 429:
-                    return EmailResult(provider=self.provider, status="failed", error_code=f"resend_http_{exc.code}")
-                last_error = f"resend_http_{exc.code}"
-            except (OSError, URLError, TimeoutError, json.JSONDecodeError):
+                response = httpx.post(
+                    self.endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=settings.resend_timeout_seconds,
+                )
+                if 400 <= response.status_code < 500 and response.status_code != 429:
+                    return EmailResult(provider=self.provider, status="failed", error_code=f"resend_http_{response.status_code}")
+                if response.status_code >= 400:
+                    last_error = f"resend_http_{response.status_code}"
+                else:
+                    body = response.json() if response.content else {}
+                    return EmailResult(provider=self.provider, status="sent", provider_message_id=body.get("id"))
+            except (httpx.HTTPError, ValueError):
                 last_error = "resend_unavailable"
             if attempt < attempts - 1:
                 time.sleep(0.2 * (attempt + 1))
