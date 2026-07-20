@@ -67,21 +67,43 @@ def test_functional_mvp_workflow(tmp_path, monkeypatch):
     assert plan.status_code == 201
     plan_payload = plan.json()["plan"]
     assert sum(item["duration_seconds"] for item in plan_payload["items"]) == 15 * 60
+    first_item = plan_payload["items"][0]
+    assert first_item["exercise_id"]
+    assert first_item["preparation_seconds"] == 5
+    assert first_item["work_seconds"] == first_item["duration_seconds"]
+    assert first_item["rest_seconds"] > 0
+    assert first_item["media"]["validation_state"] in {"approved", "requires_review"}
+    assert first_item["availability"] in {"playable", "fallback"}
+    assert first_item["position"] in {"standing", "seated", "floor", "kneeling", "supported"}
+    assert first_item["difficulty"] in {"gentle", "moderate", "advanced"}
+    assert first_item["impact"] in {"low", "moderate", "high"}
+    assert first_item["instructions"]
 
     weekly = client.post("/api/v1/plans/weekly/generate", headers=headers)
     monthly = client.post("/api/v1/plans/monthly/generate", headers=headers)
     assert weekly.status_code == 201
-    assert len(weekly.json()["plan"]["days"]) == 7
+    week_payload = weekly.json()["plan"]
+    assert len(week_payload["days"]) == 7
+    assert week_payload["total_planned_minutes"] >= 0
+    assert all("date" in day and "focus" in day and "actions" in day for day in week_payload["days"])
     assert monthly.status_code == 201
-    assert len(monthly.json()["plan"]["weeks"]) == 4
+    month_payload = monthly.json()["plan"]
+    assert len(month_payload["weeks"]) == 4
+    assert month_payload["timeline"] == ["Adaptation", "Consistency", "Gentle progression", "Recovery and reassessment"]
+    assert all(len(week["days"]) == 7 for week in month_payload["weeks"])
 
     exercises = client.get("/api/v1/exercises?language=tr", headers=headers)
     assert exercises.status_code == 200
-    first_exercise = exercises.json()["items"][0]["id"]
+    first_list_item = exercises.json()["items"][0]
+    assert first_list_item["media"]["validation_state"] in {"approved", "requires_review"}
+    assert "raw_gif_path_present" in first_list_item["media"]
+    assert first_list_item["preparation_seconds"] == 5
+    first_exercise = first_list_item["id"]
     detail = client.get(f"/api/v1/exercises/{first_exercise}?language=tr", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["instruction_steps"]
     assert "tr" in detail.json()["locales"]
+    assert detail.json()["media"]["validation_state"] in {"approved", "requires_review"}
 
     session = client.post("/api/v1/sessions", headers=headers, json={"plan_id": plan_payload["id"]})
     assert session.status_code == 201

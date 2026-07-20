@@ -318,7 +318,7 @@ export function modifyPlan(planId: string, intent: string, request_payload: Reco
 }
 
 export function startSession(planId?: string) {
-  return apiFetch<{ session: { id: string } }>("/sessions", { method: "POST", body: JSON.stringify({ plan_id: planId, resume: true }) });
+  return apiFetch<{ session: { id: string; payload?: { plan?: unknown } } }>("/sessions", { method: "POST", body: JSON.stringify({ plan_id: planId, resume: true }) });
 }
 
 export function patchSession(sessionId: string, payload: Record<string, unknown>) {

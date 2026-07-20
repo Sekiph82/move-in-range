@@ -811,7 +811,7 @@ def exercise_search(
     total = query.count()
     items = query.order_by(Exercise.name).offset((page - 1) * page_size).limit(page_size).all()
     return {
-        "items": [_exercise_brief_payload(item) for item in items],
+        "items": [_exercise_brief_payload(item, db, language) for item in items],
         "pagination": {"page": page, "page_size": page_size, "total": total},
         "filters": {"body_part": body_part, "equipment": equipment, "target": target},
         "media_policy": "external-license-required",
@@ -828,7 +828,7 @@ def favorite_exercises(user: User = Depends(require_user), db: Session = Depends
         .all()
     )
     exercises = [db.get(Exercise, row.exercise_id) for row in rows]
-    return {"items": [_exercise_brief_payload(item) for item in exercises if item]}
+    return {"items": [_exercise_brief_payload(item, db) for item in exercises if item]}
 
 
 @router.get("/exercises/recent")
@@ -847,7 +847,7 @@ def recent_exercises(user: User = Depends(require_user), db: Session = Depends(g
             continue
         exercise = db.get(Exercise, row.target_id)
         if exercise:
-            items.append(_exercise_brief_payload(exercise))
+            items.append(_exercise_brief_payload(exercise, db))
             seen.add(row.target_id)
         if len(items) >= 20:
             break
@@ -959,7 +959,7 @@ def list_program_variants():
 @router.post("/plans/advanced/generate", status_code=status.HTTP_201_CREATED)
 def generate_advanced_plan(payload: ProgramRequestPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     _rate_limit(f"advanced-plan:{user.id}", get_settings().auth_rate_limit * 2)
-    candidates = [_exercise_brief_payload(item) for item in db.query(Exercise).order_by(Exercise.name).limit(80).all()]
+    candidates = [_exercise_brief_payload(item, db) for item in db.query(Exercise).order_by(Exercise.name).limit(80).all()]
     plan_payload = build_program_payload(user.id, payload.model_dump(), candidates)
     if plan_payload["safety_decision"]["action"] == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
         return {"blocked": True, "safety_decision": plan_payload["safety_decision"], "plan": None}
@@ -1009,7 +1009,7 @@ def modify_plan(plan_id: str, payload: PlanModificationPayload, user: User = Dep
 def create_quick_session(payload: ProgramRequestPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     request_payload = payload.model_dump()
     request_payload["variant"] = request_payload.get("variant") or None
-    candidates = [_exercise_brief_payload(item) for item in db.query(Exercise).order_by(Exercise.name).limit(60).all()]
+    candidates = [_exercise_brief_payload(item, db) for item in db.query(Exercise).order_by(Exercise.name).limit(60).all()]
     plan_payload = build_program_payload(user.id, request_payload, candidates)
     plan_payload["source"] = "what_can_i_do_today"
     plan = Plan(id=plan_payload["id"], user_id=user.id, plan_type="quick_session", payload=plan_payload, safety_action=plan_payload["safety_decision"]["action"])
@@ -1028,25 +1028,35 @@ def generate_weekly(user: User = Depends(require_user), db: Session = Depends(ge
     profile = _profile_for(user.id, db)
     preferred_days = (profile.health_payload or {}).get("preferred_training_days", ["Mon", "Wed", "Fri"])
     days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    week_start = datetime.now(UTC).date() - timedelta(days=datetime.now(UTC).weekday())
     previous_was_movement = False
     schedule = []
-    for day in days:
+    focus_cycle = ["mobility", "strength", "balance", "cardio", "recovery", "mobility", "recovery"]
+    for index, day in enumerate(days):
         planned_movement = day in preferred_days and not previous_was_movement and decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"
         status_value = "planned" if planned_movement else "recovery"
         schedule.append(
             {
                 "day": day,
+                "date": (week_start + timedelta(days=index)).isoformat(),
+                "day_index": index,
+                "focus": focus_cycle[index],
                 "session_type": "movement" if planned_movement else "recovery",
                 "planned_duration": daily["total_minutes"] if planned_movement else 0,
+                "duration_minutes": daily["total_minutes"] if planned_movement else 0,
                 "intensity": "low" if decision["action"] != "READY" or not planned_movement else daily["intensity"],
                 "status": status_value,
                 "safety_modified": decision["action"] != "READY",
+                "items": daily["items"] if planned_movement else [],
+                "actions": ["open", "start", "make_easier", "move_session"] if planned_movement else ["swap_rest_day"],
             }
         )
         previous_was_movement = planned_movement
     payload = {
         "id": "week_" + secrets.token_hex(8),
         "days": schedule,
+        "week_start": week_start.isoformat(),
+        "total_planned_minutes": sum(day["duration_minutes"] for day in schedule),
         "explanation": "Weekly plan spaces movement days with recovery days and keeps intensity conservative after safety modifications.",
     }
     db.add(Plan(id=payload["id"], user_id=user.id, plan_type="weekly", payload=payload, safety_action=daily["safety_decision"]["action"]))
@@ -1082,9 +1092,29 @@ def generate_monthly(user: User = Depends(require_user), db: Session = Depends(g
         "id": "month_" + secrets.token_hex(8),
         "program_start_date": datetime.now(UTC).date().isoformat(),
         "weeks": [
-            {"week": week, "phase": phase, "progression_reason": hold_reason or reason, "hold": hold_reason is not None and week > 1}
+            {
+                "week": week,
+                "phase": phase,
+                "progression_reason": hold_reason or reason,
+                "hold": hold_reason is not None and week > 1,
+                "status": "hold" if hold_reason is not None and week > 1 else "planned",
+                "planned_sessions": 3 if week < 4 else 2,
+                "recovery_days": 4 if week < 4 else 5,
+                "focus": ["mobility", "strength", "balance"] if week < 4 else ["recovery", "reassessment"],
+                "days": [
+                    {
+                        "day": day,
+                        "date": (datetime.now(UTC).date() + timedelta(days=((week - 1) * 7) + index)).isoformat(),
+                        "status": "planned" if index in {0, 2, 4} and not (hold_reason is not None and week > 1) else "recovery",
+                        "focus": ["mobility", "strength", "balance", "recovery", "cardio", "mobility", "recovery"][index],
+                    }
+                    for index, day in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+                ],
+            }
             for week, phase, reason in phases
         ],
+        "timeline": ["Adaptation", "Consistency", "Gentle progression", "Recovery and reassessment"],
+        "actions": ["open_week", "open_day", "pause", "extend", "reduce_intensity", "change_frequency", "regenerate_future_days"],
         "blocking_rules": ["pain increase", "concerning symptoms", "low readiness", "poor adherence", "clinician restriction", "safety block"],
     }
     db.add(Plan(id=payload["id"], user_id=user.id, plan_type="monthly", payload=payload, safety_action=decision["action"]))
@@ -2768,26 +2798,151 @@ def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: boo
         "safety_notes": ["Use a comfortable range and stop for concerning symptoms or increasing pain."],
     }
     if not brief:
-        payload["media"] = {
-            "image": media.image_path if media else "",
-            "gif": media.gif_path if media else "",
-            "media_id": media.media_id if media else "",
-            "attribution": media.attribution if media else "",
-            "license_status": media.license_status if media else "external_terms_required",
-        }
+        payload["media"] = _exercise_media_payload(media)
     return payload
 
 
-def _exercise_brief_payload(exercise: Exercise) -> dict[str, Any]:
+def _exercise_media_payload(media: ExerciseMedia | None) -> dict[str, Any]:
+    license_status = media.license_status if media else "missing"
+    image = media.image_path if media else ""
+    gif = media.gif_path if media else ""
+    approved = license_status == "approved"
+    playable_type = "gif" if approved and gif else "image" if approved and image else "internal_fallback"
+    return {
+        "image": image if approved else "",
+        "gif": gif if approved else "",
+        "raw_image_path_present": bool(image),
+        "raw_gif_path_present": bool(gif),
+        "mp4": "",
+        "thumbnail": image if approved else "",
+        "media_id": media.media_id if media else "",
+        "attribution": media.attribution if media else "",
+        "license_status": license_status,
+        "playable": approved and bool(gif or image),
+        "playable_type": playable_type,
+        "fallback_type": "internal_motion" if not approved else None,
+        "validation_state": "approved" if approved else "requires_review",
+    }
+
+
+def _section_for_exercise(exercise: Exercise) -> str:
+    target = f"{exercise.body_part} {exercise.target}".lower()
+    if any(value in target for value in ["cardio", "cardiovascular"]):
+        return "cardio"
+    if any(value in target for value in ["calves", "forearms", "biceps", "triceps", "pectorals", "lats", "quads", "glutes", "hamstrings"]):
+        return "strength"
+    if any(value in target for value in ["abs", "waist", "spine", "back"]):
+        return "mobility"
+    return "mobility"
+
+
+def _position_for_exercise(exercise: Exercise) -> str:
+    text = f"{exercise.name} {exercise.slug}".lower()
+    if any(value in text for value in ["seated", "chair"]):
+        return "seated"
+    if any(value in text for value in ["lying", "floor", "prone", "supine"]):
+        return "floor"
+    if any(value in text for value in ["kneeling"]):
+        return "kneeling"
+    if any(value in text for value in ["wall", "supported"]):
+        return "supported"
+    return "standing"
+
+
+def _difficulty_for_exercise(exercise: Exercise) -> str:
+    equipment = exercise.equipment.lower()
+    text = f"{exercise.name} {exercise.target}".lower()
+    if any(value in equipment for value in ["barbell", "sled", "smith", "machine"]) or any(value in text for value in ["jump", "lever", "clean"]):
+        return "advanced"
+    if any(value in equipment for value in ["dumbbell", "kettlebell", "band", "cable"]):
+        return "moderate"
+    return "gentle"
+
+
+def _impact_for_exercise(exercise: Exercise) -> str:
+    text = f"{exercise.name} {exercise.slug}".lower()
+    if any(value in text for value in ["jump", "hop", "burpee", "sprint"]):
+        return "high"
+    if any(value in text for value in ["run", "lunge", "squat"]):
+        return "moderate"
+    return "low"
+
+
+def _plan_item_payload(exercise: Exercise, db: Session, language: str, block: str, duration_seconds: int, rest_seconds: int, index: int) -> dict[str, Any]:
+    brief = _exercise_brief_payload(exercise, db, language)
+    return {
+        "exercise_id": brief["id"],
+        "source_id": brief["source_id"],
+        "name": brief["name"],
+        "description": brief["instruction"],
+        "section": block,
+        "block": block,
+        "category": brief["category"],
+        "targets": [brief["target"]],
+        "muscles": [brief["target"], *brief["secondary_muscles"]],
+        "equipment": brief["equipment"],
+        "position": brief["position"],
+        "difficulty": brief["difficulty"],
+        "impact": brief["impact"],
+        "unilateral": brief["unilateral"],
+        "side_switch": brief["side_switch"],
+        "preparation_seconds": brief["preparation_seconds"],
+        "duration_seconds": duration_seconds,
+        "work_seconds": duration_seconds,
+        "rest_seconds": rest_seconds,
+        "sets": 1 if block in {"warmup", "cooldown", "recovery"} else brief["sets"],
+        "reps": None if block in {"cardio", "recovery"} else brief["reps"],
+        "tempo": brief["tempo"],
+        "instructions": brief["instruction_steps"],
+        "breathing_cue": brief["breathing_cue"],
+        "mistakes": brief["mistakes"],
+        "safety_notes": brief["safety_notes"],
+        "contraindication_tags": brief["contraindication_tags"],
+        "approved_substitutions": [item.id for item in db.query(Exercise).filter(Exercise.id != exercise.id, Exercise.equipment == exercise.equipment, Exercise.body_part == exercise.body_part).limit(3).all()],
+        "media": brief["media"],
+        "availability": "playable" if brief["media"]["playable"] else "fallback",
+        "validation_state": brief["media"]["validation_state"],
+        "order": index + 1,
+    }
+
+
+def _exercise_brief_payload(exercise: Exercise, db: Session | None = None, language: str = "en") -> dict[str, Any]:
+    media = db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id == exercise.id).one_or_none() if db else None
+    localizations = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id).all() if db else []
+    instructions = {loc.locale: loc.instructions for loc in localizations}
+    steps = {loc.locale: loc.instruction_steps for loc in localizations}
+    selected_locale = language if language in instructions else "en"
+    metadata = exercise.source_metadata or {}
+    localized_name = metadata.get("tr_title") if selected_locale == "tr" else None
     return {
         "id": exercise.id,
         "slug": exercise.slug,
-        "name": exercise.name,
+        "source_id": exercise.source_id,
+        "name": localized_name or exercise.name,
         "body_part": exercise.body_part,
         "equipment": exercise.equipment,
         "target": exercise.target,
         "secondary_muscles": exercise.secondary_muscles or [],
-        "media_policy": "detail_endpoint_only",
+        "instruction": instructions.get(selected_locale) or instructions.get("en") or "",
+        "instruction_steps": steps.get(selected_locale) or steps.get("en") or [],
+        "section": metadata.get("section") or _section_for_exercise(exercise),
+        "category": metadata.get("category") or exercise.body_part,
+        "position": metadata.get("position") or _position_for_exercise(exercise),
+        "difficulty": metadata.get("difficulty") or _difficulty_for_exercise(exercise),
+        "impact": metadata.get("impact") or _impact_for_exercise(exercise),
+        "unilateral": bool(metadata.get("unilateral", False)),
+        "side_switch": bool(metadata.get("side_switch", False)),
+        "work_seconds": int(metadata.get("work_seconds") or 35),
+        "rest_seconds": int(metadata.get("rest_seconds") or 20),
+        "preparation_seconds": int(metadata.get("preparation_seconds") or 5),
+        "sets": int(metadata.get("sets") or 1),
+        "reps": metadata.get("reps") or 8,
+        "tempo": metadata.get("tempo") or "controlled",
+        "breathing_cue": metadata.get("breathing_cue") or "Breathe steadily and avoid holding your breath.",
+        "mistakes": metadata.get("mistakes") or ["Moving too fast", "Holding your breath", "Ignoring increasing pain"],
+        "safety_notes": ["Use a comfortable range and stop for concerning symptoms or increasing pain."],
+        "contraindication_tags": metadata.get("contraindication_tags") or [],
+        "media": _exercise_media_payload(media),
     }
 
 
@@ -2814,24 +2969,25 @@ def _daily_plan_payload(user_id: str, readiness: dict[str, Any], decision: dict[
     base_items = []
     blocks = ["warmup", "main", "cardio", "cooldown"]
     for index, exercise in enumerate(exercises[:4]):
-        base_items.append({
-            "exercise_id": exercise.id,
-            "name": exercise.name,
-            "block": blocks[min(index, len(blocks) - 1)],
-            "duration_seconds": total_seconds // 4,
-            "rest_seconds": 20 if index in {0, 3} else 30,
-            "sets": 1 if index in {0, 3} else 2,
-            "reps": None if index == 2 else 8,
-            "approved_substitutions": [item.id for item in db.query(Exercise).filter(Exercise.id != exercise.id, Exercise.equipment == exercise.equipment).limit(2).all()],
-            "safety_notes": ["Stay conversational and stop for symptoms or increasing pain."],
-        })
+        block = blocks[min(index, len(blocks) - 1)]
+        base_items.append(_plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index))
     base_items[-1]["duration_seconds"] += total_seconds - sum(item["duration_seconds"] for item in base_items)
+    base_items[-1]["work_seconds"] = base_items[-1]["duration_seconds"]
     return {
         "id": "day_" + secrets.token_hex(8),
         "user_id": user_id,
         "total_minutes": minutes,
+        "total_duration": minutes,
+        "total_seconds": total_seconds,
         "intensity": "low" if decision["action"] != "READY" else "moderate",
         "phase": "adaptation",
+        "sections": sorted({item["section"] for item in base_items}),
+        "movement_count": len(base_items),
+        "media_summary": {
+            "playable": sum(1 for item in base_items if item["media"]["playable"]),
+            "fallback": sum(1 for item in base_items if not item["media"]["playable"]),
+        },
+        "actions": ["start", "make_easier", "shorten", "replace_movement", "regenerate_safely", "view_details", "postpone", "mark_unavailable"],
         "generator_version": "mvp-rule-planner-2026-07-18",
         "policy_version": decision["policy_version"],
         "safety_decision": {**decision, "timestamp": datetime.now(UTC).isoformat()},

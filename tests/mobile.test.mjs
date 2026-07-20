@@ -208,6 +208,8 @@ test("Expo Router exposes the functional product route family", () => {
     "auth/reset-password.tsx",
     "auth/reset-password-success.tsx",
     "auth/session-expired.tsx",
+    "(tabs)/program.tsx",
+    "(tabs)/progress.tsx",
     "onboarding.tsx",
     "readiness.tsx",
     "quick-session.tsx",
@@ -301,6 +303,40 @@ test("product workflow is decomposed into feature-specific screens", () => {
   for (const file of featureFiles) assert.equal(existsSync(file), true, file);
   assert.match(readFileSync("apps/mobile/src/features/exercises/ExerciseScreens.tsx", "utf8"), /camera_consent: true/);
   assert.match(readFileSync("apps/mobile/src/features/diabetes/DiabetesScreen.tsx", "utf8"), /not an insulin or treatment recommendation/);
+});
+
+test("mobile product shell exposes Home Program Move Progress Profile tabs", () => {
+  const tabs = readFileSync("apps/mobile/app/(tabs)/_layout.tsx", "utf8");
+  for (const tab of ["Home", "Program", "Move", "Progress", "Profile"]) assert.match(tabs, new RegExp(`title: "${tab}"`));
+  assert.match(tabs, /name="program"/);
+  assert.match(tabs, /name="progress"/);
+  assert.match(tabs, /name="plan" options=\{\{ href: null \}\}/);
+  assert.match(tabs, /name="insights" options=\{\{ href: null \}\}/);
+});
+
+test("exercise media reaches cards detail and guided player surfaces", () => {
+  const mediaFrame = readFileSync("apps/mobile/src/features/shared/ExerciseMediaFrame.tsx", "utf8");
+  const planScreens = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
+  const exerciseScreens = readFileSync("apps/mobile/src/features/exercises/ExerciseScreens.tsx", "utf8");
+  const workoutScreens = readFileSync("apps/mobile/src/features/workout/WorkoutScreens.tsx", "utf8");
+  assert.match(mediaFrame, /raw_gif_path_present/);
+  assert.match(mediaFrame, /Guided fallback|Media pending review/);
+  assert.match(planScreens, /<ExerciseMediaFrame/);
+  assert.match(exerciseScreens, /<ExerciseMediaFrame/);
+  assert.match(workoutScreens, /<ExerciseMediaFrame/);
+  assert.match(workoutScreens, /Next:/);
+});
+
+test("guided workout screen is state driven and not a debug control stack", () => {
+  const workoutScreens = readFileSync("apps/mobile/src/features/workout/WorkoutScreens.tsx", "utf8");
+  for (const phase of ["PREPARING", "WORKING", "RESTING", "PAUSED", "SUBSTITUTING", "PAIN_CHECK", "COMPLETING", "COMPLETED"]) {
+    assert.match(workoutScreens, new RegExp(`"${phase}"`));
+  }
+  assert.match(workoutScreens, /Speech\.speak/);
+  assert.match(workoutScreens, /Haptics\.impactAsync/);
+  assert.match(workoutScreens, /formatClock/);
+  assert.match(workoutScreens, /Open full feedback/);
+  assert.doesNotMatch(workoutScreens, /Preparation, work, rest, pause, skip, substitute, and completion controls are available/);
 });
 
 test("beta validation schemas reject malformed auth, glucose, and sharing payloads", () => {
