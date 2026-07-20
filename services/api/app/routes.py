@@ -790,31 +790,63 @@ def legacy_readiness(payload: ReadinessPayload, user: User = Depends(require_use
 @router.get("/exercises")
 def exercise_search(
     q: str = "",
+    category: str | None = None,
     body_part: str | None = None,
     equipment: str | None = None,
     target: str | None = None,
+    position: str | None = None,
+    difficulty: str | None = None,
+    impact: str | None = None,
+    bodyweight: bool = False,
+    favorites: bool = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     language: str = "en",
+    user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(Exercise)
     if q:
         like = f"%{q.lower()}%"
-        query = query.filter(or_(func.lower(Exercise.name).like(like), func.lower(Exercise.target).like(like)))
-    if body_part:
-        query = query.filter(Exercise.body_part == body_part.lower())
+        localized = db.query(ExerciseLocalization.exercise_id).filter(
+            func.lower(ExerciseLocalization.instructions).like(like)
+        )
+        query = query.filter(
+            or_(
+                func.lower(Exercise.name).like(like),
+                func.lower(Exercise.target).like(like),
+                func.lower(Exercise.equipment).like(like),
+                func.lower(Exercise.body_part).like(like),
+                Exercise.id.in_(localized),
+            )
+        )
+    selected_body_part = (body_part or category or "").strip().lower()
+    if selected_body_part:
+        query = query.filter(Exercise.body_part == selected_body_part)
     if equipment:
         query = query.filter(Exercise.equipment == equipment.lower())
     if target:
         query = query.filter(Exercise.target == target.lower())
-    total = query.count()
-    items = query.order_by(Exercise.name).offset((page - 1) * page_size).limit(page_size).all()
+    if bodyweight:
+        query = query.filter(Exercise.equipment == "body weight")
+    if favorites:
+        favorite_ids = db.query(FavoriteExercise.exercise_id).filter(FavoriteExercise.user_id == user.id)
+        query = query.filter(Exercise.id.in_(favorite_ids))
+    filtered_items = query.order_by(Exercise.name).all()
+    if position:
+        filtered_items = [item for item in filtered_items if _position_for_exercise(item) == position.lower()]
+    if difficulty:
+        filtered_items = [item for item in filtered_items if _difficulty_for_exercise(item) == difficulty.lower()]
+    if impact:
+        filtered_items = [item for item in filtered_items if _impact_for_exercise(item) == impact.lower()]
+    total = len(filtered_items)
+    items = filtered_items[(page - 1) * page_size : page * page_size]
     return {
-        "items": [_exercise_brief_payload(item, db, language) for item in items],
+        "items": _exercise_list_payload(items, db, language, user.id),
         "pagination": {"page": page, "page_size": page_size, "total": total},
-        "filters": {"body_part": body_part, "equipment": equipment, "target": target},
-        "media_policy": "external-license-required",
+        "filters": {"category": category, "body_part": body_part, "equipment": equipment, "target": target, "position": position, "difficulty": difficulty, "impact": impact, "bodyweight": bodyweight, "favorites": favorites},
+        "filter_options": _exercise_filter_options(db),
+        "media_policy": "hosted-https-required",
     }
 
 
@@ -828,7 +860,7 @@ def favorite_exercises(user: User = Depends(require_user), db: Session = Depends
         .all()
     )
     exercises = [db.get(Exercise, row.exercise_id) for row in rows]
-    return {"items": [_exercise_brief_payload(item, db) for item in exercises if item]}
+    return {"items": _exercise_list_payload([item for item in exercises if item], db, "en", user.id)}
 
 
 @router.get("/exercises/recent")
@@ -847,11 +879,11 @@ def recent_exercises(user: User = Depends(require_user), db: Session = Depends(g
             continue
         exercise = db.get(Exercise, row.target_id)
         if exercise:
-            items.append(_exercise_brief_payload(exercise, db))
+            items.append(exercise)
             seen.add(row.target_id)
         if len(items) >= 20:
             break
-    return {"items": items}
+    return {"items": _exercise_list_payload(items, db, "en", user.id)}
 
 
 @router.get("/exercises/{exercise_id}")
@@ -859,7 +891,7 @@ def exercise_detail(exercise_id: str, language: str = "en", user: User = Depends
     exercise = _get_exercise(exercise_id, db)
     _record_recent(user.id, exercise.id, db)
     db.commit()
-    return _exercise_payload(exercise, db, language)
+    return _exercise_payload(exercise, db, language, user=user)
 
 
 @router.get("/exercises/{exercise_id}/media-resolution")
@@ -1750,7 +1782,14 @@ def rollback_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(
 
 @router.get("/admin/exercises")
 def admin_exercises(admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_access")), db: Session = Depends(get_db)):
-    return exercise_search(page=1, page_size=25, db=db)
+    items = db.query(Exercise).order_by(Exercise.name).limit(25).all()
+    total = db.query(Exercise).count()
+    return {
+        "items": _exercise_list_payload(items, db, "en"),
+        "pagination": {"page": 1, "page_size": 25, "total": total},
+        "filter_options": _exercise_filter_options(db),
+        "media_policy": "hosted-https-required",
+    }
 
 
 @router.get("/admin/exercises/{exercise_id}")
@@ -2775,10 +2814,86 @@ def _exercise_publication_preconditions(exercise: Exercise, db: Session) -> dict
     }
 
 
-def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: bool = False) -> dict[str, Any]:
+def _exercise_filter_options(db: Session) -> dict[str, list[str]]:
+    exercises = db.query(Exercise).all()
+    return {
+        "body_part": sorted({item.body_part for item in exercises if item.body_part}),
+        "category": sorted({item.body_part for item in exercises if item.body_part}),
+        "equipment": sorted({item.equipment for item in exercises if item.equipment}),
+        "target": sorted({item.target for item in exercises if item.target}),
+        "position": sorted({_position_for_exercise(item) for item in exercises}),
+        "difficulty": sorted({_difficulty_for_exercise(item) for item in exercises}),
+        "impact": sorted({_impact_for_exercise(item) for item in exercises}),
+    }
+
+
+def _exercise_list_payload(items: list[Exercise], db: Session, language: str, user_id: str | None = None) -> list[dict[str, Any]]:
+    exercise_ids = [item.id for item in items]
+    if not exercise_ids:
+        return []
+    media_by_exercise = {
+        media.exercise_id: media
+        for media in db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id.in_(exercise_ids)).all()
+    }
+    localizations_by_exercise: dict[str, list[ExerciseLocalization]] = {exercise_id: [] for exercise_id in exercise_ids}
+    for localization in db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id.in_(exercise_ids)).all():
+        localizations_by_exercise.setdefault(localization.exercise_id, []).append(localization)
+    favorite_ids: set[str] = set()
+    if user_id:
+        favorite_ids = {
+            row[0]
+            for row in db.query(FavoriteExercise.exercise_id)
+            .filter(FavoriteExercise.user_id == user_id, FavoriteExercise.exercise_id.in_(exercise_ids))
+            .all()
+        }
+    return [
+        _exercise_brief_payload(
+            item,
+            language=language,
+            media=media_by_exercise.get(item.id),
+            localizations=localizations_by_exercise.get(item.id, []),
+            favorited=item.id in favorite_ids,
+        )
+        for item in items
+    ]
+
+
+def _related_exercises(exercise: Exercise, db: Session, language: str, user_id: str | None = None) -> list[dict[str, Any]]:
+    candidates = (
+        db.query(Exercise)
+        .filter(Exercise.id != exercise.id)
+        .filter(or_(Exercise.target == exercise.target, Exercise.body_part == exercise.body_part))
+        .limit(80)
+        .all()
+    )
+
+    def score(candidate: Exercise) -> tuple[int, str]:
+        value = 0
+        if candidate.target == exercise.target:
+            value += 40
+        if candidate.body_part == exercise.body_part:
+            value += 25
+        if candidate.equipment == exercise.equipment:
+            value += 15
+        if _position_for_exercise(candidate) == _position_for_exercise(exercise):
+            value += 10
+        if _difficulty_for_exercise(candidate) == _difficulty_for_exercise(exercise):
+            value += 5
+        if _impact_for_exercise(candidate) == _impact_for_exercise(exercise):
+            value += 5
+        return (-value, candidate.name)
+
+    ranked = sorted(candidates, key=score)[:8]
+    return _exercise_list_payload(ranked, db, language, user_id)
+
+
+def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: bool = False, user: User | None = None) -> dict[str, Any]:
     localizations = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id).all()
     media = db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id == exercise.id).one_or_none()
     tag = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).order_by(desc(ExerciseTag.created_at)).first()
+    favorited = False
+    if user:
+        favorited = db.query(FavoriteExercise).filter(FavoriteExercise.user_id == user.id, FavoriteExercise.exercise_id == exercise.id).one_or_none() is not None
     instructions = {loc.locale: loc.instructions for loc in localizations}
     steps = {loc.locale: loc.instruction_steps for loc in localizations}
     selected_locale = language if language in instructions else "en"
@@ -2796,9 +2911,13 @@ def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: boo
         "locales": sorted(instructions),
         "derived_tags": tag.tags if tag else {},
         "safety_notes": ["Use a comfortable range and stop for concerning symptoms or increasing pain."],
+        "favorited": favorited,
+        "recent_state": {"viewed": bool(user)},
+        "media": _exercise_media_payload(media),
     }
     if not brief:
-        payload["media"] = _exercise_media_payload(media)
+        payload["related_exercises"] = _related_exercises(exercise, db, language, user.id if user else None)
+        payload["safe_alternatives_label"] = "Related movements"
     return payload
 
 
@@ -2806,19 +2925,29 @@ def _exercise_media_payload(media: ExerciseMedia | None) -> dict[str, Any]:
     license_status = media.license_status if media else "missing"
     image = media.image_path if media else ""
     gif = media.gif_path if media else ""
-    approved = license_status == "approved"
+    image_url = image if image.startswith("https://") else ""
+    gif_url = gif if gif.startswith("https://") else ""
+    approved = license_status in {"approved", "available"} and bool(image_url or gif_url)
     playable_type = "gif" if approved and gif else "image" if approved and image else "internal_fallback"
+    status_value = "available" if approved else "review_required" if media else "missing"
     return {
-        "image": image if approved else "",
-        "gif": gif if approved else "",
+        "thumbnail_url": image_url,
+        "gif_url": gif_url,
+        "media_type": "gif" if gif_url else "image" if image_url else "fallback",
+        "status": status_value,
+        "width": 180 if approved else 0,
+        "height": 180 if approved else 0,
+        "version": "v1",
+        "image": image_url,
+        "gif": gif_url,
         "raw_image_path_present": bool(image),
         "raw_gif_path_present": bool(gif),
         "mp4": "",
-        "thumbnail": image if approved else "",
+        "thumbnail": image_url,
         "media_id": media.media_id if media else "",
         "attribution": media.attribution if media else "",
         "license_status": license_status,
-        "playable": approved and bool(gif or image),
+        "playable": approved and bool(gif_url or image_url),
         "playable_type": playable_type,
         "fallback_type": "internal_motion" if not approved else None,
         "validation_state": "approved" if approved else "requires_review",
@@ -2906,9 +3035,16 @@ def _plan_item_payload(exercise: Exercise, db: Session, language: str, block: st
     }
 
 
-def _exercise_brief_payload(exercise: Exercise, db: Session | None = None, language: str = "en") -> dict[str, Any]:
-    media = db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id == exercise.id).one_or_none() if db else None
-    localizations = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id).all() if db else []
+def _exercise_brief_payload(
+    exercise: Exercise,
+    db: Session | None = None,
+    language: str = "en",
+    media: ExerciseMedia | None = None,
+    localizations: list[ExerciseLocalization] | None = None,
+    favorited: bool = False,
+) -> dict[str, Any]:
+    media = media if media is not None else db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id == exercise.id).one_or_none() if db else None
+    localizations = localizations if localizations is not None else db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id).all() if db else []
     instructions = {loc.locale: loc.instructions for loc in localizations}
     steps = {loc.locale: loc.instruction_steps for loc in localizations}
     selected_locale = language if language in instructions else "en"
@@ -2943,6 +3079,7 @@ def _exercise_brief_payload(exercise: Exercise, db: Session | None = None, langu
         "safety_notes": ["Use a comfortable range and stop for concerning symptoms or increasing pain."],
         "contraindication_tags": metadata.get("contraindication_tags") or [],
         "media": _exercise_media_payload(media),
+        "favorited": favorited,
     }
 
 

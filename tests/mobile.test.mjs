@@ -319,12 +319,31 @@ test("exercise media reaches cards detail and guided player surfaces", () => {
   const planScreens = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
   const exerciseScreens = readFileSync("apps/mobile/src/features/exercises/ExerciseScreens.tsx", "utf8");
   const workoutScreens = readFileSync("apps/mobile/src/features/workout/WorkoutScreens.tsx", "utf8");
+  assert.match(mediaFrame, /thumbnail_url/);
+  assert.match(mediaFrame, /gif_url/);
   assert.match(mediaFrame, /raw_gif_path_present/);
   assert.match(mediaFrame, /Guided fallback|Media pending review/);
   assert.match(planScreens, /<ExerciseMediaFrame/);
   assert.match(exerciseScreens, /<ExerciseMediaFrame/);
   assert.match(workoutScreens, /<ExerciseMediaFrame/);
   assert.match(workoutScreens, /Next:/);
+});
+
+test("exercise library implements search filters favorites recents and cache surfaces", () => {
+  const exerciseScreens = readFileSync("apps/mobile/src/features/exercises/ExerciseScreens.tsx", "utf8");
+  const cache = readFileSync("apps/mobile/src/features/exercises/exerciseCache.ts", "utf8");
+  const moveTab = readFileSync("apps/mobile/app/(tabs)/move.tsx", "utf8");
+  assert.match(exerciseScreens, /FlatList/);
+  assert.match(exerciseScreens, /numColumns=\{2\}/);
+  assert.match(exerciseScreens, /FilterSheet/);
+  assert.match(exerciseScreens, /debounce|setTimeout/);
+  assert.match(exerciseScreens, /favoriteExercise/);
+  assert.match(exerciseScreens, /unfavoriteExercise/);
+  assert.match(exerciseScreens, /Recently viewed/);
+  assert.match(exerciseScreens, /cached/);
+  assert.match(cache, /MAX_RECENTS = 30/);
+  assert.match(cache, /PAGE_PREFIX/);
+  assert.match(moveTab, /ExerciseLibraryScreen/);
 });
 
 test("guided workout screen is state driven and not a debug control stack", () => {
@@ -365,11 +384,13 @@ test("beta validation schemas reject malformed auth, glucose, and sharing payloa
 });
 
 test("beta exercise filters alter the supported API query", () => {
-  const params = new URLSearchParams(paramsFor("knee", "upper legs", "chair", "quads", 2));
+  const params = new URLSearchParams(paramsFor({ q: "knee", body_part: "upper legs", equipment: "chair", target: "quads", bodyweight: true, favorites: true }, 2));
   assert.equal(params.get("q"), "knee");
   assert.equal(params.get("body_part"), "upper legs");
   assert.equal(params.get("equipment"), "chair");
   assert.equal(params.get("target"), "quads");
+  assert.equal(params.get("bodyweight"), "true");
+  assert.equal(params.get("favorites"), "true");
   assert.equal(params.get("page"), "2");
   assert.equal(params.get("page_size"), "24");
   assert.equal(params.get("language"), "en");

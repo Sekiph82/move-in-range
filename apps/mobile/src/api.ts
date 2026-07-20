@@ -365,6 +365,10 @@ export function favoriteExercise(exerciseId: string) {
   return apiFetch(`/exercises/${exerciseId}/favorite`, { method: "POST" });
 }
 
+export function unfavoriteExercise(exerciseId: string) {
+  return apiFetch(`/exercises/${exerciseId}/favorite`, { method: "DELETE" });
+}
+
 export function saveNotificationPreference(category: string, enabled: boolean) {
   return apiFetch("/notification-preferences", { method: "PUT", body: JSON.stringify({ category, enabled }) });
 }

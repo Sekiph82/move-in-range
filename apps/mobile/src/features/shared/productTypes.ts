@@ -1,4 +1,11 @@
 export type ExerciseMedia = {
+  thumbnail_url?: string;
+  gif_url?: string;
+  media_type?: string;
+  status?: string;
+  width?: number;
+  height?: number;
+  version?: string;
   image?: string;
   gif?: string;
   mp4?: string;
@@ -45,6 +52,7 @@ export type PlanExerciseItem = {
   safety_notes?: string[];
   approved_substitutions?: string[];
   media?: ExerciseMedia;
+  favorited?: boolean;
   availability?: string;
   validation_state?: string;
   order?: number;

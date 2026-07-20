@@ -26,7 +26,37 @@ def classify(record: dict) -> dict:
     }
 
 
-def _upsert_exercise(db: Session, record: dict) -> None:
+def _manifest_by_exercise(path: Path | None) -> dict[str, dict]:
+    if not path or not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return {item["exercise_id"]: item for item in payload.get("items", [])}
+
+
+def _media_values(record: dict, manifest_item: dict | None) -> dict:
+    image_url = (manifest_item or {}).get("image_url") or ""
+    gif_url = (manifest_item or {}).get("gif_url") or ""
+    hosted = image_url.startswith("https://") and gif_url.startswith("https://")
+    return {
+        "image_path": image_url if hosted else record.get("image", ""),
+        "gif_path": gif_url if hosted else record.get("gif_url", ""),
+        "license_status": "available" if hosted else "review_required",
+        "manifest": {
+            "source_version": (manifest_item or {}).get("source_version"),
+            "image_sha256": (manifest_item or {}).get("image_sha256"),
+            "gif_sha256": (manifest_item or {}).get("gif_sha256"),
+            "image_width": (manifest_item or {}).get("image_width"),
+            "image_height": (manifest_item or {}).get("image_height"),
+            "gif_width": (manifest_item or {}).get("gif_width"),
+            "gif_height": (manifest_item or {}).get("gif_height"),
+            "gif_frames": (manifest_item or {}).get("gif_frames"),
+            "gif_duration_ms": (manifest_item or {}).get("gif_duration_ms"),
+            "status": (manifest_item or {}).get("status"),
+        },
+    }
+
+
+def _upsert_exercise(db: Session, record: dict, manifest_item: dict | None = None) -> None:
     exercise_id = "exercise-" + record["id"]
     exercise = db.get(Exercise, exercise_id)
     if not exercise:
@@ -40,8 +70,10 @@ def _upsert_exercise(db: Session, record: dict) -> None:
     exercise.secondary_muscles = record.get("secondary_muscles", [])
     exercise.source_metadata = {
         "category": record.get("category"),
+        "muscle_group": record.get("muscle_group"),
         "deterministic_hash": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
         "attribution": record.get("attribution"),
+        "media_manifest": _media_values(record, manifest_item)["manifest"],
     }
 
     for locale, instructions in record["instructions"].items():
@@ -60,11 +92,12 @@ def _upsert_exercise(db: Session, record: dict) -> None:
     if not media:
         media = ExerciseMedia(exercise_id=exercise_id)
         db.add(media)
+    media_values = _media_values(record, manifest_item)
     media.media_id = record.get("media_id", "")
-    media.image_path = record.get("image", "")
-    media.gif_path = record.get("gif_url", "")
+    media.image_path = media_values["image_path"]
+    media.gif_path = media_values["gif_path"]
     media.attribution = record.get("attribution", "")
-    media.license_status = "external_terms_required"
+    media.license_status = media_values["license_status"]
 
     tag = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise_id).one_or_none()
     tags = classify(record)
@@ -78,7 +111,7 @@ def _upsert_exercise(db: Session, record: dict) -> None:
     tag.manual_review_status = tags["manual_review_status"]
 
 
-def _upsert_exercises(db: Session, records: list[dict]) -> None:
+def _upsert_exercises(db: Session, records: list[dict], manifest: dict[str, dict] | None = None) -> None:
     exercise_ids = ["exercise-" + record["id"] for record in records]
     exercises = {
         exercise.id: exercise
@@ -110,10 +143,13 @@ def _upsert_exercises(db: Session, records: list[dict]) -> None:
         exercise.equipment = record["equipment"].lower()
         exercise.target = record["target"].lower()
         exercise.secondary_muscles = record.get("secondary_muscles", [])
+        media_values = _media_values(record, (manifest or {}).get(record["id"]))
         exercise.source_metadata = {
             "category": record.get("category"),
+            "muscle_group": record.get("muscle_group"),
             "deterministic_hash": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
             "attribution": record.get("attribution"),
+            "media_manifest": media_values["manifest"],
         }
 
         for locale, instructions in record["instructions"].items():
@@ -132,10 +168,10 @@ def _upsert_exercises(db: Session, records: list[dict]) -> None:
             db.add(media)
             media_by_exercise[exercise_id] = media
         media.media_id = record.get("media_id", "")
-        media.image_path = record.get("image", "")
-        media.gif_path = record.get("gif_url", "")
+        media.image_path = media_values["image_path"]
+        media.gif_path = media_values["gif_path"]
         media.attribution = record.get("attribution", "")
-        media.license_status = "external_terms_required"
+        media.license_status = media_values["license_status"]
 
         tag = tags_by_exercise.get(exercise_id)
         tags = classify(record)
@@ -150,8 +186,9 @@ def _upsert_exercises(db: Session, records: list[dict]) -> None:
         tag.manual_review_status = tags["manual_review_status"]
 
 
-def import_dataset(source: Path, schema_path: Path | None = None, persist: bool = True) -> dict:
+def import_dataset(source: Path, schema_path: Path | None = None, persist: bool = True, media_manifest_path: Path | None = None) -> dict:
     records = json.loads(source.read_text(encoding="utf-8"))
+    manifest = _manifest_by_exercise(media_manifest_path)
     if schema_path and schema_path.exists():
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         Draft202012Validator(schema).validate(records)
@@ -183,7 +220,7 @@ def import_dataset(source: Path, schema_path: Path | None = None, persist: bool 
                 "tags": classify(record),
             })
         if db:
-            _upsert_exercises(db, records_to_persist)
+            _upsert_exercises(db, records_to_persist, manifest)
         if db:
             db.commit()
     except Exception:
@@ -193,17 +230,20 @@ def import_dataset(source: Path, schema_path: Path | None = None, persist: bool 
     finally:
         if db:
             db.close()
-    return {"source": str(source), "total_rows": len(records), "imported": len(normalized), "failed": failed, "failed_rows": len(failed), "locales": sorted({locale for item in normalized for locale in item["locales"]}), "media_committed": False}
+    hosted_media = sum(1 for item in manifest.values() if item.get("image_url", "").startswith("https://") and item.get("gif_url", "").startswith("https://"))
+    return {"source": str(source), "total_rows": len(records), "imported": len(normalized), "failed": failed, "failed_rows": len(failed), "locales": sorted({locale for item in normalized for locale in item["locales"]}), "media_committed": hosted_media > 0, "hosted_media": hosted_media}
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
     parser.add_argument("--schema")
+    parser.add_argument("--media-manifest")
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
     source = Path(args.source)
     schema = Path(args.schema) if args.schema else source.with_name("exercises.schema.json")
-    print(json.dumps(import_dataset(source, schema, persist=not args.validate_only), indent=2))
+    manifest = Path(args.media_manifest) if args.media_manifest else None
+    print(json.dumps(import_dataset(source, schema, persist=not args.validate_only, media_manifest_path=manifest), indent=2))
 
 if __name__ == "__main__":
     main()

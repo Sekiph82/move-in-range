@@ -96,14 +96,31 @@ def test_functional_mvp_workflow(tmp_path, monkeypatch):
     assert exercises.status_code == 200
     first_list_item = exercises.json()["items"][0]
     assert first_list_item["media"]["validation_state"] in {"approved", "requires_review"}
+    assert first_list_item["media"]["status"] in {"available", "review_required", "missing"}
+    assert "thumbnail_url" in first_list_item["media"]
+    assert "gif_url" in first_list_item["media"]
+    assert not first_list_item["media"]["thumbnail_url"].startswith("file:")
+    assert not first_list_item["media"]["gif_url"].startswith("file:")
+    assert "filter_options" in exercises.json()
     assert "raw_gif_path_present" in first_list_item["media"]
     assert first_list_item["preparation_seconds"] == 5
     first_exercise = first_list_item["id"]
+    favorite = client.post(f"/api/v1/exercises/{first_exercise}/favorite", headers=headers)
+    assert favorite.status_code == 200
+    favorite_list = client.get("/api/v1/exercises?favorites=true", headers=headers)
+    assert favorite_list.status_code == 200
+    assert favorite_list.json()["items"][0]["favorited"] is True
+    unfavorite = client.delete(f"/api/v1/exercises/{first_exercise}/favorite", headers=headers)
+    assert unfavorite.status_code == 200
+    search = client.get("/api/v1/exercises?q=chair&bodyweight=true", headers=headers)
+    assert search.status_code == 200
     detail = client.get(f"/api/v1/exercises/{first_exercise}?language=tr", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["instruction_steps"]
     assert "tr" in detail.json()["locales"]
     assert detail.json()["media"]["validation_state"] in {"approved", "requires_review"}
+    assert "related_exercises" in detail.json()
+    assert detail.json()["safe_alternatives_label"] == "Related movements"
 
     session = client.post("/api/v1/sessions", headers=headers, json={"plan_id": plan_payload["id"]})
     assert session.status_code == 201

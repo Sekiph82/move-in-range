@@ -22,3 +22,7 @@
 | Completion | Yes | Yes | Pending | Pending | Pending | No | Must remain idempotent in physical recovery tests. |
 | Progress | Yes | Yes | Pending | Pending | Pending | No | Needs chart polish and physical review. |
 | Password reset | Yes | Yes | Yes | Pending | Pending | No | Mailbox confirmation and post-reset login checks remain user-gated. |
+| Exercise dataset audit | Yes | Yes | Local report | N/A | N/A | No | 1324 records, 1324 JPGs, 1324 GIFs verified. |
+| Exercise library search/filters | Yes | Partial | Exported | Pending | Pending | No | Uses dataset-derived API filters; physical scrolling pending. |
+| Favorites and recents | Yes | Partial | Exported | Pending | Pending | No | Favorites API-backed; recents local bounded cache. |
+| Hosted media playback | Blocked | Partial | Fallback rendered | Pending | Pending | No | License ambiguity blocks public media redistribution. |

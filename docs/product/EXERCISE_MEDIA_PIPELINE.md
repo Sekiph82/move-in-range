@@ -34,3 +34,32 @@ Because the current media rows require external terms review, the mobile product
 - Media/fallback appears in Home, Today plan, Week plan, Month plan, Exercise library, Exercise detail, Guided player, Rest preview, and Substitution screens.
 - Broken or unapproved media must clearly fall back without exposing raw source paths as primary UI.
 - Attribution and license state remain preserved in API payloads and admin review surfaces.
+
+## Phase 2 Import Pipeline
+
+The production pipeline is:
+
+1. Validate the local JSON and media files with `scripts/audit-exercise-dataset.mjs`.
+2. Generate `.local/exercise-media-manifest.v1.json` with checksums, dimensions, frame counts, and optional hosted HTTPS URLs.
+3. Upload approved media to immutable object paths such as `exercise-media/v1/images/<filename>.jpg` and `exercise-media/v1/videos/<filename>.gif`.
+4. Import the manifest with the existing exercise importer.
+5. Expose only canonical HTTPS media descriptors through the API.
+
+No local file URL is valid in production. The current media license ambiguity blocks public redistribution, so the importer stores locally referenced media as `review_required` until approved hosted URLs exist.
+
+## Canonical API Object
+
+```json
+{
+  "thumbnail_url": "https://...",
+  "gif_url": "https://...",
+  "media_type": "gif",
+  "playable": true,
+  "status": "available",
+  "width": 180,
+  "height": 180,
+  "version": "v1"
+}
+```
+
+When media is not approved, URLs are empty, `playable` is false, and the mobile client renders the instruction-guided fallback state.
