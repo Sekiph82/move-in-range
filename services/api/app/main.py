@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from .routes import router
 from .db.session import init_db
+from .reset_page import password_reset_page
 from .settings import get_settings
 
 app = FastAPI(title="MoveInRange API", version="0.1.0", openapi_url="/api/v1/openapi.json")
@@ -48,5 +49,7 @@ async def validation_error(request: Request, exc: RequestValidationError):
 @app.exception_handler(Exception)
 async def server_error(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"code": "server_error", "message": "Unexpected server error.", "correlation_id": getattr(request.state, "correlation_id", "unknown"), "details": {}})
+
+app.add_api_route("/auth/reset-password", password_reset_page, methods=["GET"], include_in_schema=False)
 
 app.include_router(router, prefix="/api/v1")

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from email.message import EmailMessage
 import hashlib
+from html import escape
 import smtplib
 import time
 
@@ -113,6 +114,7 @@ class ResendEmailSender(EmailSender):
 
 
 def _password_reset_bodies(reset_link: str) -> tuple[str, str]:
+    escaped_link = escape(reset_link, quote=True)
     text = "\n".join(
         [
             "We received a request to reset your MoveInRange password.",
@@ -130,7 +132,7 @@ def _password_reset_bodies(reset_link: str) -> tuple[str, str]:
     html = (
         "<p>We received a request to reset your MoveInRange password.</p>"
         "<p>MoveInRange sifrenizi sifirlamak icin bir istek aldik.</p>"
-        f'<p><a href="{reset_link}">Reset password / Sifreyi sifirla</a></p>'
+        f'<p><a href="{escaped_link}" rel="noreferrer">Reset password / Sifreyi sifirla</a></p>'
         "<p>This one-time link expires in 30 minutes.</p>"
         "<p>Bu tek kullanimlik baglanti 30 dakika icinde sona erer.</p>"
         "<p>If you did not request this, ignore the email. MoveInRange never asks for your password by email.</p>"

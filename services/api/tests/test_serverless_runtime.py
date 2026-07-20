@@ -58,6 +58,7 @@ def test_resend_sender_uses_https_idempotency_and_redacted_templates(monkeypatch
 def test_vercel_configuration_does_not_capture_non_api_routes():
     config = json.loads(Path("vercel.json").read_text())
     sources = [rewrite["source"] for rewrite in config["rewrites"]]
+    assert "/auth/reset-password" in sources
     assert "/api/v1/(.*)" in sources
     assert all(not source.startswith("/(.*)") for source in sources)
     ignore = Path(".vercelignore").read_text()

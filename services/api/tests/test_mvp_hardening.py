@@ -1,5 +1,6 @@
 import hashlib
 import importlib
+import json
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -321,7 +322,13 @@ def test_logout_revokes_duplicate_active_refresh_family_once(tmp_path, monkeypat
 
 
 def test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch, ENABLE_DEVELOPMENT_RESET_PREVIEW="true", EMAIL_SENDER="console")
+    client = _client(
+        tmp_path,
+        monkeypatch,
+        ENABLE_DEVELOPMENT_RESET_PREVIEW="true",
+        EMAIL_SENDER="console",
+        PASSWORD_RESET_URL_BASE="https://moveinrange-api.vercel.app/auth/reset-password",
+    )
     registered, headers = _register(client, "reset@example.test")
     assert client.get("/api/v1/auth/me", headers=headers).status_code == 200
 
@@ -332,8 +339,12 @@ def test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions(tmp_
     known = client.post("/api/v1/auth/forgot-password", json={"email": "reset@example.test"})
     assert known.status_code == 200, known.text
     reset_token = known.json()["development_reset_token"]
+    reset_link = known.json()["development_reset_link"]
+    assert reset_link.startswith("https://moveinrange-api.vercel.app/auth/reset-password#token=")
+    assert "?token=" not in reset_link
     assert "access_token" not in known.json()
     assert "refresh_token" not in known.json()
+    assert client.post("/api/v1/auth/reset-password/validate", json={"token": "short"}).status_code == 422
     assert client.post("/api/v1/auth/reset-password/validate", json={"token": "invalid-reset-token-value"}).status_code == 401
     assert client.post("/api/v1/auth/reset-password", json={"token": reset_token, "password": "weak"}).status_code == 422
 
@@ -342,9 +353,15 @@ def test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions(tmp_
     with session_mod.SessionLocal() as db:
         record = db.query(models.PasswordResetToken).filter(models.PasswordResetToken.user_id == registered["user"]["id"]).order_by(models.PasswordResetToken.id).first()
         assert record.token_hash != reset_token
+        audit_text = json.dumps([row.redacted_payload for row in db.query(models.AuditLog).all()])
+        delivery_text = json.dumps([row.redacted_payload for row in db.query(models.EmailDeliveryAttempt).all()])
+        assert reset_token not in audit_text
+        assert reset_token not in delivery_text
         record.expires_at = datetime.now(UTC) - timedelta(minutes=1)
         db.commit()
-    assert client.post("/api/v1/auth/reset-password/validate", json={"token": reset_token}).status_code == 401
+    expired = client.post("/api/v1/auth/reset-password/validate", json={"token": reset_token})
+    assert expired.status_code == 401
+    assert expired.json()["code"] == "expired_reset_token"
 
     fresh = client.post("/api/v1/auth/forgot-password", json={"email": "reset@example.test"})
     reset_token = fresh.json()["development_reset_token"]
@@ -352,12 +369,60 @@ def test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions(tmp_
     time.sleep(1.05)
     reset = client.post("/api/v1/auth/reset-password", json={"token": reset_token, "password": "MoveInRange2"})
     assert reset.status_code == 200, reset.text
-    assert client.post("/api/v1/auth/reset-password", json={"token": reset_token, "password": "MoveInRange3"}).status_code == 401
+    reused = client.post("/api/v1/auth/reset-password", json={"token": reset_token, "password": "MoveInRange3"})
+    assert reused.status_code == 401
+    assert reused.json()["code"] == "used_reset_token"
     assert client.post("/api/v1/auth/login", json={"email": "reset@example.test", "password": "MoveInRange1"}).status_code == 401
     new_login = client.post("/api/v1/auth/login", json={"email": "reset@example.test", "password": "MoveInRange2"})
     assert new_login.status_code == 200, new_login.text
     assert client.post("/api/v1/auth/refresh", json={"refresh_token": registered["refresh_token"]}).status_code in {401, 403}
     assert client.get("/api/v1/auth/me", headers=headers).status_code == 401
+
+
+def test_password_reset_browser_page_is_public_and_token_safe(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    raw_token = "raw-reset-token-that-must-not-render"
+    response = client.get(f"/auth/reset-password?token={raw_token}")
+    assert response.status_code == 200, response.text
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["cache-control"] == "no-store"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+    html = response.text
+    assert raw_token not in html
+    assert "<script src=" not in html.lower()
+    assert "https://" not in html
+    assert "history.replaceState" in html
+    assert "window.location.pathname" in html
+    assert "Passwords do not match." in html
+    assert "Your password has been changed successfully." in html
+    assert "moveinrange://auth/login" in html
+    assert "/api/v1/auth/reset-password/validate" in html
+    assert "/api/v1/auth/reset-password" in html
+
+
+def test_password_reset_url_base_accepts_origin_or_page_path(tmp_path, monkeypatch):
+    client = _client(
+        tmp_path,
+        monkeypatch,
+        ENABLE_DEVELOPMENT_RESET_PREVIEW="true",
+        EMAIL_SENDER="console",
+        PASSWORD_RESET_URL_BASE="https://moveinrange-api.vercel.app",
+    )
+    _register(client, "origin-reset@example.test")
+    origin_link = client.post("/api/v1/auth/forgot-password", json={"email": "origin-reset@example.test"}).json()["development_reset_link"]
+    assert origin_link.startswith("https://moveinrange-api.vercel.app/auth/reset-password#token=")
+
+    client = _client(
+        tmp_path,
+        monkeypatch,
+        ENABLE_DEVELOPMENT_RESET_PREVIEW="true",
+        EMAIL_SENDER="console",
+        PASSWORD_RESET_URL_BASE="https://moveinrange-api.vercel.app/auth/reset-password",
+    )
+    _register(client, "page-reset@example.test")
+    page_link = client.post("/api/v1/auth/forgot-password", json={"email": "page-reset@example.test"}).json()["development_reset_link"]
+    assert page_link.startswith("https://moveinrange-api.vercel.app/auth/reset-password#token=")
+    assert "/auth/reset-password/auth/reset-password" not in page_link
 
 
 def test_token_claims_signature_expiry_and_disabled_user_are_rejected(tmp_path, monkeypatch):

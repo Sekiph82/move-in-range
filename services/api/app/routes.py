@@ -466,8 +466,8 @@ def forgot_password(payload: PasswordResetRequestPayload, request: Request, db: 
                 updated_at=datetime.now(UTC),
             )
         )
-        reset_base = (get_settings().password_reset_url_base or get_settings().product_web_base_url).rstrip("/")
-        reset_link = f"{reset_base}/auth/reset-password?token={token}"
+        reset_base = _password_reset_page_base()
+        reset_link = f"{reset_base}#token={token}"
         sender = get_email_sender()
         result = sender.send_password_reset(user.email or email, reset_link)
         db.add(
@@ -479,7 +479,7 @@ def forgot_password(payload: PasswordResetRequestPayload, request: Request, db: 
                 status=result.status,
                 provider_message_id=result.provider_message_id,
                 error_code=result.error_code,
-                redacted_payload={"expires_minutes": 30, "link_host": reset_base},
+                redacted_payload={"expires_minutes": 30, "reset_page": reset_base},
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -2172,6 +2172,14 @@ def _show_reset_preview() -> bool:
     return settings.environment.lower() != "production" and settings.enable_development_reset_preview
 
 
+def _password_reset_page_base() -> str:
+    settings = get_settings()
+    configured = (settings.password_reset_url_base or settings.product_web_base_url).rstrip("/")
+    if configured.endswith("/auth/reset-password"):
+        return configured
+    return f"{configured}/auth/reset-password"
+
+
 def _validate_password_strength(password: str) -> None:
     if len(password) < 10 or not any(ch.islower() for ch in password) or not any(ch.isupper() for ch in password) or not any(ch.isdigit() for ch in password):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "weak_password"})
@@ -2180,8 +2188,12 @@ def _validate_password_strength(password: str) -> None:
 def _password_reset_record(token: str, db: Session) -> PasswordResetToken:
     record = db.query(PasswordResetToken).filter(PasswordResetToken.token_hash == token_hash(token)).one_or_none()
     now = datetime.now(UTC)
-    if not record or record.used_at is not None or _as_utc(record.expires_at) < now:
+    if not record:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_reset_token"})
+    if record.used_at is not None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "used_reset_token"})
+    if _as_utc(record.expires_at) < now:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "expired_reset_token"})
     return record
 
 
