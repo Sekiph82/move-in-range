@@ -41,16 +41,18 @@ All audited GIFs are 180 x 180. Frame counts range from 128 to 1175. Most GIFs a
 
 The audit found six duplicate exercise names. Source IDs remain unique, so MoveInRange uses source IDs and internal exercise IDs for identity.
 
-## License Finding
+## License and Attribution Handling
 
-The dataset license text is ambiguous for public media redistribution. One section states the MIT terms cover media, while the media-specific exception text also states that cloning does not grant a media license. MoveInRange therefore keeps hosted JPG/GIF redistribution blocked until the media license is clarified. Local development validation and import tooling may proceed, but production API responses must not expose these assets as playable media until approval.
+MoveInRange preserves source attribution fields in `exercise_media` and exposes attribution metadata through the API. Media files are not committed to Git; they are hosted in Supabase Storage for the current beta deployment and referenced from PostgreSQL with stable HTTPS URLs.
+
+The app must continue to avoid local file URLs and must not bundle the full media corpus into mobile builds.
 
 ## Audit Tool
 
 Run the deterministic audit locally:
 
 ```powershell
-node scripts/audit-exercise-dataset.mjs --dataset-root "<dataset-root>" --output .local/exercise-import-audit.json --manifest .local/exercise-media-manifest.v1.json --source-version v1
+node scripts/audit-exercise-dataset.mjs --dataset-root "<dataset-root>" --output .local/exercise-import-audit.json --manifest .local/exercise-media-manifest.v1.json --media-base-url "https://<project>.supabase.co/storage/v1/object/public" --source-version v1
 ```
 
 The detailed report and manifest stay under `.local` and are not committed.

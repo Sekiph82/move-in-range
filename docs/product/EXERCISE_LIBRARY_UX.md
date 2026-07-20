@@ -25,7 +25,7 @@ Health suitability filters are intentionally not exposed until reviewed health m
 
 ## Media Policy
 
-Cards use static thumbnails when approved hosted HTTPS media exists. Detail screens may show GIF animation when approved hosted GIFs are available. Until legal/media approval is complete, cards and detail screens render an instruction-guided fallback state rather than blank frames.
+Cards use static thumbnails from the API. Detail screens may show GIF animation from the same canonical media object. If a hosted media URL fails or is absent, cards and detail screens render an instruction-guided fallback state rather than blank frames.
 
 ## Favorites and Recents
 

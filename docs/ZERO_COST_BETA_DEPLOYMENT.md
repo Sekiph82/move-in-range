@@ -77,10 +77,10 @@ Current expected head after this work:
 ## Dataset
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repository-root>
 $env:DATABASE_URL=$env:MIGRATION_DATABASE_URL
-npm.cmd run import:exercises -- C:\Users\sekip\Desktop\MoveInRange-Workspace\exercises-dataset-main\data\exercises.json
-npm.cmd run import:exercises -- C:\Users\sekip\Desktop\MoveInRange-Workspace\exercises-dataset-main\data\exercises.json
+npm.cmd run import:exercises -- <dataset-root>\data\exercises.json
+npm.cmd run import:exercises -- <dataset-root>\data\exercises.json
 ```
 
 Expected:

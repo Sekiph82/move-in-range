@@ -65,10 +65,10 @@ Relative path:
 npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
 ```
 
-Absolute path:
+Absolute path template:
 
 ```cmd
-npm.cmd run import:exercises -- "C:\Users\sekip\Desktop\MoveInRange-Workspace\exercises-dataset-main\data\exercises.json"
+npm.cmd run import:exercises -- "<dataset-root>\data\exercises.json"
 ```
 
 Verified local import: 1,324 exercises, 0 failed rows, 10 instruction locales. Third-party media is not committed; metadata and attribution are retained.

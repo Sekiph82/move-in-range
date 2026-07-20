@@ -2,7 +2,7 @@
 
 ## Dataset Inspection
 
-- Exercise dataset: `C:\Users\sekip\Desktop\MoveInRange-Workspace\exercises-dataset-main` contains 1,324 JSON records, 10 instruction locales, image/GIF paths, schema, attribution fields, and a media license exception requiring external review before committing media.
+- Exercise dataset: the local import source contains 1,324 JSON records, 10 instruction locales, image/GIF paths, schema, attribution fields, and media files that must not be committed to Git.
 
 ## Audit Table
 

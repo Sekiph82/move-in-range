@@ -755,6 +755,26 @@ def equipment(db: Session = Depends(get_db)):
     return {"items": sorted(set(DEFAULT_EQUIPMENT + values))}
 
 
+@router.get("/categories")
+def categories(db: Session = Depends(get_db)):
+    return {"items": _exercise_taxonomy_items(db, "category")}
+
+
+@router.get("/body-parts")
+def body_parts(db: Session = Depends(get_db)):
+    return {"items": _exercise_taxonomy_items(db, "body_part")}
+
+
+@router.get("/target-muscles")
+def target_muscles(db: Session = Depends(get_db)):
+    return {"items": _exercise_taxonomy_items(db, "target")}
+
+
+@router.get("/exercise-tags")
+def exercise_tags(db: Session = Depends(get_db)):
+    return {"items": _exercise_taxonomy_items(db, "tags")}
+
+
 @router.post("/readiness-checks", status_code=status.HTTP_201_CREATED)
 def create_readiness(payload: ReadinessPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     _rate_limit(f"readiness:{user.id}", get_settings().auth_rate_limit * 3)
@@ -884,6 +904,43 @@ def recent_exercises(user: User = Depends(require_user), db: Session = Depends(g
         if len(items) >= 20:
             break
     return {"items": _exercise_list_payload(items, db, "en", user.id)}
+
+
+@router.get("/exercises/search")
+def exercise_search_alias(
+    q: str = "",
+    category: str | None = None,
+    body_part: str | None = None,
+    equipment: str | None = None,
+    target: str | None = None,
+    position: str | None = None,
+    difficulty: str | None = None,
+    impact: str | None = None,
+    bodyweight: bool = False,
+    favorites: bool = False,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    language: str = "en",
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    return exercise_search(
+        q=q,
+        category=category,
+        body_part=body_part,
+        equipment=equipment,
+        target=target,
+        position=position,
+        difficulty=difficulty,
+        impact=impact,
+        bodyweight=bodyweight,
+        favorites=favorites,
+        page=page,
+        page_size=page_size,
+        language=language,
+        user=user,
+        db=db,
+    )
 
 
 @router.get("/exercises/{exercise_id}")
@@ -2073,8 +2130,21 @@ def admin_privacy_job_action(kind: str, job_id: int, action: str, payload: Admin
 @router.get("/admin/import-jobs")
 def admin_import_jobs(admin=Depends(require_admin_role("content_editor")), db: Session = Depends(get_db)):
     exercise_count = db.query(Exercise).count()
+    media_status = _exercise_media_admin_status(db)
     latest = db.query(AuditLog).filter(AuditLog.action.like("%import%")).order_by(desc(AuditLog.created_at)).limit(10).all()
-    return {"items": [{"kind": "exercise_import", "status": "ready", "records_available": exercise_count}], "audit": [{"event": item.action, "redacted": True} for item in latest]}
+    return {
+        "items": [
+            {"kind": "exercise_import", "status": "ready", "records_available": exercise_count},
+            {"kind": "exercise_media", "status": media_status["status"], "records_available": media_status["hosted_https_rows"]},
+        ],
+        "media": media_status,
+        "audit": [{"event": item.action, "redacted": True} for item in latest],
+    }
+
+
+@router.get("/admin/exercise-media")
+def admin_exercise_media(admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_media_access")), db: Session = Depends(get_db)):
+    return _exercise_media_admin_status(db)
 
 
 @router.get("/admin/notifications")
@@ -2818,12 +2888,92 @@ def _exercise_filter_options(db: Session) -> dict[str, list[str]]:
     exercises = db.query(Exercise).all()
     return {
         "body_part": sorted({item.body_part for item in exercises if item.body_part}),
-        "category": sorted({item.body_part for item in exercises if item.body_part}),
+        "category": sorted({str((item.source_metadata or {}).get("category") or item.body_part).strip().lower() for item in exercises if item.body_part or (item.source_metadata or {}).get("category")}),
         "equipment": sorted({item.equipment for item in exercises if item.equipment}),
         "target": sorted({item.target for item in exercises if item.target}),
         "position": sorted({_position_for_exercise(item) for item in exercises}),
         "difficulty": sorted({_difficulty_for_exercise(item) for item in exercises}),
         "impact": sorted({_impact_for_exercise(item) for item in exercises}),
+        "movement_type": sorted({_section_for_exercise(item) for item in exercises}),
+        "tags": _exercise_taxonomy_items(db, "tags"),
+    }
+
+
+def _exercise_taxonomy_items(db: Session, kind: str) -> list[str]:
+    exercises = db.query(Exercise).all()
+    if kind == "body_part":
+        return sorted({item.body_part for item in exercises if item.body_part})
+    if kind == "category":
+        return sorted({str((item.source_metadata or {}).get("category") or item.body_part).strip().lower() for item in exercises if item.body_part or (item.source_metadata or {}).get("category")})
+    if kind == "equipment":
+        return sorted({item.equipment for item in exercises if item.equipment})
+    if kind == "target":
+        return sorted({item.target for item in exercises if item.target})
+    if kind == "movement_type":
+        return sorted({_section_for_exercise(item) for item in exercises})
+    if kind == "tags":
+        values: set[str] = set()
+        for tag in db.query(ExerciseTag).all():
+            payload = tag.tags or {}
+            for value in payload.values():
+                if isinstance(value, str):
+                    values.add(value.strip().lower())
+                elif isinstance(value, list):
+                    values.update(str(item).strip().lower() for item in value if str(item).strip())
+        return sorted(values)
+    return []
+
+
+def _exercise_media_admin_status(db: Session) -> dict[str, Any]:
+    media_rows = db.query(ExerciseMedia).count()
+    hosted_https_rows = (
+        db.query(ExerciseMedia)
+        .filter(ExerciseMedia.image_path.like("https://%"), ExerciseMedia.gif_path.like("https://%"))
+        .count()
+    )
+    playable_rows = (
+        db.query(ExerciseMedia)
+        .filter(ExerciseMedia.license_status.in_(["available", "approved"]))
+        .filter(or_(ExerciseMedia.image_path.like("https://%"), ExerciseMedia.gif_path.like("https://%")))
+        .count()
+    )
+    missing_media_rows = (
+        db.query(ExerciseMedia)
+        .filter(or_(ExerciseMedia.image_path == "", ExerciseMedia.gif_path == "", ExerciseMedia.image_path.is_(None), ExerciseMedia.gif_path.is_(None)))
+        .count()
+    )
+    local_path_rows = (
+        db.query(ExerciseMedia)
+        .filter(or_(ExerciseMedia.image_path.like("file:%"), ExerciseMedia.gif_path.like("file:%"), ExerciseMedia.image_path.like("C:%"), ExerciseMedia.gif_path.like("C:%")))
+        .count()
+    )
+    storage_objects: dict[str, Any] = {"available": False}
+    try:
+        row = db.execute(
+            text(
+                """
+                select
+                  count(*) filter (where bucket_id='exercise-media' and name like 'v1/images/%') as image_objects,
+                  count(*) filter (where bucket_id='exercise-media' and name like 'v1/videos/%') as gif_objects,
+                  count(*) filter (where bucket_id='exercise-media') as total_objects,
+                  coalesce(sum((metadata->>'size')::bigint) filter (where bucket_id='exercise-media'), 0) as total_bytes
+                from storage.objects
+                """
+            )
+        ).mappings().one()
+        storage_objects = {"available": True, **dict(row)}
+    except SQLAlchemyError:
+        storage_objects = {"available": False}
+    return {
+        "status": "ready" if media_rows and hosted_https_rows == media_rows and playable_rows == media_rows and local_path_rows == 0 else "attention_required",
+        "media_rows": media_rows,
+        "hosted_https_rows": hosted_https_rows,
+        "playable_rows": playable_rows,
+        "missing_media_rows": missing_media_rows,
+        "local_path_rows": local_path_rows,
+        "bucket": "exercise-media",
+        "object_prefix": "v1",
+        "storage_objects": storage_objects,
     }
 
 

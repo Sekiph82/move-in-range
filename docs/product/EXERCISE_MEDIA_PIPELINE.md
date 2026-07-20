@@ -12,13 +12,13 @@ The imported dataset contains:
 - Localizations: `13240`
 - Locales: `10`
 - Exercise media rows: `1324`
-- Static image path rows: `1324`
-- GIF path rows: `1324`
+- Hosted HTTPS thumbnail rows: `1324`
+- Hosted HTTPS GIF rows: `1324`
 - MP4 rows: `0`
-- Approved playable external media rows: `0`
-- Rows requiring external terms review before direct rendering: `1324`
+- Playable hosted media rows: `1324`
+- Local file URL rows: `0`
 
-Because the current media rows require external terms review, the mobile product must not claim approved licensed animation playback. Until media is approved, MoveInRange renders internal motion placeholders, localized instructions, and safe substitutions instead of blank media boxes.
+The beta media pipeline now stores thumbnails and GIFs in Supabase Storage and stores only stable HTTPS URLs in PostgreSQL. Mobile, web, and admin clients must consume these URLs through the FastAPI exercise payloads rather than reading local JSON or local media files.
 
 ## Mobile Fallback Order
 
@@ -45,7 +45,7 @@ The production pipeline is:
 4. Import the manifest with the existing exercise importer.
 5. Expose only canonical HTTPS media descriptors through the API.
 
-No local file URL is valid in production. The current media license ambiguity blocks public redistribution, so the importer stores locally referenced media as `review_required` until approved hosted URLs exist.
+No local file URL is valid in production. The importer stores locally referenced media as `review_required` when hosted URLs are absent, and stores hosted rows as `available` only when the manifest contains HTTPS thumbnail and GIF URLs.
 
 ## Canonical API Object
 

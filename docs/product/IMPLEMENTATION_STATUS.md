@@ -3,8 +3,8 @@
 | Feature | Code implemented | Automated tests passed | Rendered locally | Verified on Android | Verified on iPhone | User confirmed | Known limitation |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Visual Home | Yes | Yes | Pending | Pending | Pending | No | Needs physical visual review. |
-| GIF cards | Yes | Yes | Pending | Pending | Pending | No | Approved external GIF count is 0; internal fallback renders until media review. |
-| Exercise detail media | Yes | Yes | Pending | Pending | Pending | No | Licensed media requires approval before direct display. |
+| GIF cards | Yes | Yes | Pending | Pending | Pending | No | Hosted HTTPS media is enabled; physical visual confirmation is pending. |
+| Exercise detail media | Yes | Yes | Pending | Pending | Pending | No | Detail GIF rendering must be user-confirmed on devices. |
 | Daily plan | Yes | Yes | Pending | Pending | Pending | No | Physical validation needed for readability and start flow. |
 | Weekly plan | Yes | Yes | Pending | Pending | Pending | No | Future-day regeneration remains limited. |
 | Four-week plan | Yes | Yes | Pending | Pending | Pending | No | History-preserving regeneration remains limited. |
@@ -25,4 +25,4 @@
 | Exercise dataset audit | Yes | Yes | Local report | N/A | N/A | No | 1324 records, 1324 JPGs, 1324 GIFs verified. |
 | Exercise library search/filters | Yes | Partial | Exported | Pending | Pending | No | Uses dataset-derived API filters; physical scrolling pending. |
 | Favorites and recents | Yes | Partial | Exported | Pending | Pending | No | Favorites API-backed; recents local bounded cache. |
-| Hosted media playback | Blocked | Partial | Fallback rendered | Pending | Pending | No | License ambiguity blocks public media redistribution. |
+| Hosted media playback | Yes | Partial | API verified | Pending | Pending | No | 1324 hosted JPG/GIF mappings are live; physical rendering is pending. |

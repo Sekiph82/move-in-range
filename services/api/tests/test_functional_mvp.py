@@ -102,6 +102,10 @@ def test_functional_mvp_workflow(tmp_path, monkeypatch):
     assert not first_list_item["media"]["thumbnail_url"].startswith("file:")
     assert not first_list_item["media"]["gif_url"].startswith("file:")
     assert "filter_options" in exercises.json()
+    assert client.get("/api/v1/categories").status_code == 200
+    assert client.get("/api/v1/body-parts").status_code == 200
+    assert client.get("/api/v1/target-muscles").status_code == 200
+    assert client.get("/api/v1/exercise-tags").status_code == 200
     assert "raw_gif_path_present" in first_list_item["media"]
     assert first_list_item["preparation_seconds"] == 5
     first_exercise = first_list_item["id"]
@@ -114,6 +118,9 @@ def test_functional_mvp_workflow(tmp_path, monkeypatch):
     assert unfavorite.status_code == 200
     search = client.get("/api/v1/exercises?q=chair&bodyweight=true", headers=headers)
     assert search.status_code == 200
+    search_alias = client.get("/api/v1/exercises/search?q=chair&bodyweight=true", headers=headers)
+    assert search_alias.status_code == 200
+    assert search_alias.json()["pagination"]["total"] == search.json()["pagination"]["total"]
     detail = client.get(f"/api/v1/exercises/{first_exercise}?language=tr", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["instruction_steps"]
@@ -121,6 +128,22 @@ def test_functional_mvp_workflow(tmp_path, monkeypatch):
     assert detail.json()["media"]["validation_state"] in {"approved", "requires_review"}
     assert "related_exercises" in detail.json()
     assert detail.json()["safe_alternatives_label"] == "Related movements"
+
+    admin_headers = _register(client, "exercise-admin@example.test")
+    from app.db.session import SessionLocal
+    from app.db.models import User
+
+    db = SessionLocal()
+    try:
+        admin_user = db.query(User).filter(User.email == "exercise-admin@example.test").one()
+        admin_user.role = "content_editor"
+        db.commit()
+    finally:
+        db.close()
+    admin_status = client.get("/api/v1/admin/import-jobs", headers=admin_headers)
+    assert admin_status.status_code == 200
+    assert "media" in admin_status.json()
+    assert admin_status.json()["media"]["local_path_rows"] == 0
 
     session = client.post("/api/v1/sessions", headers=headers, json={"plan_id": plan_payload["id"]})
     assert session.status_code == 201
