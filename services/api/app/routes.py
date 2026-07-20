@@ -2254,8 +2254,8 @@ def _revoke_refresh_family(family_id: str, db: Session) -> None:
 
 def _revoke_user_refresh_tokens(user_id: str, db: Session) -> None:
     records = db.query(AuthRefreshToken).filter(AuthRefreshToken.user_id == user_id, AuthRefreshToken.revoked_at.is_(None)).all()
-    for record in records:
-        _revoke_refresh_family(record.family_id, db)
+    for family_id in {record.family_id for record in records}:
+        _revoke_refresh_family(family_id, db)
 
 
 def _revoke_authorization_header(authorization: str | None) -> None:

@@ -276,6 +276,50 @@ def test_refresh_rotation_logout_and_legacy_password_upgrade(tmp_path, monkeypat
     assert client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {second['access_token']}"}).status_code == 401
 
 
+def test_logout_revokes_duplicate_active_refresh_family_once(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    registered, _ = _register(client, "duplicate-family-logout@example.test")
+    session_mod = importlib.import_module("app.db.session")
+    models = importlib.import_module("app.db.models")
+    auth_mod = importlib.import_module("app.auth")
+
+    with session_mod.SessionLocal() as db:
+        active = (
+            db.query(models.AuthRefreshToken)
+            .filter(
+                models.AuthRefreshToken.user_id == registered["user"]["id"],
+                models.AuthRefreshToken.revoked_at.is_(None),
+            )
+            .one()
+        )
+        db.add(
+            models.AuthRefreshToken(
+                user_id=active.user_id,
+                family_id=active.family_id,
+                token_id="duplicate-active-token",
+                token_hash=auth_mod.token_hash("duplicate-active-refresh-token"),
+                session_label="mobile",
+                issued_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) + timedelta(days=1),
+            )
+        )
+        db.commit()
+        family_id = active.family_id
+
+    logout = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {registered['access_token']}"})
+    assert logout.status_code == 200, logout.text
+    with session_mod.SessionLocal() as db:
+        rows = (
+            db.query(models.SessionRevocation)
+            .filter(
+                models.SessionRevocation.token_type == "refresh_family",
+                models.SessionRevocation.token_family_id == family_id,
+            )
+            .all()
+        )
+        assert len(rows) == 1
+
+
 def test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, ENABLE_DEVELOPMENT_RESET_PREVIEW="true", EMAIL_SENDER="console")
     registered, headers = _register(client, "reset@example.test")
