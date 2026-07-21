@@ -1122,6 +1122,8 @@ def generate_weekly(user: User = Depends(require_user), db: Session = Depends(ge
     used_signatures: set[str] = set()
     recent_primary_ids: set[str] = set()
     focus_cycle = ["mobility", "upper_body", "balance", "conditioning", "lower_body", "core", "recovery"]
+    allowed_equipment = _allowed_equipment_for_user(user.id, db)
+    exercise_pool = _plan_exercise_pool(user.id, readiness.model_dump(), decision, db, allowed_equipment)
     for index, day in enumerate(days):
         planned_movement = day in preferred_days and not previous_was_movement and decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"
         status_value = "planned" if planned_movement else "recovery"
@@ -1139,6 +1141,8 @@ def generate_weekly(user: User = Depends(require_user), db: Session = Depends(ge
                 week_index=0,
                 avoid_signatures=used_signatures,
                 avoid_primary_ids=recent_primary_ids,
+                exercise_pool=exercise_pool,
+                allowed_equipment=allowed_equipment,
             )
             signature = _plan_items_signature(day_payload["items"], focus_cycle[index])
             used_signatures.add(signature)
@@ -1207,6 +1211,8 @@ def generate_monthly(user: User = Depends(require_user), db: Session = Depends(g
     start_date = datetime.now(UTC).date()
     used_week_signatures: set[str] = set()
     recent_primary_ids: set[str] = set()
+    allowed_equipment = _allowed_equipment_for_user(user.id, db)
+    exercise_pool = _plan_exercise_pool(user.id, readiness_payload, decision, db, allowed_equipment)
     weeks: list[dict[str, Any]] = []
     for week, phase, reason in phases:
         week_hold = hold_reason is not None and week > 1
@@ -1231,6 +1237,8 @@ def generate_monthly(user: User = Depends(require_user), db: Session = Depends(g
                     week_index=week - 1,
                     avoid_signatures=used_week_signatures,
                     avoid_primary_ids=recent_primary_ids,
+                    exercise_pool=exercise_pool,
+                    allowed_equipment=allowed_equipment,
                 )
                 signature = _plan_items_signature(day_payload["items"], day_payload["session_type"])
                 used_week_signatures.add(signature)
@@ -3218,7 +3226,7 @@ def _impact_for_exercise(exercise: Exercise) -> str:
     return "low"
 
 
-def _plan_item_payload(exercise: Exercise, db: Session, language: str, block: str, duration_seconds: int, rest_seconds: int, index: int) -> dict[str, Any]:
+def _plan_item_payload(exercise: Exercise, db: Session, language: str, block: str, duration_seconds: int, rest_seconds: int, index: int, approved_substitutions: list[str] | None = None) -> dict[str, Any]:
     brief = _exercise_brief_payload(exercise, db, language)
     return {
         "exercise_id": brief["id"],
@@ -3248,7 +3256,9 @@ def _plan_item_payload(exercise: Exercise, db: Session, language: str, block: st
         "mistakes": brief["mistakes"],
         "safety_notes": brief["safety_notes"],
         "contraindication_tags": brief["contraindication_tags"],
-        "approved_substitutions": [item.id for item in db.query(Exercise).filter(Exercise.id != exercise.id, Exercise.equipment == exercise.equipment, Exercise.body_part == exercise.body_part).limit(3).all()],
+        "approved_substitutions": approved_substitutions
+        if approved_substitutions is not None
+        else [item.id for item in db.query(Exercise).filter(Exercise.id != exercise.id, Exercise.equipment == exercise.equipment, Exercise.body_part == exercise.body_part).limit(3).all()],
         "media": brief["media"],
         "availability": "playable" if brief["media"]["playable"] else "fallback",
         "validation_state": brief["media"]["validation_state"],
@@ -3385,6 +3395,23 @@ def _allowed_equipment_for_user(user_id: str, db: Session) -> set[str]:
     return normalized | {"body weight", "bodyweight", "none"}
 
 
+def _plan_exercise_pool(user_id: str, readiness: dict[str, Any], decision: dict[str, Any], db: Session, allowed_equipment: set[str] | None = None) -> list[Exercise]:
+    query = db.query(Exercise)
+    if decision["action"] in {"LOW_INTENSITY_ONLY", "DELAY_AND_RECHECK", "READY_WITH_MODIFICATIONS"} or readiness.get("pain", 0) >= 5:
+        query = query.filter(or_(Exercise.equipment == "body weight", Exercise.equipment == "chair", Exercise.equipment == "wall"))
+    exercises = query.all()
+    allowed = allowed_equipment if allowed_equipment is not None else _allowed_equipment_for_user(user_id, db)
+    if allowed:
+        equipment_filtered = [
+            exercise
+            for exercise in exercises
+            if (exercise.equipment or "").strip().lower() in allowed or (exercise.equipment or "").strip().lower() in {"body weight", "bodyweight", "none"}
+        ]
+        if len(equipment_filtered) >= 4:
+            exercises = equipment_filtered
+    return exercises or _fallback_exercises(db)
+
+
 def _select_plan_exercises(
     user_id: str,
     readiness: dict[str, Any],
@@ -3397,24 +3424,12 @@ def _select_plan_exercises(
     week_index: int,
     explicit_seed: str | None,
     avoid_primary_ids: set[str] | None,
+    exercise_pool: list[Exercise] | None,
+    allowed_equipment: set[str] | None,
     attempt: int,
     count: int,
 ) -> list[Exercise]:
-    query = db.query(Exercise)
-    if decision["action"] in {"LOW_INTENSITY_ONLY", "DELAY_AND_RECHECK", "READY_WITH_MODIFICATIONS"} or readiness.get("pain", 0) >= 5:
-        query = query.filter(or_(Exercise.equipment == "body weight", Exercise.equipment == "chair", Exercise.equipment == "wall"))
-    exercises = query.all()
-    allowed_equipment = _allowed_equipment_for_user(user_id, db)
-    if allowed_equipment:
-        equipment_filtered = [
-            exercise
-            for exercise in exercises
-            if (exercise.equipment or "").strip().lower() in allowed_equipment or (exercise.equipment or "").strip().lower() in {"body weight", "bodyweight", "none"}
-        ]
-        if len(equipment_filtered) >= count:
-            exercises = equipment_filtered
-    if not exercises:
-        exercises = _fallback_exercises(db)
+    exercises = exercise_pool or _plan_exercise_pool(user_id, readiness, decision, db, allowed_equipment)
     seed = explicit_seed or f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{attempt}"
     blocks = SESSION_BLOCKS.get(session_type, SESSION_BLOCKS["daily"])
     selected: list[Exercise] = []
@@ -3456,6 +3471,8 @@ def _daily_plan_payload(
     explicit_seed: str | None = None,
     avoid_signatures: set[str] | None = None,
     avoid_primary_ids: set[str] | None = None,
+    exercise_pool: list[Exercise] | None = None,
+    allowed_equipment: set[str] | None = None,
 ) -> dict[str, Any]:
     plan_date = plan_date or datetime.now(UTC).date().isoformat()
     minutes = min([5, 10, 15, 20, 30, 45, 60], key=lambda value: abs(value - readiness.get("available_minutes", 15)))
@@ -3478,13 +3495,20 @@ def _daily_plan_payload(
             week_index=week_index,
             explicit_seed=explicit_seed,
             avoid_primary_ids=avoid_primary_ids,
+            exercise_pool=exercise_pool,
+            allowed_equipment=allowed_equipment,
             attempt=attempt,
             count=4,
         )
         base_items = []
         for index, exercise in enumerate(exercises[:4]):
             block = blocks[min(index, len(blocks) - 1)]
-            item = _plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index)
+            substitutions = [
+                candidate.id
+                for candidate in exercises
+                if candidate.id != exercise.id and candidate.equipment == exercise.equipment and candidate.body_part == exercise.body_part
+            ][:3]
+            item = _plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index, substitutions)
             item["id"] = "item_" + hashlib.sha256(f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{index}:{exercise.id}".encode("utf-8")).hexdigest()[:16]
             item["plan_item_id"] = item["id"]
             item["session_date"] = plan_date
