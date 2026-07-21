@@ -113,26 +113,41 @@ export function QuickSessionScreen() {
 export function WeeklyPlanScreen() {
   const theme = useTheme();
   const queryClient = useQueryClient();
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const weekly = useQuery({ queryKey: ["weekly"], queryFn: () => apiFetch<{ plan: { days?: ProgramDay[]; total_planned_minutes?: number; week_start?: string } | null }>("/plans/weekly/current") });
   const generate = useMutation({ mutationFn: generateWeeklyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
   const days = weekly.data?.plan?.days ?? [];
+  const selectedDay = useMemo(() => days.find((day) => day.date === selectedDate) ?? days.find((day) => day.status === "planned") ?? days[0], [days, selectedDate]);
   return (
     <Panel title="Seven-day program">
       {weekly.isLoading ? <LoadingState /> : null}
       <BodyText muted>{weekly.data?.plan?.week_start ? `Week of ${weekly.data.plan.week_start}` : "Generate a week to see recovery-aware scheduling."}</BodyText>
       <View style={{ gap: 10 }}>
         {days.map((day) => (
-          <View key={`${day.day}-${day.date}`} style={{ borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 12, gap: 6 }}>
-            <Text style={{ color: theme.text, fontWeight: "800" }}>{day.day} {day.date ? `- ${day.date}` : ""}</Text>
-            <Text style={{ color: theme.muted }}>{day.status ?? "planned"} - {day.focus ?? "mobility"} - {day.duration_minutes ?? day.planned_duration ?? 0} min</Text>
-            {day.items?.[0] ? <ExerciseMediaFrame media={day.items[0].media} title={day.items[0].name} section={day.focus} target={day.items[0].equipment} /> : <BodyText muted>Recovery day. Keep movement optional and easy.</BodyText>}
+          <Pressable
+            key={day.session_id ?? day.id ?? `${day.day}-${day.date}`}
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${day.day} ${day.status ?? "planned"} session`}
+            onPress={() => setSelectedDate(day.date ?? null)}
+            style={{ borderColor: selectedDay?.date === day.date ? theme.primary : theme.border, borderWidth: 1, borderRadius: 8, padding: 12, gap: 8, backgroundColor: theme.surface }}
+          >
+            <Text style={{ color: theme.text, fontWeight: "900" }}>{day.day} {day.date ? `- ${day.date}` : ""}</Text>
+            <Text style={{ color: theme.muted }}>{day.status ?? "planned"} - {day.focus ?? "mobility"} - {day.duration_minutes ?? day.planned_duration ?? 0} min - {day.items?.length ?? 0} movements</Text>
+            {day.items?.[0] ? <ExerciseMediaFrame media={day.items[0].media} title={day.items[0].name} section={day.focus} target={day.items[0].equipment} animated={false} /> : <BodyText muted>Recovery day. Keep movement optional and easy.</BodyText>}
             <View style={{ flexDirection: "row", gap: 12, flexWrap: "wrap" }}>
-              <SecondaryLink href="/daily-plan" label="Open day" />
+              <SecondaryLink href={day.items?.[0] ? `/exercise/${day.items[0].exercise_id}` : "/readiness"} label={day.items?.[0] ? "Lead movement" : "Recovery check"} />
               <SecondaryLink href="/readiness" label={day.session_type === "movement" ? "Check readiness" : "Swap rest day"} />
             </View>
-          </View>
+          </Pressable>
         ))}
       </View>
+      {selectedDay ? (
+        <View style={{ gap: 10 }}>
+          <Text style={{ color: theme.text, fontSize: 18, fontWeight: "900" }}>{selectedDay.day} detail</Text>
+          {(selectedDay.items ?? []).map((item) => <MovementCard key={item.plan_item_id ?? `${selectedDay.date}-${item.exercise_id}`} item={item} />)}
+          {!(selectedDay.items ?? []).length ? <BodyText muted>This date is planned as recovery, with no copied workout items.</BodyText> : null}
+        </View>
+      ) : null}
       {!weekly.data?.plan ? <BodyText muted>No weekly plan saved yet.</BodyText> : null}
       <ActionButton label={generate.isPending ? "Generating..." : "Generate weekly plan"} onPress={() => generate.mutate()} />
     </Panel>
@@ -142,9 +157,12 @@ export function WeeklyPlanScreen() {
 export function MonthlyPlanScreen() {
   const theme = useTheme();
   const queryClient = useQueryClient();
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const monthly = useQuery({ queryKey: ["monthly"], queryFn: () => apiFetch<{ plan: { weeks?: MonthWeek[]; timeline?: string[] } | null }>("/plans/monthly/current") });
   const generate = useMutation({ mutationFn: generateMonthlyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
   const weeks = monthly.data?.plan?.weeks ?? [];
+  const allDays = useMemo(() => weeks.flatMap((week) => week.days ?? []), [weeks]);
+  const selectedDay = useMemo(() => allDays.find((day) => day.date === selectedDate) ?? allDays.find((day) => day.status === "planned") ?? allDays[0], [allDays, selectedDate]);
   return (
     <Panel title="Four-week progression">
       {monthly.isLoading ? <LoadingState /> : null}
@@ -153,18 +171,26 @@ export function MonthlyPlanScreen() {
           <View key={week.week} style={{ borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 12, gap: 8 }}>
             <Text style={{ color: theme.text, fontSize: 18, fontWeight: "800" }}>Week {week.week}: {week.phase}</Text>
             <Text style={{ color: week.hold ? theme.safety : theme.muted }}>{week.progression_reason ?? "Conservative progression based on tolerance."}</Text>
-            <Text style={{ color: theme.text }}>{week.planned_sessions ?? 0} sessions - {week.recovery_days ?? 0} recovery days - {week.status ?? "planned"}</Text>
+            <Text style={{ color: theme.text }}>{week.planned_sessions ?? 0} sessions - {week.recovery_days ?? 0} recovery days - {week.total_planned_minutes ?? 0} min - {week.status ?? "planned"}</Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {(week.days ?? []).map((day) => (
-                <View key={`${week.week}-${day.day}`} style={{ minWidth: 74, borderRadius: 8, borderColor: theme.border, borderWidth: 1, padding: 8 }}>
+                <Pressable key={day.session_id ?? day.id ?? `${week.week}-${day.day}-${day.date}`} accessibilityRole="button" accessibilityLabel={`Open ${day.date ?? day.day} plan`} onPress={() => setSelectedDate(day.date ?? null)} style={{ width: 92, borderRadius: 8, borderColor: selectedDay?.date === day.date ? theme.primary : theme.border, borderWidth: 1, padding: 8, gap: 6, backgroundColor: theme.surface }}>
                   <Text style={{ color: theme.text, fontWeight: "800" }}>{day.day}</Text>
-                  <Text style={{ color: theme.muted, fontSize: 12 }}>{day.status}</Text>
-                </View>
+                  <Text numberOfLines={1} style={{ color: theme.muted, fontSize: 12 }}>{day.status}</Text>
+                  {day.items?.[0] ? <ExerciseMediaFrame media={day.items[0].media} title={day.items[0].name} section={day.focus} target={day.items[0].target} animated={false} /> : null}
+                </Pressable>
               ))}
             </View>
           </View>
         ))}
       </View>
+      {selectedDay ? (
+        <View style={{ gap: 10 }}>
+          <Text style={{ color: theme.text, fontSize: 18, fontWeight: "900" }}>{selectedDay.date ?? selectedDay.day} session</Text>
+          {(selectedDay.items ?? []).map((item) => <MovementCard key={item.plan_item_id ?? `${selectedDay.date}-${item.exercise_id}`} item={item} />)}
+          {!(selectedDay.items ?? []).length ? <BodyText muted>This date is recovery or held by safety rules.</BodyText> : null}
+        </View>
+      ) : null}
       {!monthly.data?.plan ? <BodyText muted>No monthly phase view saved yet.</BodyText> : null}
       <ActionButton label={generate.isPending ? "Generating..." : "Generate four-week program"} onPress={() => generate.mutate()} />
       <View style={{ gap: 8 }}>

@@ -16,6 +16,8 @@ export default function ProgramTab() {
   const makeWeekly = useMutation({ mutationFn: generateWeeklyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
   const makeMonthly = useMutation({ mutationFn: generateMonthlyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
   const first = daily.data?.plan?.items?.[0];
+  const plannedWeekDays = weekly.data?.plan?.days?.filter((day) => day.status === "planned") ?? [];
+  const plannedMonthDays = monthly.data?.plan?.weeks?.flatMap((week) => week.days ?? []).filter((day) => day.status === "planned") ?? [];
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 30, fontWeight: "900" }}>Program</Text>
@@ -29,7 +31,12 @@ export default function ProgramTab() {
       </View>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 10 }}>
         <Text style={{ color: theme.text, fontSize: 20, fontWeight: "900" }}>Seven-day plan</Text>
-        {(weekly.data?.plan?.days ?? []).map((day) => <Text key={`${day.day}-${day.date}`} style={{ color: theme.text }}>{day.day}: {day.status} - {day.focus} - {day.duration_minutes ?? 0} min</Text>)}
+        {plannedWeekDays.slice(0, 3).map((day) => (
+          <View key={day.session_id ?? `${day.day}-${day.date}`} style={{ gap: 6 }}>
+            {day.items?.[0] ? <ExerciseMediaFrame media={day.items[0].media} title={day.items[0].name} section={day.focus} target={day.items[0].equipment} animated={false} /> : null}
+            <Text style={{ color: theme.text }}>{day.day}: {day.focus} - {day.duration_minutes ?? 0} min - {day.items?.length ?? 0} movements</Text>
+          </View>
+        ))}
         {!weekly.data?.plan ? <Text style={{ color: theme.muted }}>No week saved yet.</Text> : null}
         <Pressable accessibilityRole="button" onPress={() => weekly.data?.plan ? router.push("/weekly-plan" as never) : makeWeekly.mutate()} style={{ minHeight: 48, justifyContent: "center" }}>
           <Text style={{ color: theme.primary, fontWeight: "800" }}>{weekly.data?.plan ? "Open week" : makeWeekly.isPending ? "Generating..." : "Generate week"}</Text>
@@ -37,7 +44,8 @@ export default function ProgramTab() {
       </View>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 10 }}>
         <Text style={{ color: theme.text, fontSize: 20, fontWeight: "900" }}>Four-week progression</Text>
-        {(monthly.data?.plan?.weeks ?? []).map((week) => <Text key={week.week} style={{ color: theme.text }}>Week {week.week}: {week.phase} - {week.status ?? "planned"}</Text>)}
+        {(monthly.data?.plan?.weeks ?? []).map((week) => <Text key={week.week} style={{ color: theme.text }}>Week {week.week}: {week.phase} - {week.planned_sessions ?? 0} sessions</Text>)}
+        {plannedMonthDays[0]?.items?.[0] ? <ExerciseMediaFrame media={plannedMonthDays[0].items[0].media} title={plannedMonthDays[0].items[0].name} section={plannedMonthDays[0].focus} target={plannedMonthDays[0].items[0].equipment} animated={false} /> : null}
         {!monthly.data?.plan ? <Text style={{ color: theme.muted }}>No four-week program saved yet.</Text> : null}
         <Pressable accessibilityRole="button" onPress={() => monthly.data?.plan ? router.push("/monthly-plan" as never) : makeMonthly.mutate()} style={{ minHeight: 48, justifyContent: "center" }}>
           <Text style={{ color: theme.primary, fontWeight: "800" }}>{monthly.data?.plan ? "Open month" : makeMonthly.isPending ? "Generating..." : "Generate month"}</Text>

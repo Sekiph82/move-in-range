@@ -21,6 +21,7 @@ export type ExerciseMedia = {
 
 export type PlanExerciseItem = {
   id?: string;
+  plan_item_id?: string;
   exercise_id: string;
   source_id?: string;
   name: string;
@@ -74,17 +75,20 @@ export type MovementPlan = {
 };
 
 export type ProgramDay = {
+  id?: string;
   day: string;
   date?: string;
   day_index?: number;
   focus?: string;
   session_type?: string;
+  session_id?: string;
   planned_duration?: number;
   duration_minutes?: number;
   intensity?: string;
   status?: string;
   safety_modified?: boolean;
   items?: PlanExerciseItem[];
+  media_summary?: { playable?: number; fallback?: number };
   actions?: string[];
 };
 
@@ -97,5 +101,7 @@ export type MonthWeek = {
   planned_sessions?: number;
   recovery_days?: number;
   focus?: string[];
+  total_planned_minutes?: number;
+  signature_count?: number;
   days?: ProgramDay[];
 };

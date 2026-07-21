@@ -19,11 +19,14 @@ type PlayerState = {
   remainingSeconds: number;
   elapsedSeconds: number;
   phaseStartedAt: number | null;
+  phaseBeforePause?: PlayerPhase;
+  pausedRemainingSeconds?: number;
   pausedAt: number | null;
   completed: string[];
   skipped: string[];
   substituted: string[];
   painEvents: number;
+  completionSubmitted: boolean;
   sound: boolean;
   haptics: boolean;
   error?: string;
@@ -35,11 +38,14 @@ const initialState: PlayerState = {
   remainingSeconds: 0,
   elapsedSeconds: 0,
   phaseStartedAt: null,
+  phaseBeforePause: undefined,
+  pausedRemainingSeconds: undefined,
   pausedAt: null,
   completed: [],
   skipped: [],
   substituted: [],
   painEvents: 0,
+  completionSubmitted: false,
   sound: true,
   haptics: true
 };
@@ -66,6 +72,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<PlayerState>(initialState);
   const lastCueRef = useRef<string>("");
+  const completionSubmittedRef = useRef(false);
   const daily = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest") });
   const blocked = readiness.data?.item?.decision?.action === "BLOCK_AND_SHOW_SAFETY_MESSAGE";
@@ -82,7 +89,8 @@ export function WorkoutScreen({ id }: { id?: string }) {
     },
     onSuccess: ({ sessionId, plan }) => {
       const first = plan.items?.[0];
-      setState((current) => ({ ...current, phase: "PREPARING", sessionId, plan, activeIndex: 0, remainingSeconds: secondsFor(first, "PREPARING"), phaseStartedAt: Date.now(), error: undefined }));
+      completionSubmittedRef.current = false;
+      setState((current) => ({ ...current, phase: "PREPARING", sessionId, plan, activeIndex: 0, remainingSeconds: secondsFor(first, "PREPARING"), phaseStartedAt: Date.now(), completionSubmitted: false, error: undefined }));
     },
     onError: (error) => setState((current) => ({ ...current, phase: "ERROR", error: error instanceof Error ? error.message : String(error) }))
   });
@@ -108,7 +116,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
       setState((current) => {
         if (!["PREPARING", "WORKING", "RESTING", "SIDE_SWITCH"].includes(current.phase) || !current.phaseStartedAt) return current;
         const duration = secondsFor((current.plan?.items ?? [])[current.activeIndex], current.phase);
-        const elapsed = Math.floor((Date.now() - current.phaseStartedAt) / 1000);
+        const elapsed = Math.max(0, Math.floor((Date.now() - current.phaseStartedAt) / 1000));
         const remaining = Math.max(0, duration - elapsed);
         return { ...current, remainingSeconds: remaining, elapsedSeconds: current.elapsedSeconds + (remaining !== current.remainingSeconds ? 1 : 0) };
       });
@@ -138,7 +146,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
       const completed = [...state.completed, activeItem.exercise_id];
       if (state.activeIndex >= items.length - 1) {
         setState((current) => ({ ...current, phase: "COMPLETING", completed, phaseStartedAt: null }));
-        complete.mutate();
+        requestCompletion();
         return;
       }
       setState((current) => ({ ...current, phase: "RESTING", completed, remainingSeconds: secondsFor(activeItem, "RESTING"), phaseStartedAt: Date.now() }));
@@ -150,17 +158,31 @@ export function WorkoutScreen({ id }: { id?: string }) {
       setState((current) => ({ ...current, phase: "TRANSITIONING", activeIndex: nextIndex, remainingSeconds: 1, phaseStartedAt: Date.now() }));
       setTimeout(() => setState((current) => ({ ...current, phase: "PREPARING", remainingSeconds: secondsFor(items[nextIndex], "PREPARING"), phaseStartedAt: Date.now() })), 250);
     }
-  }, [state.remainingSeconds, state.phase, activeItem, items, complete, state]);
+  }, [state.remainingSeconds, state.phase, activeItem, items, state]);
 
   const progressText = useMemo(() => `${Math.min(state.activeIndex + 1, Math.max(1, items.length))} of ${Math.max(1, items.length)}`, [state.activeIndex, items.length]);
 
   const pausePlayer = () => {
-    setState((current) => ({ ...current, phase: "PAUSED", pausedAt: Date.now(), phaseStartedAt: null }));
+    setState((current) => ({ ...current, phaseBeforePause: current.phase, pausedRemainingSeconds: current.remainingSeconds, phase: "PAUSED", pausedAt: Date.now(), phaseStartedAt: null }));
     syncSession.mutate({ status: "paused", elapsed_seconds: state.elapsedSeconds, current_index: state.activeIndex, payload: { player_phase: "PAUSED" } });
     cue("Paused", state);
   };
   const resumePlayer = () => {
-    setState((current) => ({ ...current, phase: "WORKING", phaseStartedAt: Date.now(), pausedAt: null }));
+    setState((current) => {
+      const resumedPhase = current.phaseBeforePause && current.phaseBeforePause !== "PAUSED" ? current.phaseBeforePause : "WORKING";
+      const item = (current.plan?.items ?? [])[current.activeIndex];
+      const duration = secondsFor(item, resumedPhase);
+      const remaining = Math.max(1, current.pausedRemainingSeconds ?? current.remainingSeconds ?? duration);
+      return {
+        ...current,
+        phase: resumedPhase,
+        remainingSeconds: remaining,
+        phaseStartedAt: Date.now() - Math.max(0, duration - remaining) * 1000,
+        pausedAt: null,
+        phaseBeforePause: undefined,
+        pausedRemainingSeconds: undefined
+      };
+    });
     syncSession.mutate({ status: "in_progress", current_index: state.activeIndex, payload: { player_phase: "WORKING" } });
     cue("Resumed", state);
   };
@@ -169,6 +191,12 @@ export function WorkoutScreen({ id }: { id?: string }) {
       const nextIndex = Math.min(items.length - 1, current.activeIndex + 1);
       return { ...current, skipped: [...current.skipped, activeItem?.exercise_id ?? "unknown"], activeIndex: nextIndex, phase: nextIndex === current.activeIndex ? "COMPLETING" : "PREPARING", remainingSeconds: secondsFor(items[nextIndex], "PREPARING"), phaseStartedAt: Date.now() };
     });
+  };
+  const requestCompletion = () => {
+    if (completionSubmittedRef.current || state.completionSubmitted) return;
+    completionSubmittedRef.current = true;
+    setState((current) => ({ ...current, completionSubmitted: true, phase: "COMPLETING", phaseStartedAt: null }));
+    complete.mutate();
   };
 
   if (daily.isLoading && state.phase === "IDLE") return <LoadingState label="Loading workout plan" />;
@@ -200,7 +228,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
                 <ExerciseMediaFrame media={nextItem.media} title={nextItem.name} section={nextItem.section} target={nextItem.equipment} />
               </View>
             ) : null}
-            <PlayerControls phase={state.phase} onPause={pausePlayer} onResume={resumePlayer} onSkip={skip} onPain={() => pain.mutate()} onSubstitute={() => setState((current) => ({ ...current, phase: "SUBSTITUTING" }))} onEnd={() => setState((current) => ({ ...current, phase: "STOPPED", phaseStartedAt: null }))} onComplete={() => complete.mutate()} />
+            <PlayerControls phase={state.phase} onPause={pausePlayer} onResume={resumePlayer} onSkip={skip} onPain={() => pain.mutate()} onSubstitute={() => setState((current) => ({ ...current, phase: "SUBSTITUTING" }))} onEnd={() => setState((current) => ({ ...current, phase: "STOPPED", phaseStartedAt: null }))} onComplete={requestCompletion} />
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
               <Pressable accessibilityRole="switch" accessibilityState={{ checked: state.sound }} onPress={() => setState((current) => ({ ...current, sound: !current.sound }))} style={{ minHeight: 44, justifyContent: "center" }}>
                 <Text style={{ color: theme.primary, fontWeight: "800" }}>Sound {state.sound ? "on" : "off"}</Text>

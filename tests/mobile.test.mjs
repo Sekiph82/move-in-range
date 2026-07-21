@@ -259,6 +259,25 @@ test("mobile hard-coded navigation targets correspond to real Expo Router routes
   assert.deepEqual(invalid, []);
 });
 
+test("plan screens render date-specific week and month sessions with stable IDs and media previews", () => {
+  const source = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
+  assert.match(source, /selectedDate/);
+  assert.match(source, /selectedDay/);
+  assert.match(source, /day\.session_id/);
+  assert.match(source, /day\.items\?\.\[0\]/);
+  assert.match(source, /ExerciseMediaFrame/);
+  assert.doesNotMatch(source, /key=\{`\$\{week\.week\}-\$\{day\.day\}`\}/);
+});
+
+test("workout screen preserves phase time across pause and prevents duplicate completion submissions", () => {
+  const source = readFileSync("apps/mobile/src/features/workout/WorkoutScreens.tsx", "utf8");
+  assert.match(source, /completionSubmittedRef/);
+  assert.match(source, /pausedRemainingSeconds/);
+  assert.match(source, /phaseBeforePause/);
+  assert.match(source, /Date\.now\(\) - Math\.max\(0, duration - remaining\) \* 1000/);
+  assert.match(source, /requestCompletion/);
+});
+
 test("auth registration links target register and login routes explicitly", () => {
   const authScreen = readFileSync("apps/mobile/src/features/auth/AuthScreen.tsx", "utf8");
   assert.match(authScreen, /<SecondaryLink href=\{REGISTER_ROUTE\} label="Create an account" \/>/);

@@ -11,5 +11,19 @@ config.resolver.nodeModulesPaths = Array.from(new Set([
   path.resolve(workspaceRoot, "node_modules"),
   ...(config.resolver.nodeModulesPaths ?? [])
 ]));
+const artifactBlockList = [
+  /[/\\]\.pytest-tmp[/\\].*/,
+  /[/\\]\.pytest_cache[/\\].*/,
+  /[/\\]\.ruff_cache[/\\].*/,
+  /[/\\]\.uv-cache[/\\].*/,
+  /[/\\]\.venv[/\\].*/,
+  /[/\\]\.local[/\\]pytest-temp[^/\\]*[/\\].*/,
+  /[/\\]\.local[/\\]pytest-tmp[/\\].*/,
+  /[/\\]\.local[/\\]eas-artifacts[/\\].*/,
+];
+config.resolver.blockList = [
+  ...(Array.isArray(config.resolver.blockList) ? config.resolver.blockList : config.resolver.blockList ? [config.resolver.blockList] : []),
+  ...artifactBlockList
+];
 
 module.exports = config;

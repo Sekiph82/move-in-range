@@ -31,6 +31,55 @@ def _register(client, email):
     return {"Authorization": f"Bearer {token}"}
 
 
+def _seed_varied_plan_exercises():
+    from app.db.models import Exercise, ExerciseLocalization
+    from app.db.session import SessionLocal
+
+    records = [
+        ("plan-chair-march", "Chair march", "cardio", "body weight", "cardio"),
+        ("plan-wall-glide", "Wall glide", "shoulders", "wall", "mobility"),
+        ("plan-standing-row", "Standing row", "back", "band", "upper body"),
+        ("plan-hip-hinge", "Hip hinge", "hips", "body weight", "lower body"),
+        ("plan-calf-raise", "Calf raise", "legs", "body weight", "lower body"),
+        ("plan-bird-dog", "Bird dog", "core", "body weight", "core"),
+        ("plan-side-step", "Side step", "legs", "body weight", "balance"),
+        ("plan-neck-mobility", "Neck mobility", "neck", "body weight", "mobility"),
+        ("plan-breathing", "Breathing cooldown", "cardio", "body weight", "recovery"),
+        ("plan-supported-squat", "Supported squat", "legs", "chair", "strength"),
+    ]
+    with SessionLocal() as db:
+        for source_id, name, body_part, equipment, target in records:
+            exercise_id = f"exercise-{source_id}"
+            if db.get(Exercise, exercise_id):
+                continue
+            db.add(
+                Exercise(
+                    id=exercise_id,
+                    source_id=source_id,
+                    slug=source_id,
+                    name=name,
+                    body_part=body_part,
+                    equipment=equipment,
+                    target=target,
+                    secondary_muscles=[],
+                    source_metadata={"category": target, "media_status": "available"},
+                )
+            )
+            db.add(
+                ExerciseLocalization(
+                    exercise_id=exercise_id,
+                    locale="en",
+                    instructions="Move with control in a comfortable range.",
+                    instruction_steps=["Set your position.", "Move slowly.", "Stop if symptoms increase."],
+                )
+            )
+        db.commit()
+
+
+def _exercise_signature(day):
+    return tuple(item["exercise_id"] for item in day.get("items", []))
+
+
 def test_functional_mvp_workflow(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     headers = _register(client, "mover@example.test")
@@ -166,6 +215,66 @@ def test_functional_mvp_workflow(tmp_path, monkeypatch):
     assert insights.status_code == 200
     assert insights.json()["sessions_completed"] == 1
     assert "not an insulin or treatment recommendation" in insights.json()["glucose"]["disclaimer"].lower()
+
+
+def test_date_aware_plan_generation_prevents_week_month_duplication(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_varied_plan_exercises()
+    headers = _register(client, "varied-planner@example.test")
+    profile = client.put(
+        "/api/v1/profile",
+        headers=headers,
+        json={
+            "preferred_name": "Planner",
+            "equipment": ["body weight", "chair", "wall", "band"],
+            "preferred_training_days": ["Mon", "Wed", "Fri"],
+            "consent_accepted": True,
+            "onboarding_complete": True,
+        },
+    )
+    assert profile.status_code == 200
+    assert client.post(
+        "/api/v1/readiness-checks",
+        headers=headers,
+        json={"energy": 4, "sleep_quality": 4, "pain": 1, "available_minutes": 15, "stress": 2},
+    ).status_code == 201
+
+    week = client.post("/api/v1/plans/weekly/generate", headers=headers).json()["plan"]
+    active_days = [day for day in week["days"] if day["status"] == "planned"]
+    assert len(active_days) >= 3
+    signatures = [_exercise_signature(day) for day in active_days]
+    assert len(set(signatures)) > 1
+    assert all(left != right for left, right in zip(signatures, signatures[1:]))
+    assert len({day["date"] for day in week["days"]}) == 7
+    assert len({day["session_id"] for day in active_days}) == len(active_days)
+    plan_item_ids = [item["plan_item_id"] for day in active_days for item in day["items"]]
+    assert len(plan_item_ids) == len(set(plan_item_ids))
+    assert all(item["media"]["thumbnail_url"] is not None for day in active_days for item in day["items"])
+    assert all(not str(item["media"]["thumbnail_url"]).startswith(("file:", "C:")) for day in active_days for item in day["items"])
+
+    month = client.post("/api/v1/plans/monthly/generate", headers=headers).json()["plan"]
+    assert len(month["weeks"]) == 4
+    active_month_days = [day for week in month["weeks"] for day in week["days"] if day["status"] == "planned"]
+    assert active_month_days
+    month_signatures = [_exercise_signature(day) for day in active_month_days]
+    assert len(set(month_signatures)) > 1
+    week_signatures = [
+        tuple(_exercise_signature(day) for day in week["days"] if day["status"] == "planned")
+        for week in month["weeks"]
+    ]
+    assert len(set(week_signatures)) > 1
+    assert all(day["items"] == [] for week in month["weeks"] for day in week["days"] if day["status"] != "planned")
+
+    routes_mod = importlib.import_module("app.routes")
+    safety_mod = importlib.import_module("app.services.safety")
+    session_mod = importlib.import_module("app.db.session")
+    decision = safety_mod.evaluate_safety({"energy": 4, "sleep_quality": 4, "pain": 1, "available_minutes": 15})
+    with session_mod.SessionLocal() as db:
+        first = routes_mod._daily_plan_payload("seed-user", {"available_minutes": 15, "pain": 1}, decision, db, plan_date="2026-07-20", session_type="mobility", explicit_seed="same")
+        second = routes_mod._daily_plan_payload("seed-user", {"available_minutes": 15, "pain": 1}, decision, db, plan_date="2026-07-20", session_type="mobility", explicit_seed="same")
+        different_date = routes_mod._daily_plan_payload("seed-user", {"available_minutes": 15, "pain": 1}, decision, db, plan_date="2026-07-21", session_type="mobility")
+    assert _exercise_signature(first) == _exercise_signature(second)
+    assert _exercise_signature(first) != _exercise_signature(different_date)
 
 
 def test_user_isolation_for_plans_and_sessions(tmp_path, monkeypatch):

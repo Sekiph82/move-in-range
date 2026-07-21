@@ -1022,7 +1022,7 @@ def generate_daily(payload: ReadinessPayload | None = None, user: User = Depends
     decision = evaluate_safety(readiness.model_dump())
     if decision["action"] == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
         return {"blocked": True, "safety_decision": {**decision, "timestamp": datetime.now(UTC).isoformat()}, "plan": None}
-    plan_payload = _daily_plan_payload(user.id, readiness.model_dump(), decision, db)
+    plan_payload = _daily_plan_payload(user.id, readiness.model_dump(), decision, db, plan_date=datetime.now(UTC).date().isoformat(), session_type="daily")
     plan = Plan(id=plan_payload["id"], user_id=user.id, plan_type="daily", payload=plan_payload, safety_action=decision["action"])
     db.add(plan)
     db.commit()
@@ -1113,30 +1113,53 @@ def create_quick_session(payload: ProgramRequestPayload, user: User = Depends(re
 def generate_weekly(user: User = Depends(require_user), db: Session = Depends(get_db)):
     readiness = _latest_or_default_readiness(user.id, db)
     decision = evaluate_safety(readiness.model_dump())
-    daily = _daily_plan_payload(user.id, readiness.model_dump(), decision, db)
     profile = _profile_for(user.id, db)
     preferred_days = (profile.health_payload or {}).get("preferred_training_days", ["Mon", "Wed", "Fri"])
     days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     week_start = datetime.now(UTC).date() - timedelta(days=datetime.now(UTC).weekday())
     previous_was_movement = False
     schedule = []
-    focus_cycle = ["mobility", "strength", "balance", "cardio", "recovery", "mobility", "recovery"]
+    used_signatures: set[str] = set()
+    recent_primary_ids: set[str] = set()
+    focus_cycle = ["mobility", "upper_body", "balance", "conditioning", "lower_body", "core", "recovery"]
     for index, day in enumerate(days):
         planned_movement = day in preferred_days and not previous_was_movement and decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"
         status_value = "planned" if planned_movement else "recovery"
+        day_payload = None
+        if planned_movement:
+            plan_date = (week_start + timedelta(days=index)).isoformat()
+            day_payload = _daily_plan_payload(
+                user.id,
+                readiness.model_dump(),
+                decision,
+                db,
+                plan_date=plan_date,
+                session_type=focus_cycle[index],
+                day_index=index,
+                week_index=0,
+                avoid_signatures=used_signatures,
+                avoid_primary_ids=recent_primary_ids,
+            )
+            signature = _plan_items_signature(day_payload["items"], focus_cycle[index])
+            used_signatures.add(signature)
+            if day_payload["items"]:
+                recent_primary_ids = {day_payload["items"][0]["exercise_id"]}
         schedule.append(
             {
+                "id": (day_payload or {}).get("session_id") or f"rest_{(week_start + timedelta(days=index)).isoformat()}",
                 "day": day,
                 "date": (week_start + timedelta(days=index)).isoformat(),
                 "day_index": index,
                 "focus": focus_cycle[index],
                 "session_type": "movement" if planned_movement else "recovery",
-                "planned_duration": daily["total_minutes"] if planned_movement else 0,
-                "duration_minutes": daily["total_minutes"] if planned_movement else 0,
-                "intensity": "low" if decision["action"] != "READY" or not planned_movement else daily["intensity"],
+                "session_id": (day_payload or {}).get("session_id"),
+                "planned_duration": day_payload["total_minutes"] if day_payload else 0,
+                "duration_minutes": day_payload["total_minutes"] if day_payload else 0,
+                "intensity": "low" if decision["action"] != "READY" or not planned_movement else day_payload["intensity"],
                 "status": status_value,
                 "safety_modified": decision["action"] != "READY",
-                "items": daily["items"] if planned_movement else [],
+                "items": day_payload["items"] if day_payload else [],
+                "media_summary": day_payload["media_summary"] if day_payload else {"playable": 0, "fallback": 0},
                 "actions": ["open", "start", "make_easier", "move_session"] if planned_movement else ["swap_rest_day"],
             }
         )
@@ -1148,7 +1171,7 @@ def generate_weekly(user: User = Depends(require_user), db: Session = Depends(ge
         "total_planned_minutes": sum(day["duration_minutes"] for day in schedule),
         "explanation": "Weekly plan spaces movement days with recovery days and keeps intensity conservative after safety modifications.",
     }
-    db.add(Plan(id=payload["id"], user_id=user.id, plan_type="weekly", payload=payload, safety_action=daily["safety_decision"]["action"]))
+    db.add(Plan(id=payload["id"], user_id=user.id, plan_type="weekly", payload=payload, safety_action=decision["action"]))
     db.commit()
     return {"plan": payload}
 
@@ -1173,35 +1196,83 @@ def generate_monthly(user: User = Depends(require_user), db: Session = Depends(g
         hold_reason = "low-readiness or clinician-restriction hold"
     phases = [
         (1, "Adaptation", "Establish routine and comfortable movement range."),
-        (2, "Duration progression", "Add modest duration only if readiness and pain history remain stable."),
-        (3, "Modest intensity or volume progression", "Progress one variable at a time; no simultaneous aggressive increase."),
-        (4, "Recovery and performance review", "Consolidate, review symptoms, and avoid automatic load increase."),
+        (2, "Consistency", "Repeat the weekly rhythm with different movement choices before progressing load."),
+        (3, "Gentle progression", "Progress one variable at a time; no simultaneous aggressive increase."),
+        (4, "Recovery and reassessment", "Consolidate, review symptoms, and avoid automatic load increase."),
     ]
-    payload = {
-        "id": "month_" + secrets.token_hex(8),
-        "program_start_date": datetime.now(UTC).date().isoformat(),
-        "weeks": [
+    profile = _profile_for(user.id, db)
+    preferred_days = (profile.health_payload or {}).get("preferred_training_days", ["Mon", "Wed", "Fri"])
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    focus_cycle = ["mobility", "upper_body", "balance", "conditioning", "lower_body", "core", "recovery"]
+    start_date = datetime.now(UTC).date()
+    used_week_signatures: set[str] = set()
+    recent_primary_ids: set[str] = set()
+    weeks: list[dict[str, Any]] = []
+    for week, phase, reason in phases:
+        week_hold = hold_reason is not None and week > 1
+        planned_indexes = {days.index(day) for day in preferred_days if day in days}
+        if week == 4 and not week_hold:
+            planned_indexes = set(sorted(planned_indexes)[: max(1, min(2, len(planned_indexes)))])
+        week_days = []
+        week_signatures = []
+        for index, day in enumerate(days):
+            plan_date = (start_date + timedelta(days=((week - 1) * 7) + index)).isoformat()
+            planned_movement = index in planned_indexes and not week_hold and decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"
+            day_payload = None
+            if planned_movement:
+                day_payload = _daily_plan_payload(
+                    user.id,
+                    readiness_payload,
+                    decision,
+                    db,
+                    plan_date=plan_date,
+                    session_type=focus_cycle[(index + week - 1) % len(focus_cycle)],
+                    day_index=index,
+                    week_index=week - 1,
+                    avoid_signatures=used_week_signatures,
+                    avoid_primary_ids=recent_primary_ids,
+                )
+                signature = _plan_items_signature(day_payload["items"], day_payload["session_type"])
+                used_week_signatures.add(signature)
+                week_signatures.append(signature)
+                if day_payload["items"]:
+                    recent_primary_ids = {day_payload["items"][0]["exercise_id"]}
+            week_days.append(
+                {
+                    "id": (day_payload or {}).get("session_id") or f"rest_{plan_date}",
+                    "day": day,
+                    "date": plan_date,
+                    "day_index": index,
+                    "status": "planned" if planned_movement else "recovery",
+                    "focus": focus_cycle[(index + week - 1) % len(focus_cycle)],
+                    "session_type": "movement" if planned_movement else "recovery",
+                    "session_id": (day_payload or {}).get("session_id"),
+                    "planned_duration": day_payload["total_minutes"] if day_payload else 0,
+                    "duration_minutes": day_payload["total_minutes"] if day_payload else 0,
+                    "items": day_payload["items"] if day_payload else [],
+                    "media_summary": day_payload["media_summary"] if day_payload else {"playable": 0, "fallback": 0},
+                    "actions": ["open", "start", "make_easier", "move_session"] if planned_movement else ["swap_rest_day"],
+                }
+            )
+        weeks.append(
             {
                 "week": week,
                 "phase": phase,
                 "progression_reason": hold_reason or reason,
-                "hold": hold_reason is not None and week > 1,
-                "status": "hold" if hold_reason is not None and week > 1 else "planned",
-                "planned_sessions": 3 if week < 4 else 2,
-                "recovery_days": 4 if week < 4 else 5,
-                "focus": ["mobility", "strength", "balance"] if week < 4 else ["recovery", "reassessment"],
-                "days": [
-                    {
-                        "day": day,
-                        "date": (datetime.now(UTC).date() + timedelta(days=((week - 1) * 7) + index)).isoformat(),
-                        "status": "planned" if index in {0, 2, 4} and not (hold_reason is not None and week > 1) else "recovery",
-                        "focus": ["mobility", "strength", "balance", "recovery", "cardio", "mobility", "recovery"][index],
-                    }
-                    for index, day in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
-                ],
+                "hold": week_hold,
+                "status": "hold" if week_hold else "planned",
+                "planned_sessions": sum(1 for day in week_days if day["status"] == "planned"),
+                "recovery_days": sum(1 for day in week_days if day["status"] != "planned"),
+                "focus": sorted({day["focus"] for day in week_days if day["status"] == "planned"}) or ["recovery", "reassessment"],
+                "days": week_days,
+                "total_planned_minutes": sum(day["duration_minutes"] for day in week_days),
+                "signature_count": len(set(week_signatures)),
             }
-            for week, phase, reason in phases
-        ],
+        )
+    payload = {
+        "id": "month_" + secrets.token_hex(8),
+        "program_start_date": start_date.isoformat(),
+        "weeks": weeks,
         "timeline": ["Adaptation", "Consistency", "Gentle progression", "Recovery and reassessment"],
         "actions": ["open_week", "open_day", "pause", "extend", "reduce_intensity", "change_frequency", "regenerate_future_days"],
         "blocking_rules": ["pain increase", "concerning symptoms", "low readiness", "poor adherence", "clinician restriction", "safety block"],
@@ -3244,25 +3315,206 @@ def _latest_or_default_readiness(user_id: str, db: Session) -> ReadinessPayload:
     return ReadinessPayload(energy=3, sleep_quality=3, pain=1, available_minutes=15)
 
 
-def _daily_plan_payload(user_id: str, readiness: dict[str, Any], decision: dict[str, Any], db: Session) -> dict[str, Any]:
-    minutes = min([5, 10, 15, 20, 30, 45, 60], key=lambda value: abs(value - readiness.get("available_minutes", 15)))
-    query = db.query(Exercise).order_by(Exercise.name)
-    if decision["action"] in {"LOW_INTENSITY_ONLY", "DELAY_AND_RECHECK", "READY_WITH_MODIFICATIONS"}:
-        query = query.filter(or_(Exercise.equipment == "body weight", Exercise.equipment == "chair"))
-    exercises = query.limit(max(4, min(8, round(minutes / 4)))).all()
+SESSION_BLOCKS: dict[str, list[str]] = {
+    "daily": ["warmup", "mobility", "main", "cooldown"],
+    "mobility": ["warmup", "mobility", "balance", "cooldown"],
+    "upper_body": ["warmup", "upper_body", "main", "cooldown"],
+    "lower_body": ["warmup", "lower_body", "balance", "cooldown"],
+    "balance": ["warmup", "balance", "core", "cooldown"],
+    "conditioning": ["warmup", "cardio", "main", "cooldown"],
+    "core": ["warmup", "core", "mobility", "cooldown"],
+    "recovery": ["warmup", "mobility", "recovery", "cooldown"],
+}
+
+
+def _stable_plan_int(*parts: Any) -> int:
+    source = "|".join(str(part) for part in parts)
+    return int(hashlib.sha256(source.encode("utf-8")).hexdigest()[:16], 16)
+
+
+def _plan_items_signature(items: list[dict[str, Any]], session_type: str) -> str:
+    normalized = [
+        {
+            "exercise_id": item.get("exercise_id"),
+            "order": item.get("order"),
+            "sets": item.get("sets"),
+            "reps": item.get("reps"),
+            "work_seconds": item.get("work_seconds"),
+            "rest_seconds": item.get("rest_seconds"),
+        }
+        for item in items
+    ]
+    return hashlib.sha256(json.dumps({"session_type": session_type, "items": normalized}, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _exercise_focus_score(exercise: Exercise, session_type: str, block: str) -> int:
+    body_part = (exercise.body_part or "").lower()
+    target = (exercise.target or "").lower()
+    equipment = (exercise.equipment or "").lower()
+    metadata = exercise.source_metadata or {}
+    category = str(metadata.get("category") or "").lower()
+    section = str(metadata.get("section") or "").lower()
+    haystack = " ".join([body_part, target, equipment, category, section, exercise.name.lower()])
+    score = 0
+    if block in {"warmup", "cooldown", "recovery", "mobility"} and any(term in haystack for term in ["mobility", "stretch", "warm", "recovery", "body weight", "chair"]):
+        score += 35
+    if block == "cardio" and any(term in haystack for term in ["cardio", "march", "step", "jump", "run", "bike"]):
+        score += 35
+    if block in {"main", "upper_body"} and any(term in haystack for term in ["chest", "back", "shoulder", "arm", "biceps", "triceps"]):
+        score += 30
+    if block in {"main", "lower_body"} and any(term in haystack for term in ["leg", "quad", "glute", "hamstring", "calf", "hip"]):
+        score += 30
+    if block in {"core", "balance"} and any(term in haystack for term in ["core", "abs", "waist", "balance"]):
+        score += 30
+    if session_type in haystack:
+        score += 15
+    if equipment in {"body weight", "chair", "wall"}:
+        score += 8
+    if str(metadata.get("media_status") or "").lower() == "available":
+        score += 8
+    return score
+
+
+def _allowed_equipment_for_user(user_id: str, db: Session) -> set[str]:
+    profile = _profile_for(user_id, db)
+    payload = profile.health_payload or {}
+    equipment = payload.get("equipment") or payload.get("available_equipment") or []
+    if isinstance(equipment, str):
+        equipment = [equipment]
+    normalized = {str(item).strip().lower() for item in equipment if str(item).strip()}
+    return normalized | {"body weight", "bodyweight", "none"}
+
+
+def _select_plan_exercises(
+    user_id: str,
+    readiness: dict[str, Any],
+    decision: dict[str, Any],
+    db: Session,
+    *,
+    plan_date: str,
+    session_type: str,
+    day_index: int,
+    week_index: int,
+    explicit_seed: str | None,
+    avoid_primary_ids: set[str] | None,
+    attempt: int,
+    count: int,
+) -> list[Exercise]:
+    query = db.query(Exercise)
+    if decision["action"] in {"LOW_INTENSITY_ONLY", "DELAY_AND_RECHECK", "READY_WITH_MODIFICATIONS"} or readiness.get("pain", 0) >= 5:
+        query = query.filter(or_(Exercise.equipment == "body weight", Exercise.equipment == "chair", Exercise.equipment == "wall"))
+    exercises = query.all()
+    allowed_equipment = _allowed_equipment_for_user(user_id, db)
+    if allowed_equipment:
+        equipment_filtered = [
+            exercise
+            for exercise in exercises
+            if (exercise.equipment or "").strip().lower() in allowed_equipment or (exercise.equipment or "").strip().lower() in {"body weight", "bodyweight", "none"}
+        ]
+        if len(equipment_filtered) >= count:
+            exercises = equipment_filtered
     if not exercises:
         exercises = _fallback_exercises(db)
+    seed = explicit_seed or f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{attempt}"
+    blocks = SESSION_BLOCKS.get(session_type, SESSION_BLOCKS["daily"])
+    selected: list[Exercise] = []
+    avoid_primary_ids = avoid_primary_ids or set()
+    for block in blocks[:count]:
+        candidates = [exercise for exercise in exercises if exercise.id not in {item.id for item in selected}]
+        if not candidates:
+            break
+        if not selected and avoid_primary_ids and len(candidates) > 1:
+            candidates = [exercise for exercise in candidates if exercise.id not in avoid_primary_ids] or candidates
+        ranked = sorted(
+            candidates,
+            key=lambda exercise: (
+                -_exercise_focus_score(exercise, session_type, block),
+                _stable_plan_int(seed, block, exercise.id),
+                exercise.id,
+            ),
+        )
+        selected.append(ranked[0])
+    if len(selected) < count:
+        for exercise in sorted(exercises, key=lambda item: (_stable_plan_int(seed, "fill", item.id), item.id)):
+            if exercise.id not in {item.id for item in selected}:
+                selected.append(exercise)
+            if len(selected) >= count:
+                break
+    return selected[:count] or _fallback_exercises(db)[:count]
+
+
+def _daily_plan_payload(
+    user_id: str,
+    readiness: dict[str, Any],
+    decision: dict[str, Any],
+    db: Session,
+    *,
+    plan_date: str | None = None,
+    session_type: str = "daily",
+    day_index: int = 0,
+    week_index: int = 0,
+    explicit_seed: str | None = None,
+    avoid_signatures: set[str] | None = None,
+    avoid_primary_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    plan_date = plan_date or datetime.now(UTC).date().isoformat()
+    minutes = min([5, 10, 15, 20, 30, 45, 60], key=lambda value: abs(value - readiness.get("available_minutes", 15)))
+    if week_index == 2 and decision["action"] == "READY":
+        minutes = min(60, minutes + 5)
+    elif week_index == 3:
+        minutes = max(5, minutes - 5)
     total_seconds = minutes * 60
     base_items = []
-    blocks = ["warmup", "main", "cardio", "cooldown"]
-    for index, exercise in enumerate(exercises[:4]):
-        block = blocks[min(index, len(blocks) - 1)]
-        base_items.append(_plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index))
+    blocks = SESSION_BLOCKS.get(session_type, SESSION_BLOCKS["daily"])
+    for attempt in range(0, 8):
+        exercises = _select_plan_exercises(
+            user_id,
+            readiness,
+            decision,
+            db,
+            plan_date=plan_date,
+            session_type=session_type,
+            day_index=day_index,
+            week_index=week_index,
+            explicit_seed=explicit_seed,
+            avoid_primary_ids=avoid_primary_ids,
+            attempt=attempt,
+            count=4,
+        )
+        base_items = []
+        for index, exercise in enumerate(exercises[:4]):
+            block = blocks[min(index, len(blocks) - 1)]
+            item = _plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index)
+            item["id"] = "item_" + hashlib.sha256(f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{index}:{exercise.id}".encode("utf-8")).hexdigest()[:16]
+            item["plan_item_id"] = item["id"]
+            item["session_date"] = plan_date
+            item["session_type"] = session_type
+            base_items.append(item)
+        if not avoid_signatures or _plan_items_signature(base_items, session_type) not in avoid_signatures:
+            break
+    if not base_items:
+        exercises = _fallback_exercises(db)
+        for index, exercise in enumerate(exercises[:4]):
+            block = blocks[min(index, len(blocks) - 1)]
+            item = _plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index)
+            item["id"] = "item_" + hashlib.sha256(f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{index}:{exercise.id}".encode("utf-8")).hexdigest()[:16]
+            item["plan_item_id"] = item["id"]
+            item["session_date"] = plan_date
+            item["session_type"] = session_type
+            base_items.append(item)
     base_items[-1]["duration_seconds"] += total_seconds - sum(item["duration_seconds"] for item in base_items)
     base_items[-1]["work_seconds"] = base_items[-1]["duration_seconds"]
+    plan_id = "day_" + secrets.token_hex(8)
+    session_id = "session_" + hashlib.sha256(f"{plan_id}:{plan_date}:{session_type}".encode("utf-8")).hexdigest()[:16]
     return {
-        "id": "day_" + secrets.token_hex(8),
+        "id": plan_id,
         "user_id": user_id,
+        "date": plan_date,
+        "day_index": day_index,
+        "week_index": week_index,
+        "session_id": session_id,
+        "session_type": session_type,
+        "title": f"{session_type.replace('_', ' ').title()} movement",
         "total_minutes": minutes,
         "total_duration": minutes,
         "total_seconds": total_seconds,
