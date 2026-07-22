@@ -2,12 +2,12 @@ import { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { router } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch, createQuickSession, generateDailyPlan, generateMonthlyPlan, generateWeeklyPlan, modifyPlan, startSession } from "../../api";
+import { apiFetch, createQuickSession, generateDailyPlan, generateMonthlyPlan, generateWeeklyPlan, modifyPlan } from "../../api";
 import { useTheme } from "../../theme";
 import { ExerciseMediaFrame } from "../shared/ExerciseMediaFrame";
 import { ActionButton, BodyText, ChipGroup, ErrorText, LoadingState, Panel, SecondaryLink, TextField } from "../shared/ui";
-import type { MonthWeek, MovementPlan, PlanExerciseItem, ProgramDay } from "../shared/productTypes";
-import { hasValidSameDayReadiness, readinessAllowsStart, workoutStartLabel } from "../readiness/readinessGate";
+import type { MonthlyPlan, MovementPlan, PlanExerciseItem, ProgramDay, WeeklyPlan } from "../shared/productTypes";
+import { readinessStartHref } from "../readiness/startContext";
 
 const MODIFICATION_OPTIONS = ["shorter", "easier", "no floor", "seated", "standing", "no cardio", "avoid knee", "avoid shoulder", "more rest", "substitute exercise"];
 const READY_MADE = ["Gentle Daily Mobility", "Seven-Day Joint-Friendly Movement", "Four-Week Mobility Foundation", "Chair-Supported Movement", "Low-Impact Cardio", "Balance and Stability", "Shoulder Mobility", "Lower-Back Comfort", "Beginner Recovery Movement"];
@@ -51,26 +51,15 @@ export function DailyPlanScreen() {
   const [changes, setChanges] = useState<string[]>(["easier"]);
   const queryClient = useQueryClient();
   const daily = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
-  const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest") });
   const generate = useMutation({ mutationFn: () => generateDailyPlan(Number(minutes) || 15), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] }) });
-  const start = useMutation({
-    mutationFn: async () => startSession(daily.data?.plan?.id),
-    onSuccess: (data) => router.push(`/workout/${data.session.id}` as never)
-  });
   const modify = useMutation({
     mutationFn: () => modifyPlan(daily.data?.plan?.id ?? "", changes[0] ?? "make_easier", { requested_changes: changes, reason: "user_adjustment" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] })
   });
   const items = daily.data?.plan?.items ?? [];
-  const readinessItem = readiness.data?.item;
-  const readinessReady = hasValidSameDayReadiness(readinessItem) && readinessAllowsStart(readinessItem);
   const startWorkout = () => {
     if (!daily.data?.plan?.id) return;
-    if (!readinessReady) {
-      router.push(`/readiness?intent=start&planId=${daily.data.plan.id}` as never);
-      return;
-    }
-    start.mutate();
+    router.push(readinessStartHref({ source: "today", planId: daily.data.plan.id, sessionDate: daily.data.plan.date, sessionType: daily.data.plan.session_type, returnTo: "/daily-plan" }) as never);
   };
   return (
     <>
@@ -80,8 +69,8 @@ export function DailyPlanScreen() {
           <TextField label="Available minutes" keyboardType="number-pad" value={minutes} onChangeText={setMinutes} />
         </View>
         <ActionButton label={generate.isPending ? "Generating..." : "Generate today"} onPress={() => generate.mutate()} />
-        <ActionButton label={start.isPending ? "Opening player..." : workoutStartLabel(readinessItem)} disabled={!daily.data?.plan?.id} onPress={startWorkout} />
-        <ErrorText error={generate.error ?? start.error} />
+        <ActionButton label="Check readiness & start" disabled={!daily.data?.plan?.id} onPress={startWorkout} />
+        <ErrorText error={generate.error} />
       </Panel>
       <Panel title="Ordered movements">
         <View style={{ gap: 12 }}>
@@ -126,7 +115,7 @@ export function WeeklyPlanScreen() {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const weekly = useQuery({ queryKey: ["weekly"], queryFn: () => apiFetch<{ plan: { days?: ProgramDay[]; total_planned_minutes?: number; week_start?: string } | null }>("/plans/weekly/current") });
+  const weekly = useQuery({ queryKey: ["weekly"], queryFn: () => apiFetch<{ plan: WeeklyPlan | null }>("/plans/weekly/current") });
   const generate = useMutation({ mutationFn: generateWeeklyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
   const days = weekly.data?.plan?.days ?? [];
   const selectedDay = useMemo(() => days.find((day) => day.date === selectedDate) ?? days.find((day) => day.status === "planned") ?? days[0], [days, selectedDate]);
@@ -158,6 +147,7 @@ export function WeeklyPlanScreen() {
           <Text style={{ color: theme.text, fontSize: 18, fontWeight: "900" }}>{selectedDay.day} detail</Text>
           {(selectedDay.items ?? []).map((item) => <MovementCard key={item.plan_item_id ?? `${selectedDay.date}-${item.exercise_id}`} item={item} />)}
           {!(selectedDay.items ?? []).length ? <BodyText muted>This date is planned as recovery, with no copied workout items.</BodyText> : null}
+          {(selectedDay.items ?? []).length ? <ActionButton label="Check readiness & start this day" onPress={() => router.push(readinessStartHref({ source: "week", planId: weekly.data?.plan?.id, sessionDate: selectedDay.date, selectedDay: selectedDay.day, sessionType: selectedDay.session_type, returnTo: "/weekly-plan" }) as never)} /> : null}
         </View>
       ) : null}
       {!weekly.data?.plan ? <BodyText muted>No weekly plan saved yet.</BodyText> : null}
@@ -170,7 +160,7 @@ export function MonthlyPlanScreen() {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const monthly = useQuery({ queryKey: ["monthly"], queryFn: () => apiFetch<{ plan: { weeks?: MonthWeek[]; timeline?: string[] } | null }>("/plans/monthly/current") });
+  const monthly = useQuery({ queryKey: ["monthly"], queryFn: () => apiFetch<{ plan: MonthlyPlan | null }>("/plans/monthly/current") });
   const generate = useMutation({ mutationFn: generateMonthlyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
   const weeks = monthly.data?.plan?.weeks ?? [];
   const allDays = useMemo(() => weeks.flatMap((week) => week.days ?? []), [weeks]);
@@ -201,6 +191,7 @@ export function MonthlyPlanScreen() {
           <Text style={{ color: theme.text, fontSize: 18, fontWeight: "900" }}>{selectedDay.date ?? selectedDay.day} session</Text>
           {(selectedDay.items ?? []).map((item) => <MovementCard key={item.plan_item_id ?? `${selectedDay.date}-${item.exercise_id}`} item={item} />)}
           {!(selectedDay.items ?? []).length ? <BodyText muted>This date is recovery or held by safety rules.</BodyText> : null}
+          {(selectedDay.items ?? []).length ? <ActionButton label="Check readiness & start this session" onPress={() => router.push(readinessStartHref({ source: "month", planId: monthly.data?.plan?.id, sessionDate: selectedDay.date, selectedDay: selectedDay.day, sessionType: selectedDay.session_type, returnTo: "/monthly-plan" }) as never)} /> : null}
         </View>
       ) : null}
       {!monthly.data?.plan ? <BodyText muted>No monthly phase view saved yet.</BodyText> : null}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
@@ -8,6 +8,7 @@ import { useTheme } from "../../theme";
 import { useAppLanguage } from "../../i18n/LanguageProvider";
 import { ActionButton, BodyText, ChoiceChip, ErrorText, LoadingState, Panel } from "../shared/ui";
 import { readinessAllowsStart, readinessDelaysStart, readinessRequiresAcknowledgement } from "./readinessGate";
+import { workoutHref } from "./startContext";
 
 type Choice = { value: string; label: string; detail: string; icon: keyof typeof Feather.glyphMap; score?: number | boolean };
 type Question = { key: "energy" | "sleep_quality" | "pain" | "new_injury" | "stress" | "available_minutes"; title: string; subtitle: string; choices: Choice[] };
@@ -122,16 +123,16 @@ export function ReadinessScreen() {
   const theme = useTheme();
   const { t } = useAppLanguage();
   const queryClient = useQueryClient();
-  const params = useLocalSearchParams<{ intent?: string; planId?: string }>();
-  const startedRef = useRef(false);
+  const params = useLocalSearchParams<{ intent?: string; planId?: string; source?: string; sessionDate?: string; selectedDay?: string; sessionType?: string; returnTo?: string }>();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState(initialAnswers);
   const [painAreas, setPainAreas] = useState<string[]>([]);
   const [movementWorse, setMovementWorse] = useState(false);
-  const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest") });
+  const isStartIntent = params.intent === "start";
+  const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest"), enabled: !isStartIntent });
   const start = useMutation({
     mutationFn: () => startSession(params.planId),
-    onSuccess: (data) => router.replace(`/workout/${data.session.id}` as never)
+    onSuccess: (data) => router.replace(workoutHref(data.session.id, { source: params.source, planId: params.planId, sessionDate: params.sessionDate, selectedDay: params.selectedDay, sessionType: params.sessionType, returnTo: params.returnTo }) as never)
   });
   const readinessMutation = useMutation({
     mutationFn: () => submitReadiness({ ...answerPayload(answers), pain_locations: painAreas, movement_makes_pain_worse: movementWorse } as any),
@@ -143,18 +144,11 @@ export function ReadinessScreen() {
     }
   });
   const currentQuestion = questions[step];
-  const result = readinessMutation.data ?? readiness.data?.item;
+  const result = readinessMutation.data ?? (isStartIntent ? undefined : readiness.data?.item);
   const hasSubmitted = Boolean(readinessMutation.data);
   const selectedChoice = useMemo(() => currentQuestion.choices.find((choice) => choice.value === answers[currentQuestion.key]), [answers, currentQuestion]);
-  const canAutoStart = params.intent === "start" && hasSubmitted && readinessAllowsStart(result) && !readinessRequiresAcknowledgement(result);
 
-  useEffect(() => {
-    if (!canAutoStart || startedRef.current) return;
-    startedRef.current = true;
-    start.mutate();
-  }, [canAutoStart, start]);
-
-  if (readiness.isLoading && !hasSubmitted) return <LoadingState label="Loading readiness result" />;
+  if (readiness.isLoading && !hasSubmitted && !isStartIntent) return <LoadingState label="Loading readiness result" />;
 
   if (hasSubmitted) {
     const delayed = readinessDelaysStart(result);
@@ -167,10 +161,10 @@ export function ReadinessScreen() {
           <BodyText muted>Completed just now. Today's plan and Home card will refresh with this result.</BodyText>
           {painAreas.length ? <BodyText muted>Areas noted: {painAreas.join(", ")}</BodyText> : null}
           {movementWorse ? <BodyText muted>Movement-worsening pain was recorded, so intensity should stay conservative.</BodyText> : null}
-          {params.intent === "start" && allowed && !delayed ? (
+          {isStartIntent && allowed && !delayed ? (
             <ActionButton label={needsAck ? "Acknowledge adjustments and start" : start.isPending ? "Opening player..." : "Continue to workout"} disabled={start.isPending} onPress={() => start.mutate()} />
           ) : null}
-          <ActionButton label="Return Home" onPress={() => router.replace("/(tabs)" as never)} />
+          <ActionButton label="Return Home" onPress={() => router.replace((params.returnTo ?? "/(tabs)") as never)} />
           <ErrorText error={start.error} />
         </Panel>
       </View>

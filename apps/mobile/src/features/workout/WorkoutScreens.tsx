@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, Text, View } from "react-native";
 import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, completeSession, patchSession, recordExerciseFeedback, reportPain, startSession } from "../../api";
@@ -10,8 +10,9 @@ import { useAppLanguage } from "../../i18n/LanguageProvider";
 import { cueForCountdown, resetSpeechCueHistory, speakCue, type SpeechCueKey } from "../../guidance/speechCues";
 import { ExerciseMediaFrame } from "../shared/ExerciseMediaFrame";
 import { ActionButton, BodyText, ChipGroup, ErrorText, LoadingState, Panel, SecondaryLink, TextField } from "../shared/ui";
-import type { MovementPlan, PlanExerciseItem } from "../shared/productTypes";
-import { hasValidSameDayReadiness, readinessAllowsStart, readinessBlocksStart, workoutStartLabel } from "../readiness/readinessGate";
+import type { MonthlyPlan, MovementPlan, PlanExerciseItem, ProgramDay, WeeklyPlan } from "../shared/productTypes";
+import { readinessBlocksStart } from "../readiness/readinessGate";
+import { readinessStartHref } from "../readiness/startContext";
 
 type PlayerPhase = "IDLE" | "STARTING" | "PREPARING" | "WORKING" | "RESTING" | "SIDE_SWITCH" | "PAUSED" | "SUBSTITUTING" | "PAIN_CHECK" | "TRANSITIONING" | "COMPLETING" | "COMPLETED" | "STOPPED" | "ERROR";
 
@@ -66,6 +67,30 @@ function formatClock(seconds: number) {
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
 }
 
+function dayAsMovementPlan(parentPlan: { id?: string } | null | undefined, day: ProgramDay | undefined): MovementPlan | null {
+  if (!day?.items?.length) return null;
+  return {
+    id: day.session_id ?? day.id ?? parentPlan?.id ?? `session-${day.date ?? day.day}`,
+    date: day.date,
+    session_type: day.session_type,
+    total_minutes: day.duration_minutes ?? day.planned_duration,
+    intensity: day.intensity,
+    phase: day.focus,
+    movement_count: day.items.length,
+    media_summary: day.media_summary,
+    items: day.items
+  };
+}
+
+function selectedSessionPlan(plan: MovementPlan | WeeklyPlan | MonthlyPlan | null, sessionDate?: string, selectedDay?: string): MovementPlan | null {
+  if (!plan) return null;
+  if ("items" in plan && plan.items?.length) return plan;
+
+  const weeklyDay = "days" in plan ? plan.days?.find((day) => day.date === sessionDate || day.day === selectedDay) : undefined;
+  const monthlyDay = "weeks" in plan ? plan.weeks?.flatMap((week) => week.days ?? []).find((day) => day.date === sessionDate || day.day === selectedDay) : undefined;
+  return dayAsMovementPlan(plan, weeklyDay ?? monthlyDay);
+}
+
 function phaseLabel(phase: PlayerPhase) {
   const labels: Record<PlayerPhase, string> = {
     IDLE: "Ready",
@@ -89,29 +114,33 @@ function phaseLabel(phase: PlayerPhase) {
 export function WorkoutScreen({ id }: { id?: string }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ sessionDate?: string; selectedDay?: string }>();
   const { language, voiceEnabled, hapticsEnabled, t } = useAppLanguage();
   const queryClient = useQueryClient();
   const [state, setState] = useState<PlayerState>(initialState);
   const lastCueRef = useRef<string>("");
   const completionSubmittedRef = useRef(false);
+  const autoResumeStartedRef = useRef(false);
   const daily = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest") });
   const readinessItem = readiness.data?.item;
   const blocked = readinessBlocksStart(readinessItem);
-  const readinessReady = hasValidSameDayReadiness(readinessItem) && readinessAllowsStart(readinessItem);
   const items = state.plan?.items ?? daily.data?.plan?.items ?? [];
   const activeItem = items[state.activeIndex];
   const nextItem = items[state.activeIndex + 1];
+  const isExistingSessionRoute = Boolean(id && id !== "today");
+  const hasDailyPreviewPlan = Boolean(daily.data?.plan?.items?.length);
 
   const start = useMutation({
     mutationFn: async () => {
-      if (!readinessReady) {
+      if (!id || id === "today") {
         const planId = daily.data?.plan?.id;
-        router.replace(`/readiness?intent=start${planId ? `&planId=${planId}` : ""}` as never);
-        throw new Error("Complete today's readiness check before starting.");
+        router.replace(readinessStartHref({ source: "preview", planId, sessionDate: daily.data?.plan?.date, sessionType: daily.data?.plan?.session_type, returnTo: "/workout/today" }) as never);
+        throw new Error("Complete readiness before starting this workout.");
       }
       const response = await startSession(id && id !== "today" ? undefined : daily.data?.plan?.id);
-      const plan = (response.session?.payload?.plan ?? daily.data?.plan ?? null) as MovementPlan | null;
+      const planPayload = (response.session?.payload?.plan ?? daily.data?.plan ?? null) as MovementPlan | WeeklyPlan | MonthlyPlan | null;
+      const plan = selectedSessionPlan(planPayload, params.sessionDate, params.selectedDay);
       if (!plan?.items?.length) throw new Error("Generate a plan before starting the guided player.");
       return { sessionId: response.session.id as string, plan: plan as MovementPlan };
     },
@@ -137,6 +166,12 @@ export function WorkoutScreen({ id }: { id?: string }) {
     onSuccess: () => setState((current) => ({ ...current, phase: "PAIN_CHECK", painEvents: current.painEvents + 1, pausedAt: Date.now() }))
   });
   const feedback = useMutation({ mutationFn: () => recordExerciseFeedback(state.sessionId ?? "local-session") });
+
+  useEffect(() => {
+    if (!isExistingSessionRoute || state.phase !== "IDLE" || autoResumeStartedRef.current) return;
+    autoResumeStartedRef.current = true;
+    start.mutate();
+  }, [isExistingSessionRoute, state.phase]);
 
   useEffect(() => {
     if (!["PREPARING", "WORKING", "RESTING", "SIDE_SWITCH"].includes(state.phase) || !state.phaseStartedAt) return;
@@ -266,7 +301,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
         {state.phase === "IDLE" || state.phase === "ERROR" ? (
           <>
             <PlanReadyPreview plan={daily.data?.plan} />
-            <ActionButton label={start.isPending ? "Opening player..." : workoutStartLabel(readinessItem)} disabled={blocked || !daily.data?.plan?.items?.length} onPress={() => start.mutate()} />
+            <ActionButton label={isExistingSessionRoute ? start.isPending ? "Resuming..." : "Resume guided workout" : "Check readiness & start"} disabled={blocked || (!isExistingSessionRoute && !hasDailyPreviewPlan)} onPress={() => start.mutate()} />
             <ErrorText error={start.error ?? (state.error ? new Error(state.error) : undefined)} />
           </>
         ) : null}

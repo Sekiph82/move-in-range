@@ -3,15 +3,15 @@ import { router } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, generateDailyPlan, generateMonthlyPlan, generateWeeklyPlan } from "../../src/api";
 import { ExerciseMediaFrame } from "../../src/features/shared/ExerciseMediaFrame";
-import type { MonthWeek, MovementPlan, ProgramDay } from "../../src/features/shared/productTypes";
+import type { MonthlyPlan, MovementPlan, ProgramDay, WeeklyPlan } from "../../src/features/shared/productTypes";
 import { useTheme } from "../../src/theme";
 
 export default function ProgramTab() {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const daily = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
-  const weekly = useQuery({ queryKey: ["weekly"], queryFn: () => apiFetch<{ plan: { days?: ProgramDay[] } | null }>("/plans/weekly/current") });
-  const monthly = useQuery({ queryKey: ["monthly"], queryFn: () => apiFetch<{ plan: { weeks?: MonthWeek[] } | null }>("/plans/monthly/current") });
+  const weekly = useQuery({ queryKey: ["weekly"], queryFn: () => apiFetch<{ plan: WeeklyPlan | null }>("/plans/weekly/current") });
+  const monthly = useQuery({ queryKey: ["monthly"], queryFn: () => apiFetch<{ plan: MonthlyPlan | null }>("/plans/monthly/current") });
   const makeDaily = useMutation({ mutationFn: () => generateDailyPlan(15), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] }) });
   const makeWeekly = useMutation({ mutationFn: generateWeeklyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
   const makeMonthly = useMutation({ mutationFn: generateMonthlyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });

@@ -463,18 +463,54 @@ test("guided workout screen is state driven and not a debug control stack", () =
   assert.doesNotMatch(workoutScreens, /Preparation, work, rest, pause, skip, substitute, and completion controls are available/);
 });
 
-test("readiness is visual and gates workout start", () => {
+test("home removes duplicate global shortcut buttons and keeps tab navigation", () => {
+  const home = readFileSync("apps/mobile/app/(tabs)/index.tsx", "utf8");
+  const tabs = readFileSync("apps/mobile/app/(tabs)/_layout.tsx", "utf8");
+  assert.doesNotMatch(home, /\["Program", "\/(\(tabs\)\/)?program"\]/);
+  assert.doesNotMatch(home, /\["Move", "\/(\(tabs\)\/)?move"\]/);
+  assert.doesNotMatch(home, /\["Progress", "\/(\(tabs\)\/)?progress"\]/);
+  assert.doesNotMatch(home, /\["Privacy", "\/privacy"\]/);
+  assert.doesNotMatch(home, /accessibilityRole="link"[\s\S]{0,240}Program/);
+  assert.doesNotMatch(home, /accessibilityRole="link"[\s\S]{0,240}Privacy/);
+  for (const tab of ["tabs.home", "tabs.program", "tabs.move", "tabs.progress", "tabs.profile"]) assert.match(tabs, new RegExp(tab));
+});
+
+test("readiness is visual and gates every new workout start", () => {
   const home = readFileSync("apps/mobile/app/(tabs)/index.tsx", "utf8");
   const daily = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
+  const workout = readFileSync("apps/mobile/src/features/workout/WorkoutScreens.tsx", "utf8");
   const readiness = readFileSync("apps/mobile/src/features/readiness/ReadinessScreen.tsx", "utf8");
-  assert.match(home, /router\.push\(`\/readiness\?intent=start&planId=/);
+  const startContext = readFileSync("apps/mobile/src/features/readiness/startContext.ts", "utf8");
+  assert.match(home, /readinessStartHref\(\{ source: "home"/);
   assert.doesNotMatch(home, /submitReadiness/);
-  assert.match(home, /hasValidSameDayReadiness/);
-  assert.match(daily, /intent=start&planId/);
+  assert.doesNotMatch(home, /readinessReady/);
+  assert.doesNotMatch(home, /startSession/);
+  assert.match(daily, /readinessStartHref\(\{ source: "today"/);
+  assert.match(daily, /readinessStartHref\(\{ source: "week"/);
+  assert.match(daily, /readinessStartHref\(\{ source: "month"/);
+  assert.match(daily, /sessionDate: selectedDay\.date/);
+  assert.match(daily, /returnTo: "\/weekly-plan"/);
+  assert.match(daily, /returnTo: "\/monthly-plan"/);
+  assert.match(workout, /readinessStartHref\(\{ source: "preview"/);
+  assert.match(workout, /selectedSessionPlan\(planPayload, params\.sessionDate, params\.selectedDay\)/);
+  assert.match(workout, /autoResumeStartedRef/);
+  assert.match(workout, /isExistingSessionRoute \? start\.isPending \? "Resuming\.\.\." : "Resume guided workout" : "Check readiness & start"/);
+  assert.doesNotMatch(daily, /hasValidSameDayReadiness/);
+  assert.doesNotMatch(daily, /readinessReady/);
+  assert.match(readiness, /enabled: !isStartIntent/);
+  assert.match(readiness, /const result = readinessMutation\.data \?\? \(isStartIntent \? undefined : readiness\.data\?\.item\)/);
+  assert.match(readiness, /Acknowledge adjustments and start/);
+  assert.match(readiness, /Continue to workout/);
+  assert.match(readiness, /readinessDelaysStart/);
+  assert.doesNotMatch(readiness, /canAutoStart/);
+  assert.match(startContext, /intent: "start"/);
+  assert.match(startContext, /source/);
+  assert.match(startContext, /sessionDate/);
+  assert.match(startContext, /selectedDay/);
+  assert.match(startContext, /returnTo/);
   for (const text of ["How is your energy?", "How did you sleep?", "Any pain today?", "Any injury or symptom change?", "Stress level?", "How much time do you have?"]) {
     assert.match(readiness, new RegExp(text.replace(/[?]/g, "\\?")));
   }
-  assert.match(readiness, /Acknowledge adjustments and start/);
 });
 
 test("localized speech cues use app language and translated countdown words", () => {
