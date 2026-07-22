@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import { FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { analyzeCameraMock, apiFetch, favoriteExercise, unfavoriteExercise } from "../../api";
@@ -31,7 +32,9 @@ function activeFilterCount(filters: ExerciseFilters) {
 
 function ExerciseCard({ item, onToggleFavorite }: { item: PlanExerciseItem; onToggleFavorite: (item: PlanExerciseItem) => void }) {
   const theme = useTheme();
+  const { fontScale, width } = useWindowDimensions();
   const id = item.id ?? item.exercise_id;
+  const twoColumn = width >= 360 && fontScale < 1.25;
   return (
     <Pressable
       accessibilityRole="button"
@@ -40,14 +43,13 @@ function ExerciseCard({ item, onToggleFavorite }: { item: PlanExerciseItem; onTo
         void addRecentExercise({ id, name: item.name, media: item.media, target: item.target ?? item.targets?.[0], equipment: item.equipment });
         router.push(`/exercise/${id}` as never);
       }}
-      style={{ width: "48%", minHeight: 268, backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 10, gap: 8 }}
+      style={{ width: twoColumn ? "48%" : "100%", minHeight: 246, backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 10, gap: 8 }}
     >
       <ExerciseMediaFrame media={item.media} title={item.name} section={item.body_part ?? item.category} target={item.target ?? item.targets?.[0]} animated={false} />
       <View style={{ gap: 4, flex: 1 }}>
         <Text numberOfLines={2} style={{ color: theme.text, fontSize: 15, fontWeight: "900" }}>{item.name}</Text>
         <Text numberOfLines={1} style={{ color: theme.muted }}>{item.target ?? item.targets?.[0] ?? item.body_part}</Text>
         <Text numberOfLines={1} style={{ color: theme.muted }}>{item.equipment ?? "equipment varies"}</Text>
-        <Text style={{ color: item.media?.playable ? theme.primary : theme.muted, fontSize: 12, fontWeight: "800" }}>{item.media?.playable ? "GIF available" : "Instructions ready"}</Text>
       </View>
       <Pressable
         accessibilityRole="button"
@@ -56,9 +58,9 @@ function ExerciseCard({ item, onToggleFavorite }: { item: PlanExerciseItem; onTo
           event.stopPropagation();
           onToggleFavorite(item);
         }}
-        style={{ minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 8, backgroundColor: item.favorited ? `${theme.primary}22` : theme.background, borderColor: theme.border, borderWidth: 1 }}
+        style={{ position: "absolute", right: 16, top: 16, width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 20, backgroundColor: item.favorited ? `${theme.primary}ee` : `${theme.surface}ee`, borderColor: theme.border, borderWidth: 1 }}
       >
-        <Text style={{ color: item.favorited ? theme.primary : theme.text, fontWeight: "900" }}>{item.favorited ? "Saved" : "Save"}</Text>
+        <Feather name="heart" color={item.favorited ? theme.surface : theme.text} size={18} />
       </Pressable>
     </Pressable>
   );
@@ -117,6 +119,7 @@ function FilterSheet({ visible, options, filters, onApply, onClose }: { visible:
 
 export function ExerciseLibraryScreen() {
   const theme = useTheme();
+  const { fontScale, width } = useWindowDimensions();
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState<ExerciseFilters>(emptyExerciseFilters);
   const [searchText, setSearchText] = useState("");
@@ -129,6 +132,7 @@ export function ExerciseLibraryScreen() {
   const payload = exercises.data ?? cachedPayload;
   const items = payload?.items ?? [];
   const total = payload?.pagination?.total ?? 0;
+  const twoColumn = width >= 360 && fontScale < 1.25;
 
   useEffect(() => {
     void loadExerciseFilters().then((saved) => {
@@ -212,9 +216,10 @@ export function ExerciseLibraryScreen() {
       <FlatList
         data={items}
         keyExtractor={(item) => item.id ?? item.exercise_id}
-        numColumns={2}
-        columnWrapperStyle={{ justifyContent: "space-between", gap: 10 }}
-        contentContainerStyle={{ gap: 10 }}
+        key={twoColumn ? "exercise-grid" : "exercise-list"}
+        numColumns={twoColumn ? 2 : 1}
+        columnWrapperStyle={twoColumn ? { justifyContent: "space-between", gap: 10 } : undefined}
+        contentContainerStyle={{ gap: 10, paddingBottom: 88 }}
         scrollEnabled={false}
         refreshControl={<RefreshControl refreshing={exercises.isRefetching} onRefresh={() => exercises.refetch()} />}
         renderItem={({ item }) => <ExerciseCard item={item} onToggleFavorite={(exercise) => favoriteMutation.mutate(exercise)} />}
@@ -276,7 +281,7 @@ export function ExerciseDetailScreen({ id }: { id?: string }) {
         {exercise.isLoading ? <LoadingState /> : null}
         <ExerciseMediaFrame media={exercise.data?.media} title={exercise.data?.name ?? "Exercise"} section={exercise.data?.body_part} target={exercise.data?.target} size="hero" animated />
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {[exercise.data?.body_part, exercise.data?.target, exercise.data?.equipment, exercise.data?.media?.playable ? "GIF available" : "Instruction fallback"].filter(Boolean).map((label: string) => (
+          {[exercise.data?.body_part, exercise.data?.target, exercise.data?.equipment, exercise.data?.media?.playable ? "Motion preview" : "Instruction fallback"].filter(Boolean).map((label: string) => (
             <View key={label} style={{ borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 8 }}>
               <Text style={{ color: theme.text, fontWeight: "700" }}>{chipLabel(label)}</Text>
             </View>

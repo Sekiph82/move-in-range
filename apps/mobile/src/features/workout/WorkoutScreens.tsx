@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, View } from "react-native";
 import * as Haptics from "expo-haptics";
-import * as Speech from "expo-speech";
+import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, completeSession, patchSession, recordExerciseFeedback, reportPain, startSession } from "../../api";
 import { useTheme } from "../../theme";
+import { useAppLanguage } from "../../i18n/LanguageProvider";
+import { cueForCountdown, resetSpeechCueHistory, speakCue, type SpeechCueKey } from "../../guidance/speechCues";
 import { ExerciseMediaFrame } from "../shared/ExerciseMediaFrame";
 import { ActionButton, BodyText, ChipGroup, ErrorText, LoadingState, Panel, SecondaryLink, TextField } from "../shared/ui";
 import type { MovementPlan, PlanExerciseItem } from "../shared/productTypes";
+import { hasValidSameDayReadiness, readinessAllowsStart, readinessBlocksStart, workoutStartLabel } from "../readiness/readinessGate";
 
 type PlayerPhase = "IDLE" | "STARTING" | "PREPARING" | "WORKING" | "RESTING" | "SIDE_SWITCH" | "PAUSED" | "SUBSTITUTING" | "PAIN_CHECK" | "TRANSITIONING" | "COMPLETING" | "COMPLETED" | "STOPPED" | "ERROR";
 
@@ -62,26 +66,50 @@ function formatClock(seconds: number) {
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
 }
 
-function cue(text: string, state: PlayerState) {
-  if (state.haptics) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-  if (state.sound) Speech.speak(text, { rate: 0.94 });
+function phaseLabel(phase: PlayerPhase) {
+  const labels: Record<PlayerPhase, string> = {
+    IDLE: "Ready",
+    STARTING: "Starting",
+    PREPARING: "Get ready",
+    WORKING: "Work",
+    RESTING: "Rest",
+    SIDE_SWITCH: "Switch side",
+    PAUSED: "Paused",
+    SUBSTITUTING: "Substitution",
+    PAIN_CHECK: "Pain check",
+    TRANSITIONING: "Next movement",
+    COMPLETING: "Saving",
+    COMPLETED: "Completed",
+    STOPPED: "Stopped",
+    ERROR: "Needs attention"
+  };
+  return labels[phase];
 }
 
 export function WorkoutScreen({ id }: { id?: string }) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const { language, voiceEnabled, hapticsEnabled, t } = useAppLanguage();
   const queryClient = useQueryClient();
   const [state, setState] = useState<PlayerState>(initialState);
   const lastCueRef = useRef<string>("");
   const completionSubmittedRef = useRef(false);
   const daily = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest") });
-  const blocked = readiness.data?.item?.decision?.action === "BLOCK_AND_SHOW_SAFETY_MESSAGE";
+  const readinessItem = readiness.data?.item;
+  const blocked = readinessBlocksStart(readinessItem);
+  const readinessReady = hasValidSameDayReadiness(readinessItem) && readinessAllowsStart(readinessItem);
   const items = state.plan?.items ?? daily.data?.plan?.items ?? [];
   const activeItem = items[state.activeIndex];
   const nextItem = items[state.activeIndex + 1];
 
   const start = useMutation({
     mutationFn: async () => {
+      if (!readinessReady) {
+        const planId = daily.data?.plan?.id;
+        router.replace(`/readiness?intent=start${planId ? `&planId=${planId}` : ""}` as never);
+        throw new Error("Complete today's readiness check before starting.");
+      }
       const response = await startSession(id && id !== "today" ? undefined : daily.data?.plan?.id);
       const plan = (response.session?.payload?.plan ?? daily.data?.plan ?? null) as MovementPlan | null;
       if (!plan?.items?.length) throw new Error("Generate a plan before starting the guided player.");
@@ -101,7 +129,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["insights"] });
       setState((current) => ({ ...current, phase: "COMPLETED", remainingSeconds: 0, phaseStartedAt: null }));
-      cue("Session complete", state);
+      playCue("workout.completed");
     }
   });
   const pain = useMutation({
@@ -128,10 +156,11 @@ export function WorkoutScreen({ id }: { id?: string }) {
     if (!activeItem || state.phase === "IDLE" || state.phase === "PAUSED" || state.phase === "COMPLETED") return;
     const key = `${state.phase}:${state.activeIndex}:${state.remainingSeconds}`;
     if (lastCueRef.current === key) return;
-    if (state.phase === "PREPARING" && state.remainingSeconds === secondsFor(activeItem, "PREPARING")) cue("Get ready", state);
-    if (state.phase === "PREPARING" && state.remainingSeconds <= 3 && state.remainingSeconds > 0) cue(String(state.remainingSeconds), state);
-    if (state.phase === "WORKING" && state.remainingSeconds === 5) cue("Five seconds", state);
-    if (state.phase === "RESTING" && state.remainingSeconds <= 3 && state.remainingSeconds > 0) cue(String(state.remainingSeconds), state);
+    if (state.phase === "PREPARING" && state.remainingSeconds === secondsFor(activeItem, "PREPARING")) playCue("workout.getReady");
+    const countdownCue = cueForCountdown(state.remainingSeconds);
+    if (state.phase === "PREPARING" && countdownCue) playCue(countdownCue);
+    if (state.phase === "WORKING" && state.remainingSeconds === 5) playCue("workout.fiveSeconds");
+    if (state.phase === "RESTING" && countdownCue) playCue(countdownCue);
     lastCueRef.current = key;
   }, [activeItem, state]);
 
@@ -139,7 +168,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
     if (!activeItem || state.remainingSeconds > 0 || !["PREPARING", "WORKING", "RESTING", "SIDE_SWITCH"].includes(state.phase)) return;
     if (state.phase === "PREPARING") {
       setState((current) => ({ ...current, phase: "WORKING", remainingSeconds: secondsFor(activeItem, "WORKING"), phaseStartedAt: Date.now() }));
-      cue("Start", state);
+      playCue("workout.start");
       return;
     }
     if (state.phase === "WORKING") {
@@ -150,7 +179,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
         return;
       }
       setState((current) => ({ ...current, phase: "RESTING", completed, remainingSeconds: secondsFor(activeItem, "RESTING"), phaseStartedAt: Date.now() }));
-      cue("Rest. Next movement soon.", state);
+      playCue("workout.rest");
       return;
     }
     if (state.phase === "RESTING" || state.phase === "SIDE_SWITCH") {
@@ -161,11 +190,15 @@ export function WorkoutScreen({ id }: { id?: string }) {
   }, [state.remainingSeconds, state.phase, activeItem, items, state]);
 
   const progressText = useMemo(() => `${Math.min(state.activeIndex + 1, Math.max(1, items.length))} of ${Math.max(1, items.length)}`, [state.activeIndex, items.length]);
+  const playCue = (key: SpeechCueKey) => {
+    if (state.haptics && hapticsEnabled) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    speakCue(key, { language, enabled: state.sound && voiceEnabled });
+  };
 
   const pausePlayer = () => {
     setState((current) => ({ ...current, phaseBeforePause: current.phase, pausedRemainingSeconds: current.remainingSeconds, phase: "PAUSED", pausedAt: Date.now(), phaseStartedAt: null }));
     syncSession.mutate({ status: "paused", elapsed_seconds: state.elapsedSeconds, current_index: state.activeIndex, payload: { player_phase: "PAUSED" } });
-    cue("Paused", state);
+    playCue("workout.paused");
   };
   const resumePlayer = () => {
     setState((current) => {
@@ -184,7 +217,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
       };
     });
     syncSession.mutate({ status: "in_progress", current_index: state.activeIndex, payload: { player_phase: "WORKING" } });
-    cue("Resumed", state);
+    playCue("workout.resumed");
   };
   const skip = () => {
     setState((current) => {
@@ -198,16 +231,42 @@ export function WorkoutScreen({ id }: { id?: string }) {
     setState((current) => ({ ...current, completionSubmitted: true, phase: "COMPLETING", phaseStartedAt: null }));
     complete.mutate();
   };
+  const confirmCompletion = () => {
+    Alert.alert(t("workout.confirmFinish"), "Your completed movements will be saved once.", [
+      { text: "Cancel", style: "cancel" },
+      { text: t("workout.finish"), style: "destructive", onPress: requestCompletion }
+    ]);
+  };
+  const confirmExit = () => {
+    Alert.alert(t("workout.confirmExit"), "Progress remains paused unless you finish the session.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: t("workout.exit"),
+        style: "destructive",
+        onPress: () => {
+          resetSpeechCueHistory();
+          setState((current) => ({ ...current, phase: "STOPPED", phaseStartedAt: null }));
+          router.replace("/daily-plan" as never);
+        }
+      }
+    ]);
+  };
 
   if (daily.isLoading && state.phase === "IDLE") return <LoadingState label="Loading workout plan" />;
 
   return (
-    <>
-      <Panel title="Guided workout player">
+    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingHorizontal: 18, paddingTop: Math.max(18, insets.top + 10), paddingBottom: Math.max(24, insets.bottom + 28), gap: 14 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <Pressable accessibilityRole="button" accessibilityLabel={t("workout.exit")} onPress={confirmExit} style={{ minHeight: 44, minWidth: 64, borderRadius: 8, borderColor: theme.border, borderWidth: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.surface }}>
+          <Text style={{ color: theme.safety, fontWeight: "900" }}>{t("workout.exit")}</Text>
+        </Pressable>
+        <Text style={{ color: theme.muted, fontWeight: "800" }}>{state.phase === "IDLE" ? "Preview" : `Exercise ${progressText}`}</Text>
+      </View>
+      <Panel title="Guided workout">
         {state.phase === "IDLE" || state.phase === "ERROR" ? (
           <>
             <PlanReadyPreview plan={daily.data?.plan} />
-            <ActionButton label={start.isPending ? "Opening player..." : "Start guided session"} disabled={blocked || !daily.data?.plan?.items?.length} onPress={() => start.mutate()} />
+            <ActionButton label={start.isPending ? "Opening player..." : workoutStartLabel(readinessItem)} disabled={blocked || !daily.data?.plan?.items?.length} onPress={() => start.mutate()} />
             <ErrorText error={start.error ?? (state.error ? new Error(state.error) : undefined)} />
           </>
         ) : null}
@@ -219,7 +278,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
             </View>
             <ExerciseMediaFrame media={activeItem.media} title={activeItem.name} section={activeItem.section} target={activeItem.equipment} size="hero" />
             <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 24, fontWeight: "900" }}>{activeItem.name}</Text>
-            <Text style={{ color: theme.muted }}>{state.phase.replace("_", " ")} - {activeItem.position ?? "standing"} - {activeItem.impact ?? "low"} impact</Text>
+            <Text style={{ color: theme.muted }}>Exercise {progressText} - {activeItem.position ?? "standing"} - {activeItem.impact ?? "low"} impact - {phaseLabel(state.phase)}</Text>
             <Text accessibilityLabel="Workout timer" style={{ color: theme.text, fontSize: 56, fontWeight: "900", textAlign: "center" }}>{formatClock(state.remainingSeconds)}</Text>
             <BodyText>{activeItem.instructions?.[0] ?? activeItem.description ?? "Move with control and keep breathing steady."}</BodyText>
             {nextItem && ["RESTING", "TRANSITIONING"].includes(state.phase) ? (
@@ -228,7 +287,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
                 <ExerciseMediaFrame media={nextItem.media} title={nextItem.name} section={nextItem.section} target={nextItem.equipment} />
               </View>
             ) : null}
-            <PlayerControls phase={state.phase} onPause={pausePlayer} onResume={resumePlayer} onSkip={skip} onPain={() => pain.mutate()} onSubstitute={() => setState((current) => ({ ...current, phase: "SUBSTITUTING" }))} onEnd={() => setState((current) => ({ ...current, phase: "STOPPED", phaseStartedAt: null }))} onComplete={requestCompletion} />
+            <PlayerControls phase={state.phase} onPause={pausePlayer} onResume={resumePlayer} onSkip={skip} onPain={() => pain.mutate()} onSubstitute={() => setState((current) => ({ ...current, phase: "SUBSTITUTING" }))} onEnd={confirmExit} onComplete={confirmCompletion} />
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
               <Pressable accessibilityRole="switch" accessibilityState={{ checked: state.sound }} onPress={() => setState((current) => ({ ...current, sound: !current.sound }))} style={{ minHeight: 44, justifyContent: "center" }}>
                 <Text style={{ color: theme.primary, fontWeight: "800" }}>Sound {state.sound ? "on" : "off"}</Text>
@@ -250,7 +309,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
         {state.phase === "PAIN_CHECK" ? <PainPanel onReturn={() => setState((current) => ({ ...current, phase: "PAUSED" }))} onEnd={() => setState((current) => ({ ...current, phase: "STOPPED" }))} /> : null}
         <ErrorText error={syncSession.error ?? complete.error ?? pain.error ?? feedback.error} />
       </Panel>
-    </>
+    </ScrollView>
   );
 }
 
@@ -278,10 +337,10 @@ function PlayerControls({ phase, onPause, onResume, onSkip, onPain, onSubstitute
     <View style={{ gap: 10 }}>
       <ActionButton label="Pause" onPress={onPause} />
       <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Skip movement" onPress={onSkip} style={{ minHeight: 44, justifyContent: "center" }}><BodyText>Skip</BodyText></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Substitute movement" onPress={onSubstitute} style={{ minHeight: 44, justifyContent: "center" }}><BodyText>Substitute</BodyText></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Report pain" onPress={onPain} style={{ minHeight: 44, justifyContent: "center" }}><BodyText>Pain</BodyText></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Complete now" onPress={onComplete} style={{ minHeight: 44, justifyContent: "center" }}><BodyText>Finish</BodyText></Pressable>
+        <View style={{ flexGrow: 1, minWidth: 120 }}><ActionButton label="Skip" onPress={onSkip} /></View>
+        <View style={{ flexGrow: 1, minWidth: 120 }}><ActionButton label="Substitute" onPress={onSubstitute} /></View>
+        <View style={{ flexGrow: 1, minWidth: 120 }}><ActionButton tone="safety" label="Pain" onPress={onPain} /></View>
+        <View style={{ flexGrow: 1, minWidth: 120 }}><ActionButton tone="safety" label="Finish" onPress={onComplete} /></View>
       </View>
     </View>
   );

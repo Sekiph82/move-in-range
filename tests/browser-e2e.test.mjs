@@ -8,7 +8,8 @@ const adminRoutes = ["/dashboard", "/users", "/exercises", "/policies", "/privac
 test("browser E2E route inventory is wired to real app files", () => {
   for (const route of mobileRoutes) {
     const file = `apps/mobile/app/${route.slice(1)}.tsx`;
-    assert.equal(existsSync(file), true, file);
+    const tabFile = `apps/mobile/app/(tabs)/${route.slice(1)}.tsx`;
+    assert.equal(existsSync(file) || existsSync(tabFile), true, file);
   }
   for (const route of adminRoutes) {
     assert.equal(existsSync(`apps/admin/app${route}/page.tsx`), true, route);

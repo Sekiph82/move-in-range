@@ -289,8 +289,8 @@ export function saveGoalsTargets(goals: string[], target_focuses: string[], natu
   return apiFetch("/goals-targets", { method: "PUT", body: JSON.stringify({ goals, target_focuses, natural_request }) });
 }
 
-export function submitReadiness() {
-  return apiFetch("/readiness-checks", { method: "POST", body: JSON.stringify(defaultReadiness) });
+export function submitReadiness(payload: Partial<typeof defaultReadiness> = {}) {
+  return apiFetch("/readiness-checks", { method: "POST", body: JSON.stringify({ ...defaultReadiness, ...payload }) });
 }
 
 export function generateDailyPlan(minutes = 15) {

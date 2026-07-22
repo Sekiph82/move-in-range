@@ -1,5 +1,6 @@
 import { Image, Pressable, Text, View } from "react-native";
 import { useState } from "react";
+import { Feather } from "@expo/vector-icons";
 import { useTheme } from "../../theme";
 import type { ExerciseMedia } from "./productTypes";
 
@@ -25,8 +26,8 @@ export function ExerciseMediaFrame({ media, title, section, target, size = "comp
       <View style={{ minHeight: height, borderRadius: 8, overflow: "hidden", backgroundColor: theme.border }}>
         <Image source={{ uri }} accessibilityLabel={`${title} movement preview`} resizeMode="cover" onError={() => setFailed(true)} style={{ width: "100%", height }} />
         {!animated && animation ? (
-          <View style={{ position: "absolute", right: 8, bottom: 8, borderRadius: 8, backgroundColor: `${theme.text}cc`, paddingHorizontal: 8, paddingVertical: 4 }}>
-            <Text style={{ color: theme.background, fontSize: 12, fontWeight: "800" }}>GIF in detail</Text>
+          <View accessibilityLabel="Motion preview available" style={{ position: "absolute", right: 8, bottom: 8, width: 30, height: 30, borderRadius: 15, backgroundColor: `${theme.text}aa`, alignItems: "center", justifyContent: "center" }}>
+            <Feather name="play" color={theme.background} size={15} />
           </View>
         ) : null}
       </View>
@@ -48,7 +49,7 @@ export function ExerciseMediaFrame({ media, title, section, target, size = "comp
     >
       <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 10 }}>
         <Text style={{ color: theme.primary, fontWeight: "800", textTransform: "uppercase", fontSize: 12 }}>{section ?? "Movement"}</Text>
-        <Text style={{ color: theme.muted, fontWeight: "700", fontSize: 12 }}>{failed ? "Media retry available" : media?.raw_gif_path_present ? "Media pending review" : "Instruction guided"}</Text>
+        <Text style={{ color: theme.muted, fontWeight: "700", fontSize: 12 }}>{failed ? "Retry" : "Guide"}</Text>
       </View>
       <View style={{ alignItems: "center", justifyContent: "center", minHeight: Math.max(44, height - 84), gap: 6 }}>
         <View style={{ width: height * 0.32, height: height * 0.32, borderRadius: height, backgroundColor: `${theme.primary}22`, borderColor: `${theme.primary}66`, borderWidth: 2 }} />

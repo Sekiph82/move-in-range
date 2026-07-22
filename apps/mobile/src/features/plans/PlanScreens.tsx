@@ -7,6 +7,7 @@ import { useTheme } from "../../theme";
 import { ExerciseMediaFrame } from "../shared/ExerciseMediaFrame";
 import { ActionButton, BodyText, ChipGroup, ErrorText, LoadingState, Panel, SecondaryLink, TextField } from "../shared/ui";
 import type { MonthWeek, MovementPlan, PlanExerciseItem, ProgramDay } from "../shared/productTypes";
+import { hasValidSameDayReadiness, readinessAllowsStart, workoutStartLabel } from "../readiness/readinessGate";
 
 const MODIFICATION_OPTIONS = ["shorter", "easier", "no floor", "seated", "standing", "no cardio", "avoid knee", "avoid shoulder", "more rest", "substitute exercise"];
 const READY_MADE = ["Gentle Daily Mobility", "Seven-Day Joint-Friendly Movement", "Four-Week Mobility Foundation", "Chair-Supported Movement", "Low-Impact Cardio", "Balance and Stability", "Shoulder Mobility", "Lower-Back Comfort", "Beginner Recovery Movement"];
@@ -50,6 +51,7 @@ export function DailyPlanScreen() {
   const [changes, setChanges] = useState<string[]>(["easier"]);
   const queryClient = useQueryClient();
   const daily = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
+  const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest") });
   const generate = useMutation({ mutationFn: () => generateDailyPlan(Number(minutes) || 15), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] }) });
   const start = useMutation({
     mutationFn: async () => startSession(daily.data?.plan?.id),
@@ -60,6 +62,16 @@ export function DailyPlanScreen() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] })
   });
   const items = daily.data?.plan?.items ?? [];
+  const readinessItem = readiness.data?.item;
+  const readinessReady = hasValidSameDayReadiness(readinessItem) && readinessAllowsStart(readinessItem);
+  const startWorkout = () => {
+    if (!daily.data?.plan?.id) return;
+    if (!readinessReady) {
+      router.push(`/readiness?intent=start&planId=${daily.data.plan.id}` as never);
+      return;
+    }
+    start.mutate();
+  };
   return (
     <>
       <Panel title="Today program">
@@ -68,7 +80,7 @@ export function DailyPlanScreen() {
           <TextField label="Available minutes" keyboardType="number-pad" value={minutes} onChangeText={setMinutes} />
         </View>
         <ActionButton label={generate.isPending ? "Generating..." : "Generate today"} onPress={() => generate.mutate()} />
-        <ActionButton label={start.isPending ? "Opening player..." : "Start guided workout"} disabled={!daily.data?.plan?.id} onPress={() => start.mutate()} />
+        <ActionButton label={start.isPending ? "Opening player..." : workoutStartLabel(readinessItem)} disabled={!daily.data?.plan?.id} onPress={startWorkout} />
         <ErrorText error={generate.error ?? start.error} />
       </Panel>
       <Panel title="Ordered movements">

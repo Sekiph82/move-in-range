@@ -1,17 +1,29 @@
-import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "expo-router";
-import { apiFetch, recordConsent, saveCapacityProfile, saveGoalsTargets, saveOnboardingStep, saveProfile } from "../../src/api";
+import { Link, router } from "expo-router";
+import { apiFetch, logoutUser, recordConsent, saveCapacityProfile, saveGoalsTargets, saveOnboardingStep, saveProfile } from "../../src/api";
+import { LOGIN_ROUTE } from "../../src/features/auth/sessionGate";
+import { clearExerciseCache } from "../../src/features/exercises/exerciseCache";
+import { useAppLanguage } from "../../src/i18n/LanguageProvider";
 import { useTheme } from "../../src/theme";
 
 export default function ProfileScreen() {
   const theme = useTheme();
   const queryClient = useQueryClient();
-  const [language, setLanguage] = useState<"en" | "tr">("en");
+  const { language, setLanguage, t } = useAppLanguage();
   const profile = useQuery({ queryKey: ["profile"], queryFn: () => apiFetch<any>("/profile") });
   const onboarding = useQuery({ queryKey: ["onboarding"], queryFn: () => apiFetch<any>("/onboarding") });
   const save = useMutation({ mutationFn: () => saveProfile(language), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["profile"] }) });
+  const logout = useMutation({
+    mutationFn: async () => {
+      await logoutUser();
+      await clearExerciseCache();
+    },
+    onSuccess: () => {
+      queryClient.clear();
+      router.replace(LOGIN_ROUTE as never);
+    }
+  });
   const completeOnboarding = useMutation({
     mutationFn: async () => {
       await saveOnboardingStep("identity", { preferred_name: "Aylin", date_of_birth: "1982-04-20", gender: "prefer_not_to_say", timezone: "Europe/Istanbul", language }, true, language);
@@ -33,7 +45,6 @@ export default function ProfileScreen() {
       <Text style={{ color: theme.muted, fontSize: 16 }}>Health-aware onboarding and local development account.</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
         {[
-          ["/auth", "Auth"],
           ["/onboarding", "Onboarding"],
           ["/settings", "Settings"],
           ["/integrations", "Integrations"],
@@ -70,10 +81,15 @@ export default function ProfileScreen() {
       <Pressable accessibilityLabel="Save onboarding profile" onPress={() => save.mutate()} style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.primary }}>
         <Text style={{ color: theme.surface, fontWeight: "700" }}>{save.isPending ? "Saving..." : "Save onboarding profile"}</Text>
       </Pressable>
+      <Pressable accessibilityLabel="Log out" onPress={() => logout.mutate()} style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1 }}>
+        <Text style={{ color: theme.safety, fontWeight: "900" }}>{logout.isPending ? "Signing out..." : "Log out"}</Text>
+      </Pressable>
+      <Text style={{ color: theme.muted }}>{t("settings.language")}: {language === "tr" ? t("settings.turkish") : t("settings.english")}</Text>
       <Pressable accessibilityLabel="Complete guided onboarding sample" onPress={() => completeOnboarding.mutate()} style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1 }}>
         <Text style={{ color: theme.primary, fontWeight: "700" }}>{completeOnboarding.isPending ? "Saving steps..." : "Complete guided onboarding sample"}</Text>
       </Pressable>
       {save.error ? <Text style={{ color: theme.safety }}>{String(save.error.message)}</Text> : null}
+      {logout.error ? <Text style={{ color: theme.safety }}>{String(logout.error.message)}</Text> : null}
       {completeOnboarding.error ? <Text style={{ color: theme.safety }}>{String(completeOnboarding.error.message)}</Text> : null}
     </ScrollView>
   );

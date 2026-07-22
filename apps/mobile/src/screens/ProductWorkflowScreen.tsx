@@ -74,6 +74,7 @@ function WorkflowBody({ kind, id }: Props) {
 }
 
 export function ProductWorkflowScreen({ kind, id }: Props) {
+  if (kind === "workout") return <WorkflowBody kind={kind} id={id} />;
   const route = routeMeta[kind];
   return (
     <RouteScaffold title={route.title} subtitle={route.subtitle}>

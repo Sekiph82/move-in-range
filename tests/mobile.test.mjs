@@ -51,8 +51,9 @@ function mobileRoutes() {
 
 function routePatternMatches(routes, target) {
   if (!target.startsWith("/")) return false;
-  if (routes.has(target)) return true;
-  const normalizedTarget = target.replace(/\$\{[^}]+\}/g, "__dynamic__");
+  const pathOnlyTarget = target.split("?")[0];
+  if (routes.has(pathOnlyTarget)) return true;
+  const normalizedTarget = pathOnlyTarget.replace(/\$\{[^}]+\}/g, "__dynamic__");
   for (const route of routes) {
     const pattern = route.replace(/\[[^\]]+\]/g, "__dynamic__");
     if (pattern === normalizedTarget) return true;
@@ -211,14 +212,14 @@ test("Expo Router exposes the functional product route family", () => {
     "(tabs)/program.tsx",
     "(tabs)/progress.tsx",
     "onboarding.tsx",
-    "readiness.tsx",
+    "(tabs)/readiness.tsx",
     "quick-session.tsx",
-    "daily-plan.tsx",
-    "weekly-plan.tsx",
-    "monthly-plan.tsx",
+    "(tabs)/daily-plan.tsx",
+    "(tabs)/weekly-plan.tsx",
+    "(tabs)/monthly-plan.tsx",
     "calendar.tsx",
-    "exercises.tsx",
-    "exercise/[id].tsx",
+    "(tabs)/exercises.tsx",
+    "(tabs)/exercise/[id].tsx",
     "workout/[sessionId].tsx",
     "workout/[sessionId]/pain.tsx",
     "workout/[sessionId]/symptom.tsx",
@@ -226,11 +227,11 @@ test("Expo Router exposes the functional product route family", () => {
     "diabetes.tsx",
     "integrations.tsx",
     "notifications.tsx",
-    "privacy.tsx",
+    "(tabs)/privacy.tsx",
     "caregivers.tsx",
     "professionals.tsx",
     "achievements.tsx",
-    "settings.tsx"
+    "(tabs)/settings.tsx"
   ];
   for (const route of routes) {
     assert.equal(existsSync(`apps/mobile/app/${route}`), true, route);
@@ -300,6 +301,7 @@ test("root layout mounts navigator before session redirects", () => {
   assert.match(rootLayout, /<SessionGuard\s*\/>\s*<Stack/s);
   assert.match(sessionGuard, /useRootNavigationState/);
   assert.match(sessionGuard, /if \(!rootNavigationReady\) return/);
+  assert.match(sessionGuard, /Restoring secure session/);
   assert.doesNotMatch(rootLayout, /<SessionGuard>\s*<Stack/s);
 });
 
@@ -326,11 +328,14 @@ test("product workflow is decomposed into feature-specific screens", () => {
 
 test("mobile product shell exposes Home Program Move Progress Profile tabs", () => {
   const tabs = readFileSync("apps/mobile/app/(tabs)/_layout.tsx", "utf8");
-  for (const tab of ["Home", "Program", "Move", "Progress", "Profile"]) assert.match(tabs, new RegExp(`title: "${tab}"`));
+  for (const tab of ["tabs.home", "tabs.program", "tabs.move", "tabs.progress", "tabs.profile"]) assert.match(tabs, new RegExp(tab));
   assert.match(tabs, /name="program"/);
   assert.match(tabs, /name="progress"/);
   assert.match(tabs, /name="plan" options=\{\{ href: null \}\}/);
   assert.match(tabs, /name="insights" options=\{\{ href: null \}\}/);
+  for (const hidden of ["daily-plan", "weekly-plan", "monthly-plan", "exercises", "exercise/\\[id\\]", "readiness", "settings", "privacy"]) {
+    assert.match(tabs, new RegExp(`name="${hidden}" options=\\{\\{ href: null \\}\\}`));
+  }
 });
 
 test("exercise media reaches cards detail and guided player surfaces", () => {
@@ -340,10 +345,11 @@ test("exercise media reaches cards detail and guided player surfaces", () => {
   const workoutScreens = readFileSync("apps/mobile/src/features/workout/WorkoutScreens.tsx", "utf8");
   assert.match(mediaFrame, /thumbnail_url/);
   assert.match(mediaFrame, /gif_url/);
-  assert.match(mediaFrame, /raw_gif_path_present/);
-  assert.match(mediaFrame, /Guided fallback|Media pending review/);
+  assert.match(mediaFrame, /Retry|Guide/);
+  assert.doesNotMatch(mediaFrame, /GIF in detail/);
   assert.match(planScreens, /<ExerciseMediaFrame/);
   assert.match(exerciseScreens, /<ExerciseMediaFrame/);
+  assert.doesNotMatch(exerciseScreens, /GIF available/);
   assert.match(workoutScreens, /<ExerciseMediaFrame/);
   assert.match(workoutScreens, /Next:/);
 });
@@ -353,7 +359,7 @@ test("exercise library implements search filters favorites recents and cache sur
   const cache = readFileSync("apps/mobile/src/features/exercises/exerciseCache.ts", "utf8");
   const moveTab = readFileSync("apps/mobile/app/(tabs)/move.tsx", "utf8");
   assert.match(exerciseScreens, /FlatList/);
-  assert.match(exerciseScreens, /numColumns=\{2\}/);
+  assert.match(exerciseScreens, /numColumns=\{twoColumn \? 2 : 1\}/);
   assert.match(exerciseScreens, /FilterSheet/);
   assert.match(exerciseScreens, /debounce|setTimeout/);
   assert.match(exerciseScreens, /favoriteExercise/);
@@ -370,11 +376,83 @@ test("guided workout screen is state driven and not a debug control stack", () =
   for (const phase of ["PREPARING", "WORKING", "RESTING", "PAUSED", "SUBSTITUTING", "PAIN_CHECK", "COMPLETING", "COMPLETED"]) {
     assert.match(workoutScreens, new RegExp(`"${phase}"`));
   }
-  assert.match(workoutScreens, /Speech\.speak/);
+  assert.doesNotMatch(workoutScreens, /Speech\.speak/);
+  assert.match(workoutScreens, /speakCue/);
+  assert.match(workoutScreens, /Alert\.alert/);
   assert.match(workoutScreens, /Haptics\.impactAsync/);
   assert.match(workoutScreens, /formatClock/);
   assert.match(workoutScreens, /Open full feedback/);
+  assert.doesNotMatch(workoutScreens, /Next actions/);
   assert.doesNotMatch(workoutScreens, /Preparation, work, rest, pause, skip, substitute, and completion controls are available/);
+});
+
+test("readiness is visual and gates workout start", () => {
+  const home = readFileSync("apps/mobile/app/(tabs)/index.tsx", "utf8");
+  const daily = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
+  const readiness = readFileSync("apps/mobile/src/features/readiness/ReadinessScreen.tsx", "utf8");
+  assert.match(home, /router\.push\(`\/readiness\?intent=start&planId=/);
+  assert.doesNotMatch(home, /submitReadiness/);
+  assert.match(home, /hasValidSameDayReadiness/);
+  assert.match(daily, /intent=start&planId/);
+  for (const text of ["How is your energy?", "How did you sleep?", "Any pain today?", "Any injury or symptom change?", "Stress level?", "How much time do you have?"]) {
+    assert.match(readiness, new RegExp(text.replace(/[?]/g, "\\?")));
+  }
+  assert.match(readiness, /Acknowledge adjustments and start/);
+});
+
+test("localized speech cues use app language and translated countdown words", () => {
+  const speechService = readFileSync("apps/mobile/src/guidance/speechCues.ts", "utf8");
+  const localization = readFileSync("apps/mobile/src/i18n/localization.ts", "utf8");
+  assert.match(speechService, /"countdown\.three": "Three"/);
+  assert.match(speechService, /"countdown\.three": "Üç"/);
+  assert.match(speechService, /"workout\.resumed": "Resumed"/);
+  assert.match(speechService, /"workout\.resumed": "Devam ediyor"/);
+  assert.match(localization, /language === "tr" \? "tr-TR" : "en-US"/);
+  assert.match(speechService, /if \(seconds === 3\) return "countdown\.three"/);
+  assert.match(speechService, /if \(seconds === 2\) return "countdown\.two"/);
+  assert.match(speechService, /if \(seconds === 1\) return "countdown\.one"/);
+  assert.match(speechService, /language: resolved\.language/);
+  assert.doesNotMatch(speechService, /Speech\.speak\(["'`]\\d/);
+});
+
+test("profile and settings expose logout and persisted language controls", () => {
+  const profile = readFileSync("apps/mobile/app/(tabs)/profile.tsx", "utf8");
+  const settings = readFileSync("apps/mobile/src/features/settings/SettingsScreen.tsx", "utf8");
+  const provider = readFileSync("apps/mobile/src/i18n/LanguageProvider.tsx", "utf8");
+  assert.match(profile, /Log out/);
+  assert.match(profile, /clearExerciseCache/);
+  assert.doesNotMatch(profile, /\["\/auth", "Auth"\]/);
+  assert.match(settings, /settings\.english/);
+  assert.match(settings, /setLanguage\("en"\)/);
+  assert.match(settings, /setLanguage\("tr"\)/);
+  assert.match(provider, /AsyncStorage\.setItem\(LANGUAGE_KEY/);
+  assert.match(provider, /expo-localization/);
+});
+
+test("normal detail routes live in the tab shell and Next actions are removed", () => {
+  for (const route of [
+    "apps/mobile/app/(tabs)/daily-plan.tsx",
+    "apps/mobile/app/(tabs)/weekly-plan.tsx",
+    "apps/mobile/app/(tabs)/monthly-plan.tsx",
+    "apps/mobile/app/(tabs)/exercises.tsx",
+    "apps/mobile/app/(tabs)/exercise/[id].tsx",
+    "apps/mobile/app/(tabs)/readiness.tsx",
+    "apps/mobile/app/(tabs)/settings.tsx",
+    "apps/mobile/app/(tabs)/privacy.tsx"
+  ]) assert.equal(existsSync(route), true, route);
+  for (const removed of [
+    "apps/mobile/app/daily-plan.tsx",
+    "apps/mobile/app/weekly-plan.tsx",
+    "apps/mobile/app/monthly-plan.tsx",
+    "apps/mobile/app/exercises.tsx",
+    "apps/mobile/app/readiness.tsx",
+    "apps/mobile/app/settings.tsx",
+    "apps/mobile/app/privacy.tsx"
+  ]) assert.equal(existsSync(removed), false, removed);
+  const shell = readFileSync("apps/mobile/src/features/shared/ui.tsx", "utf8");
+  const workflow = readFileSync("apps/mobile/src/screens/ProductWorkflowScreen.tsx", "utf8");
+  assert.doesNotMatch(shell, /Next actions/);
+  assert.match(workflow, /if \(kind === "workout"\) return <WorkflowBody/);
 });
 
 test("beta validation schemas reject malformed auth, glucose, and sharing payloads", () => {

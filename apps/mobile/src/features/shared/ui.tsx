@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { Link, router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../../theme";
 import { TABS_ROUTE } from "../auth/sessionGate";
 
@@ -140,16 +141,15 @@ export function RouteHeader({ title, subtitle }: { title: string; subtitle: stri
 
 export function RouteScaffold({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.background }}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: Math.max(20, insets.top + 12), paddingBottom: Math.max(28, insets.bottom + 24), gap: 16 }}
+    >
       <RouteHeader title={title} subtitle={subtitle} />
       {children}
-      <Panel title="Next actions">
-        <SecondaryLink href="/readiness" label="Readiness" />
-        <SecondaryLink href="/daily-plan" label="Daily plan" />
-        <SecondaryLink href="/exercises" label="Exercise library" />
-        <SecondaryLink href="/privacy" label="Privacy" />
-      </Panel>
     </ScrollView>
   );
 }
