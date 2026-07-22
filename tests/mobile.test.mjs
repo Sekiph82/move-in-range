@@ -6,7 +6,7 @@ const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
 const { emptyOnboardingDraft, isOnboardingComplete, saveStep, validateOnboardingStep } = await import("../apps/mobile/src/onboarding/onboardingState.ts");
-const { ONBOARDING_STEPS, BODY_REGIONS, GENDER_OPTIONS, MOBILITY_AIDS, MOVEMENT_PATTERNS, POSITIONS, validateOnboardingStepPayload } = await import("../apps/mobile/src/features/onboarding/model.ts");
+const { ONBOARDING_STEPS, BODY_AREAS, onboardingNeedsBodyAreas, onboardingPayload, validateOnboardingStepPayload } = await import("../apps/mobile/src/features/onboarding/model.ts");
 const { loginSchema, registerSchema, resetPasswordSchema, glucoseSchema, inviteSchema } = await import("../apps/mobile/src/features/validation/schemas.ts");
 const { resolveWorkoutMedia, scheduleLocalVoiceCues } = await import("../apps/mobile/src/guidance/mediaVoice.ts");
 const { canActivateProvider, providerBlockedReason } = await import("../apps/mobile/src/integrations/providerState.ts");
@@ -513,6 +513,24 @@ test("readiness is visual and gates every new workout start", () => {
   }
 });
 
+test("readiness body-area follow-ups are scoped to pain and injury steps", () => {
+  const readiness = readFileSync("apps/mobile/src/features/readiness/ReadinessScreen.tsx", "utf8");
+  assert.match(readiness, /type ReadinessAnswers = \{/);
+  assert.match(readiness, /pain: \{ level: string; bodyAreas: string\[\]; movementWorse: boolean \}/);
+  assert.match(readiness, /injury: \{ status: string; bodyAreas: string\[\] \}/);
+  assert.match(readiness, /followUp: "pain-body-areas"/);
+  assert.match(readiness, /followUp: "injury-body-areas"/);
+  assert.match(readiness, /const showPainBodyAreas = currentStep\.followUp === "pain-body-areas" && answers\.pain\.level !== "none"/);
+  assert.match(readiness, /const showInjuryBodyAreas = currentStep\.followUp === "injury-body-areas" && \["recent", "worse"\]\.includes\(answers\.injury\.status\)/);
+  assert.match(readiness, /value === "none" \? \[\] : current\.pain\.bodyAreas/);
+  assert.match(readiness, /\["recent", "worse"\]\.includes\(value\) \? current\.injury\.bodyAreas : \[\]/);
+  assert.match(readiness, /pain_locations: answers\.pain\.bodyAreas/);
+  assert.match(readiness, /injury_locations: answers\.injury\.bodyAreas/);
+  assert.doesNotMatch(readiness, /step >= 2/);
+  assert.doesNotMatch(readiness, /answers\.pain !== "none" \|\| answers\.new_injury/);
+  assert.doesNotMatch(readiness, /const \[painAreas, setPainAreas\]/);
+});
+
 test("localized speech cues use app language and translated countdown words", () => {
   const speechService = readFileSync("apps/mobile/src/guidance/speechCues.ts", "utf8");
   const localization = readFileSync("apps/mobile/src/i18n/localization.ts", "utf8");
@@ -627,64 +645,45 @@ test("beta mobile UI does not expose old demo wording or fixed glucose defaults"
   assert.doesNotMatch(text, /not loaded/i);
 });
 
-test("real onboarding metadata covers required acceptance steps and validation", () => {
-  assert.equal(ONBOARDING_STEPS.length, 22);
-  assert.deepEqual(ONBOARDING_STEPS.map((step) => step.en), [
-    "Welcome",
-    "Product boundary",
-    "Consent",
-    "Preferred name",
-    "Date of birth",
-    "Gender",
-    "Physiological contexts",
-    "Height and weight",
-    "Country, timezone, language",
-    "Health conditions",
-    "Sensitivity regions",
-    "Clinician restrictions",
-    "Previous injuries and surgery",
-    "Mobility aids",
-    "Activity and experience",
-    "Functional capacity",
-    "Goals",
-    "Target muscles",
-    "Environment and equipment",
-    "Schedule and time",
-    "Diabetes and notification settings",
-    "Review and complete"
-  ]);
-  assert.deepEqual(GENDER_OPTIONS, ["Woman", "Man", "Non-binary", "Prefer not to say", "Self-described"]);
-  assert.equal(BODY_REGIONS.length, 11);
-  assert.ok(MOVEMENT_PATTERNS.includes("jump"));
-  assert.ok(POSITIONS.includes("kneeling"));
-  assert.ok(MOBILITY_AIDS.includes("walker"));
-  const baseDraft = {
+test("short onboarding metadata covers essential planning inputs only", () => {
+  assert.equal(ONBOARDING_STEPS.length, 7);
+  assert.deepEqual(ONBOARDING_STEPS.map((step) => step.key), ["welcome", "goal", "activity", "limitations", "equipment", "pattern", "review_complete"]);
+  assert.equal(ONBOARDING_STEPS.some((step) => /energy|sleep|stress|pain today|available time/i.test(`${step.title.en} ${step.subtitle.en}`)), false);
+  assert.equal(BODY_AREAS.includes("Shoulder"), true);
+  const draft = {
     language: "en",
-    preferredName: "Aylin",
-    dateOfBirth: "1982-04-20",
-    gender: "Self-described",
-    selfDescribe: "",
-    contexts: ["pregnancy"],
-    trimester: "",
-    heightCm: "168",
-    weightKg: "72",
-    country: "US",
-    timezone: "America/New_York",
-    conditions: [],
-    sensitivityRegions: [],
-    side: "bilateral",
-    severity: "2",
-    clinicianRestriction: false,
-    notes: "",
-    goals: ["mobility"],
-    targets: ["core"],
-    equipment: ["chair"],
-    minutes: "15",
-    diabetesEnabled: false,
-    quietHours: true
+    primaryGoal: "mobility",
+    activityLevel: "starting",
+    limitations: ["joint"],
+    limitationBodyAreas: ["Shoulder"],
+    equipment: ["body weight", "chair"],
+    preferredDays: "3",
+    preferredMinutes: "15",
+    currentStep: 6,
+    submitted: false
   };
-  assert.deepEqual(validateOnboardingStepPayload("gender", baseDraft), ["self_description_required"]);
-  assert.deepEqual(validateOnboardingStepPayload("physiological_contexts", baseDraft), ["trimester_required_when_pregnancy_selected"]);
-  assert.deepEqual(validateOnboardingStepPayload("clinician_restrictions", { ...baseDraft, clinicianRestriction: true, restrictionReviewDate: "" }), ["restriction_review_date_required"]);
-  assert.deepEqual(validateOnboardingStepPayload("injuries_surgery", { ...baseDraft, injuryRegion: "knees", injuryStatus: "" }), ["injury_status_required"]);
+  assert.equal(onboardingNeedsBodyAreas(draft), true);
+  assert.deepEqual(validateOnboardingStepPayload("goal", { ...draft, primaryGoal: "" }), ["goal_required"]);
+  assert.deepEqual(validateOnboardingStepPayload("pattern", { ...draft, preferredMinutes: "" }), ["pattern_required"]);
+  assert.deepEqual(onboardingPayload(draft).preferred_training_days, ["Mon", "Wed", "Fri"]);
+  assert.deepEqual(onboardingPayload(draft).limitation_body_areas, ["Shoulder"]);
+});
+
+test("onboarding screen is page-by-page card flow with local draft persistence", () => {
+  const source = readFileSync("apps/mobile/src/features/onboarding/OnboardingScreen.tsx", "utf8");
+  const workflow = readFileSync("apps/mobile/src/screens/ProductWorkflowScreen.tsx", "utf8");
+  assert.match(source, /ONBOARDING_LOCAL_DRAFT_KEY/);
+  assert.match(source, /AsyncStorage\.getItem\(ONBOARDING_LOCAL_DRAFT_KEY\)/);
+  assert.match(source, /AsyncStorage\.setItem\(ONBOARDING_LOCAL_DRAFT_KEY/);
+  assert.match(source, /AsyncStorage\.removeItem\(ONBOARDING_LOCAL_DRAFT_KEY\)/);
+  assert.match(source, /OptionCard/);
+  assert.match(source, /accessibilityState=\{\{ selected \}\}/);
+  assert.match(source, /currentStep/);
+  assert.match(source, /Create my plan/);
+  assert.match(source, /saveOnboardingStep\("review_complete"/);
+  assert.match(source, /generateDailyPlan/);
+  assert.doesNotMatch(source, /TextField/);
+  assert.doesNotMatch(workflow, /Twenty-two focused steps/);
+  const api = readFileSync("apps/mobile/src/api.ts", "utf8");
+  assert.match(api, /AsyncStorage\.removeItem\(ONBOARDING_LOCAL_DRAFT_KEY\)/);
 });

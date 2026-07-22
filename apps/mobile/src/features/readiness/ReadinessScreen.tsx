@@ -11,13 +11,15 @@ import { readinessAllowsStart, readinessDelaysStart, readinessRequiresAcknowledg
 import { workoutHref } from "./startContext";
 
 type Choice = { value: string; label: string; detail: string; icon: keyof typeof Feather.glyphMap; score?: number | boolean };
-type Question = { key: "energy" | "sleep_quality" | "pain" | "new_injury" | "stress" | "available_minutes"; title: string; subtitle: string; choices: Choice[] };
+type ReadinessStepId = "energy" | "sleep_quality" | "pain" | "injury" | "stress" | "available_minutes";
+type FollowUp = "pain-body-areas" | "injury-body-areas" | null;
+type ReadinessStep = { id: ReadinessStepId; title: string; subtitle: string; choices: Choice[]; followUp?: FollowUp };
 
-const bodyAreas = ["Neck", "Shoulder", "Back", "Hip", "Knee", "Ankle", "Wrist"];
+const bodyAreas = ["Shoulder", "Neck", "Back", "Hip", "Knee", "Ankle", "Arm", "Wrist/Hand", "Other"];
 
-const questions: Question[] = [
+const steps: ReadinessStep[] = [
   {
-    key: "energy",
+    id: "energy",
     title: "How is your energy?",
     subtitle: "Choose the closest match for right now.",
     choices: [
@@ -28,7 +30,7 @@ const questions: Question[] = [
     ]
   },
   {
-    key: "sleep_quality",
+    id: "sleep_quality",
     title: "How did you sleep?",
     subtitle: "Sleep affects balance, effort, and recovery.",
     choices: [
@@ -39,9 +41,10 @@ const questions: Question[] = [
     ]
   },
   {
-    key: "pain",
+    id: "pain",
     title: "Any pain today?",
     subtitle: "Use the strongest pain you notice before moving.",
+    followUp: "pain-body-areas",
     choices: [
       { value: "none", label: "None", detail: "clear", icon: "smile", score: 0 },
       { value: "mild", label: "Mild", detail: "watch it", icon: "activity", score: 2 },
@@ -50,9 +53,10 @@ const questions: Question[] = [
     ]
   },
   {
-    key: "new_injury",
+    id: "injury",
     title: "Any injury or symptom change?",
     subtitle: "New or worsening symptoms should change the plan.",
+    followUp: "injury-body-areas",
     choices: [
       { value: "none", label: "None", detail: "no change", icon: "shield", score: false },
       { value: "stable", label: "Old/stable", detail: "known", icon: "clock", score: false },
@@ -61,7 +65,7 @@ const questions: Question[] = [
     ]
   },
   {
-    key: "stress",
+    id: "stress",
     title: "Stress level?",
     subtitle: "Stress can change intensity and rest needs.",
     choices: [
@@ -72,7 +76,7 @@ const questions: Question[] = [
     ]
   },
   {
-    key: "available_minutes",
+    id: "available_minutes",
     title: "How much time do you have?",
     subtitle: "The plan can shorten safely.",
     choices: [
@@ -84,11 +88,20 @@ const questions: Question[] = [
   }
 ];
 
-const initialAnswers = {
+type ReadinessAnswers = {
+  energy: string;
+  sleep_quality: string;
+  pain: { level: string; bodyAreas: string[]; movementWorse: boolean };
+  injury: { status: string; bodyAreas: string[] };
+  stress: string;
+  available_minutes: string;
+};
+
+const initialAnswers: ReadinessAnswers = {
   energy: "good",
   sleep_quality: "good",
-  pain: "none",
-  new_injury: "none",
+  pain: { level: "none", bodyAreas: [], movementWorse: false },
+  injury: { status: "none", bodyAreas: [] },
   stress: "mild",
   available_minutes: "15"
 };
@@ -101,15 +114,28 @@ function resultTitle(item: any) {
   return "Readiness saved";
 }
 
-function answerPayload(answers: typeof initialAnswers) {
-  const valueFor = (key: Question["key"]) => questions.find((question) => question.key === key)?.choices.find((choice) => choice.value === answers[key])?.score;
+function selectedValue(answers: ReadinessAnswers, stepId: ReadinessStepId) {
+  if (stepId === "pain") return answers.pain.level;
+  if (stepId === "injury") return answers.injury.status;
+  return answers[stepId];
+}
+
+function toggleArea(values: string[], area: string) {
+  return values.includes(area) ? values.filter((item) => item !== area) : [...values, area];
+}
+
+function answerPayload(answers: ReadinessAnswers) {
+  const valueFor = (id: ReadinessStepId) => steps.find((step) => step.id === id)?.choices.find((choice) => choice.value === selectedValue(answers, id))?.score;
   return {
     energy: Number(valueFor("energy") ?? 3),
     sleep_quality: Number(valueFor("sleep_quality") ?? 3),
     pain: Number(valueFor("pain") ?? 0),
-    new_injury: Boolean(valueFor("new_injury")),
+    new_injury: Boolean(valueFor("injury")),
     stress: Number(valueFor("stress") ?? 2),
     available_minutes: Number(valueFor("available_minutes") ?? 15),
+    pain_locations: answers.pain.bodyAreas,
+    injury_locations: answers.injury.bodyAreas,
+    movement_makes_pain_worse: answers.pain.movementWorse,
     desired_session_type: "mixed",
     dizziness: false,
     chest_discomfort: false,
@@ -125,9 +151,7 @@ export function ReadinessScreen() {
   const queryClient = useQueryClient();
   const params = useLocalSearchParams<{ intent?: string; planId?: string; source?: string; sessionDate?: string; selectedDay?: string; sessionType?: string; returnTo?: string }>();
   const [step, setStep] = useState(0);
-  const [answers, setAnswers] = useState(initialAnswers);
-  const [painAreas, setPainAreas] = useState<string[]>([]);
-  const [movementWorse, setMovementWorse] = useState(false);
+  const [answers, setAnswers] = useState<ReadinessAnswers>(initialAnswers);
   const isStartIntent = params.intent === "start";
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest"), enabled: !isStartIntent });
   const start = useMutation({
@@ -135,7 +159,7 @@ export function ReadinessScreen() {
     onSuccess: (data) => router.replace(workoutHref(data.session.id, { source: params.source, planId: params.planId, sessionDate: params.sessionDate, selectedDay: params.selectedDay, sessionType: params.sessionType, returnTo: params.returnTo }) as never)
   });
   const readinessMutation = useMutation({
-    mutationFn: () => submitReadiness({ ...answerPayload(answers), pain_locations: painAreas, movement_makes_pain_worse: movementWorse } as any),
+    mutationFn: () => submitReadiness(answerPayload(answers) as any),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["readiness"] });
       queryClient.invalidateQueries({ queryKey: ["today-plan"] });
@@ -143,10 +167,25 @@ export function ReadinessScreen() {
       queryClient.invalidateQueries({ queryKey: ["monthly"] });
     }
   });
-  const currentQuestion = questions[step];
+  const currentStep = steps[step];
+  const currentValue = selectedValue(answers, currentStep.id);
   const result = readinessMutation.data ?? (isStartIntent ? undefined : readiness.data?.item);
   const hasSubmitted = Boolean(readinessMutation.data);
-  const selectedChoice = useMemo(() => currentQuestion.choices.find((choice) => choice.value === answers[currentQuestion.key]), [answers, currentQuestion]);
+  const selectedChoice = useMemo(() => currentStep.choices.find((choice) => choice.value === currentValue), [currentStep, currentValue]);
+  const showPainBodyAreas = currentStep.followUp === "pain-body-areas" && answers.pain.level !== "none";
+  const showInjuryBodyAreas = currentStep.followUp === "injury-body-areas" && ["recent", "worse"].includes(answers.injury.status);
+
+  const choose = (value: string) => {
+    setAnswers((current) => {
+      if (currentStep.id === "pain") {
+        return { ...current, pain: { ...current.pain, level: value, bodyAreas: value === "none" ? [] : current.pain.bodyAreas, movementWorse: value === "none" ? false : current.pain.movementWorse } };
+      }
+      if (currentStep.id === "injury") {
+        return { ...current, injury: { ...current.injury, status: value, bodyAreas: ["recent", "worse"].includes(value) ? current.injury.bodyAreas : [] } };
+      }
+      return { ...current, [currentStep.id]: value };
+    });
+  };
 
   if (readiness.isLoading && !hasSubmitted && !isStartIntent) return <LoadingState label="Loading readiness result" />;
 
@@ -159,8 +198,9 @@ export function ReadinessScreen() {
         <Panel title={resultTitle(result)}>
           <BodyText>{result?.decision?.explanation ?? "Your readiness result has been saved for today."}</BodyText>
           <BodyText muted>Completed just now. Today's plan and Home card will refresh with this result.</BodyText>
-          {painAreas.length ? <BodyText muted>Areas noted: {painAreas.join(", ")}</BodyText> : null}
-          {movementWorse ? <BodyText muted>Movement-worsening pain was recorded, so intensity should stay conservative.</BodyText> : null}
+          {answers.pain.bodyAreas.length ? <BodyText muted>Pain areas noted: {answers.pain.bodyAreas.join(", ")}</BodyText> : null}
+          {answers.injury.bodyAreas.length ? <BodyText muted>Injury areas noted: {answers.injury.bodyAreas.join(", ")}</BodyText> : null}
+          {answers.pain.movementWorse ? <BodyText muted>Movement-worsening pain was recorded, so intensity should stay conservative.</BodyText> : null}
           {isStartIntent && allowed && !delayed ? (
             <ActionButton label={needsAck ? "Acknowledge adjustments and start" : start.isPending ? "Opening player..." : "Continue to workout"} disabled={start.isPending} onPress={() => start.mutate()} />
           ) : null}
@@ -174,19 +214,19 @@ export function ReadinessScreen() {
   return (
     <View style={{ gap: 14 }}>
       <Panel title={t("readiness.title")}>
-        <BodyText muted>{t("readiness.subtitle")} Step {step + 1} of {questions.length}</BodyText>
-        <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 22, fontWeight: "900" }}>{currentQuestion.title}</Text>
-        <BodyText muted>{currentQuestion.subtitle}</BodyText>
+        <BodyText muted>{t("readiness.subtitle")} Step {step + 1} of {steps.length}</BodyText>
+        <Text key={currentStep.id} accessibilityRole="header" style={{ color: theme.text, fontSize: 22, fontWeight: "900" }}>{currentStep.title}</Text>
+        <BodyText muted>{currentStep.subtitle}</BodyText>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-          {currentQuestion.choices.map((choice) => {
+          {currentStep.choices.map((choice) => {
             const selected = selectedChoice?.value === choice.value;
             return (
               <Pressable
-                key={choice.value}
+                key={`${currentStep.id}-${choice.value}`}
                 accessibilityRole="button"
                 accessibilityState={{ selected }}
                 accessibilityLabel={`${choice.label}. ${choice.detail}`}
-                onPress={() => setAnswers((current) => ({ ...current, [currentQuestion.key]: choice.value }))}
+                onPress={() => choose(choice.value)}
                 style={{ width: "48%", minHeight: 116, borderRadius: 8, borderWidth: 1, borderColor: selected ? theme.primary : theme.border, backgroundColor: selected ? `${theme.primary}22` : theme.surface, padding: 12, gap: 8 }}
               >
                 <Feather name={choice.icon} color={selected ? theme.primary : theme.muted} size={24} />
@@ -196,13 +236,21 @@ export function ReadinessScreen() {
             );
           })}
         </View>
-        {(answers.pain !== "none" || answers.new_injury === "recent" || answers.new_injury === "worse") && step >= 2 ? (
-          <View style={{ gap: 10 }}>
-            <BodyText>Body areas</BodyText>
+        {showPainBodyAreas ? (
+          <View key="pain-body-areas" style={{ gap: 10 }}>
+            <BodyText>Pain body areas</BodyText>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {bodyAreas.map((area) => <ChoiceChip key={area} label={area} selected={painAreas.includes(area)} onPress={() => setPainAreas((current) => current.includes(area) ? current.filter((item) => item !== area) : [...current, area])} />)}
+              {bodyAreas.map((area) => <ChoiceChip key={area} label={area} selected={answers.pain.bodyAreas.includes(area)} onPress={() => setAnswers((current) => ({ ...current, pain: { ...current.pain, bodyAreas: toggleArea(current.pain.bodyAreas, area) } }))} />)}
             </View>
-            <ChoiceChip label="Movement makes it worse" selected={movementWorse} onPress={() => setMovementWorse((current) => !current)} />
+            <ChoiceChip label="Movement makes it worse" selected={answers.pain.movementWorse} onPress={() => setAnswers((current) => ({ ...current, pain: { ...current.pain, movementWorse: !current.pain.movementWorse } }))} />
+          </View>
+        ) : null}
+        {showInjuryBodyAreas ? (
+          <View key="injury-body-areas" style={{ gap: 10 }}>
+            <BodyText>Injury body areas</BodyText>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {bodyAreas.map((area) => <ChoiceChip key={area} label={area} selected={answers.injury.bodyAreas.includes(area)} onPress={() => setAnswers((current) => ({ ...current, injury: { ...current.injury, bodyAreas: toggleArea(current.injury.bodyAreas, area) } }))} />)}
+            </View>
           </View>
         ) : null}
         <View style={{ flexDirection: "row", gap: 10 }}>
@@ -210,8 +258,8 @@ export function ReadinessScreen() {
             <ActionButton label="Back" disabled={step === 0} onPress={() => setStep(Math.max(0, step - 1))} />
           </View>
           <View style={{ flex: 1 }}>
-            {step < questions.length - 1 ? (
-              <ActionButton label="Next" onPress={() => setStep(Math.min(questions.length - 1, step + 1))} />
+            {step < steps.length - 1 ? (
+              <ActionButton label="Next" onPress={() => setStep(Math.min(steps.length - 1, step + 1))} />
             ) : (
               <ActionButton label={readinessMutation.isPending ? "Checking..." : "See result"} disabled={readinessMutation.isPending} onPress={() => readinessMutation.mutate()} />
             )}

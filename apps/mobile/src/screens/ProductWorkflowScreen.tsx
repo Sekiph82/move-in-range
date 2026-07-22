@@ -20,7 +20,7 @@ type Props = {
 };
 
 const routeMeta: Record<WorkflowKind, RouteMeta> = {
-  onboarding: { title: "Onboarding", subtitle: "Twenty-two focused steps capture context before planning." },
+  onboarding: { title: "Onboarding", subtitle: "A short card setup captures only the essentials before planning." },
   readiness: { title: "Readiness", subtitle: "A daily safety check gates movement intensity." },
   "quick-session": { title: "Quick session", subtitle: "Create a short plan from available time and constraints." },
   "daily-plan": { title: "Daily plan", subtitle: "Generate, inspect, modify, and start today's plan." },

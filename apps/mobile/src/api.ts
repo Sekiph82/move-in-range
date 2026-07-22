@@ -1,7 +1,9 @@
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 import { getApiHostname, normalizeApiBaseUrl } from "./apiConfig";
+import { ONBOARDING_LOCAL_DRAFT_KEY } from "./features/onboarding/model";
 import { TokenStore } from "./storage/tokenStore";
 
 export type ApiErrorKind = "offline" | "timeout" | "unavailable" | "auth" | "invalid_credentials" | "validation";
@@ -250,6 +252,7 @@ export async function logoutUser() {
     }).catch(() => null);
   }
   await tokenStore.clear();
+  await AsyncStorage.removeItem(ONBOARDING_LOCAL_DRAFT_KEY).catch(() => undefined);
 }
 
 export async function ensureLocalSession() {
