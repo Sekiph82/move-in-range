@@ -1,5 +1,4 @@
 import { AchievementsScreen } from "../features/achievements/AchievementsScreen";
-import { AuthScreen } from "../features/auth/AuthScreen";
 import { CalendarScreen } from "../features/calendar/CalendarScreen";
 import { DiabetesScreen } from "../features/diabetes/DiabetesScreen";
 import { ExerciseDetailScreen, ExerciseLibraryScreen } from "../features/exercises/ExerciseScreens";
@@ -21,7 +20,6 @@ type Props = {
 };
 
 const routeMeta: Record<WorkflowKind, RouteMeta> = {
-  auth: { title: "Sign in", subtitle: "Create or restore your secure MoveInRange account." },
   onboarding: { title: "Onboarding", subtitle: "Twenty-two focused steps capture context before planning." },
   readiness: { title: "Readiness", subtitle: "A daily safety check gates movement intensity." },
   "quick-session": { title: "Quick session", subtitle: "Create a short plan from available time and constraints." },
@@ -47,7 +45,6 @@ const routeMeta: Record<WorkflowKind, RouteMeta> = {
 
 function WorkflowBody({ kind, id }: Props) {
   switch (kind) {
-    case "auth": return <AuthScreen />;
     case "onboarding": return <OnboardingScreen />;
     case "readiness": return <ReadinessScreen />;
     case "quick-session": return <QuickSessionScreen />;

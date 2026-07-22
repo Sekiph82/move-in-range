@@ -1,12 +1,31 @@
 import * as SecureStore from "expo-secure-store";
+import Constants from "expo-constants";
+import { Platform } from "react-native";
+import { getApiHostname, normalizeApiBaseUrl } from "./apiConfig";
 import { TokenStore } from "./storage/tokenStore";
 
-const configuredBase = process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:8200";
-export const API_BASE_URL = configuredBase.replace(/\/api\/v1\/?$/, "");
+export type ApiErrorKind = "offline" | "timeout" | "unavailable" | "auth" | "invalid_credentials" | "validation";
+
+export class ApiClientError extends Error {
+  readonly kind: ApiErrorKind;
+  readonly statusCode?: number;
+
+  constructor(kind: ApiErrorKind, message: string, statusCode?: number) {
+    super(message);
+    this.name = "ApiClientError";
+    this.kind = kind;
+    this.statusCode = statusCode;
+  }
+}
+
+const expoConfiguredBase = typeof Constants.expoConfig?.extra?.apiBaseUrl === "string" ? Constants.expoConfig.extra.apiBaseUrl : undefined;
+const configuredBase = process.env.EXPO_PUBLIC_API_BASE_URL || expoConfiguredBase;
+export const API_BASE_URL = normalizeApiBaseUrl(configuredBase);
 const API_V1 = `${API_BASE_URL}/api/v1`;
 const demoEmail = "demo@moveinrange.local";
 const demoPassword = "MoveInRangeLocalDemo!";
 const enableDemoLogin = process.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN === "true";
+const environmentName = process.env.EXPO_PUBLIC_MOVEINRANGE_ENV ?? process.env.NODE_ENV ?? "development";
 
 const memoryTokens: Record<string, string | null> = { access_token: null, refresh_token: null };
 const webTokenPrefix = "mir_";
@@ -78,7 +97,7 @@ function normalizeApiError(statusCode: number, payload: string) {
   let code = "";
   try {
     const parsed = JSON.parse(payload) as { detail?: { code?: string } | string; code?: string };
-    code = typeof parsed.detail === "object" ? parsed.detail.code ?? "" : parsed.code ?? "";
+    code = typeof parsed.detail === "object" ? parsed.detail.code ?? "" : typeof parsed.detail === "string" ? parsed.detail : parsed.code ?? "";
   } catch {
     code = payload;
   }
@@ -94,7 +113,9 @@ function normalizeApiError(statusCode: number, payload: string) {
     session_expired: "Your session expired. Sign in again to continue.",
     weak_password: "Use at least 10 characters with uppercase, lowercase, and a number."
   };
-  return messages[code] ?? (statusCode >= 500 ? "MoveInRange is temporarily unavailable." : "The request could not be completed.");
+  const message = messages[code] ?? (statusCode >= 500 ? "MoveInRange is temporarily unavailable." : "The request could not be completed.");
+  const kind: ApiErrorKind = code === "invalid_credentials" ? "invalid_credentials" : statusCode === 401 || statusCode === 403 ? "auth" : statusCode >= 500 ? "unavailable" : "validation";
+  return new ApiClientError(kind, message, statusCode);
 }
 
 function requireAuthTokenResponse(payload: unknown): AuthTokenResponse {
@@ -106,17 +127,57 @@ function requireAuthTokenResponse(payload: unknown): AuthTokenResponse {
 }
 
 async function postJson(path: string, body: Record<string, unknown>) {
-  const response = await fetch(`${API_V1}${path}`, {
+  const response = await fetchWithTimeout(`${API_V1}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
-  }).catch(() => null);
-  if (!response) throw new Error("API unavailable. Check your connection and try again.");
+  });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(normalizeApiError(response.status, text));
+    throw normalizeApiError(response.status, text);
   }
   return response.json();
+}
+
+async function fetchWithTimeout(input: string, init: RequestInit = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new ApiClientError("timeout", "MoveInRange took too long to respond. Try again.");
+    }
+    throw new ApiClientError("offline", "We couldn't reach MoveInRange. Check your connection and try again.");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function probeApiHealth(timeoutMs = 5000) {
+  const response = await fetchWithTimeout(`${API_V1}/health`, { method: "GET" }, timeoutMs);
+  if (!response.ok) throw new ApiClientError("unavailable", "MoveInRange is temporarily unavailable.", response.status);
+  const payload = await response.json();
+  return { ok: payload?.status === "ok", payload };
+}
+
+export function getApiDiagnostics(connectivityStatus: "unknown" | "ok" | "failed" = "unknown") {
+  return {
+    apiHostname: getApiHostname(API_BASE_URL),
+    environmentName,
+    connectivityStatus,
+    apiBaseUrl: API_BASE_URL
+  };
+}
+
+export function logDevelopmentApiDiagnostics(connectivityStatus: "unknown" | "ok" | "failed" = "unknown") {
+  if (process.env.NODE_ENV === "production") return;
+  const diagnostics = getApiDiagnostics(connectivityStatus);
+  console.info("MoveInRange diagnostics", {
+    apiHostname: diagnostics.apiHostname,
+    environmentName: diagnostics.environmentName,
+    connectivityStatus: diagnostics.connectivityStatus
+  });
 }
 
 async function authTokenRequest(path: string, body: Record<string, unknown>) {
@@ -167,7 +228,7 @@ export async function getSessionSnapshot() {
   const token = await restoreSession();
   if (!token) return { hasSession: false, onboardingComplete: false };
   try {
-    const response = await fetch(`${API_V1}/profile`, { headers: { authorization: `Bearer ${token}` } });
+    const response = await fetchWithTimeout(`${API_V1}/profile`, { headers: { authorization: `Bearer ${token}` } });
     if (response.status === 401 || response.status === 403) {
       await tokenStore.clear();
       return { hasSession: false, onboardingComplete: false, sessionExpired: true };
@@ -183,7 +244,7 @@ export async function getSessionSnapshot() {
 export async function logoutUser() {
   const token = await tokenStore.loadAccessToken();
   if (token) {
-    await fetch(`${API_V1}/auth/logout`, {
+    await fetchWithTimeout(`${API_V1}/auth/logout`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}` }
     }).catch(() => null);
@@ -198,13 +259,13 @@ export async function ensureLocalSession() {
     throw new Error("Please sign in before continuing.");
   }
   const credentials = { email: demoEmail, password: demoPassword };
-  let response = await fetch(`${API_V1}/auth/login`, {
+  let response = await fetchWithTimeout(`${API_V1}/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(credentials)
   });
   if (response.status === 401) {
-    response = await fetch(`${API_V1}/auth/register`, {
+    response = await fetchWithTimeout(`${API_V1}/auth/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(credentials)
@@ -218,7 +279,7 @@ export async function ensureLocalSession() {
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = await ensureLocalSession();
-  const response = await fetch(`${API_V1}${path}`, {
+  const response = await fetchWithTimeout(`${API_V1}${path}`, {
     ...options,
     headers: {
       "content-type": "application/json",
@@ -228,7 +289,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   });
   if (response.status === 401) {
     await tokenStore.clear();
-    throw new Error("Session expired. Please retry after signing in again.");
+    throw new ApiClientError("auth", "Session expired. Please retry after signing in again.", response.status);
   }
   if (!response.ok) {
     const body = await response.text();

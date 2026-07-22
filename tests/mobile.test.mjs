@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox.ts");
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
@@ -11,6 +12,7 @@ const { resolveWorkoutMedia, scheduleLocalVoiceCues } = await import("../apps/mo
 const { canActivateProvider, providerBlockedReason } = await import("../apps/mobile/src/integrations/providerState.ts");
 const { paramsFor } = await import("../apps/mobile/src/features/exercises/filters.ts");
 const { LOGIN_ROUTE, REGISTER_ROUTE, resolveSessionGate } = await import("../apps/mobile/src/features/auth/sessionGate.ts");
+const { LOCAL_API_BASE_URL, PRODUCTION_API_BASE_URL, getApiHostname, normalizeApiBaseUrl } = await import("../apps/mobile/src/apiConfig.ts");
 
 function mirToken(exp) {
   const body = btoa(JSON.stringify({ exp })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -248,6 +250,66 @@ test("Expo Router SDK 54 auth routes resolve to valid absolute hrefs", () => {
   assert.equal(routes.has("/(auth)/login"), false, "auth is not currently a route group");
 });
 
+test("mobile API base URL resolves to production for native physical-device runtimes", () => {
+  const appConfig = JSON.parse(readFileSync("apps/mobile/app.json", "utf8"));
+  const eas = JSON.parse(readFileSync("apps/mobile/eas.json", "utf8"));
+  assert.equal(PRODUCTION_API_BASE_URL, "https://moveinrange-api.vercel.app");
+  assert.equal(appConfig.expo.extra.apiBaseUrl, PRODUCTION_API_BASE_URL);
+  assert.equal(normalizeApiBaseUrl("", "ios"), PRODUCTION_API_BASE_URL);
+  assert.equal(normalizeApiBaseUrl(undefined, "android"), PRODUCTION_API_BASE_URL);
+  assert.equal(normalizeApiBaseUrl("not-a-url", "ios"), PRODUCTION_API_BASE_URL);
+  assert.equal(normalizeApiBaseUrl(`${PRODUCTION_API_BASE_URL}/api/v1/`, "ios"), PRODUCTION_API_BASE_URL);
+  assert.equal(normalizeApiBaseUrl(null, "web"), LOCAL_API_BASE_URL);
+  assert.equal(getApiHostname(PRODUCTION_API_BASE_URL), "moveinrange-api.vercel.app");
+  assert.equal("EXPO_PUBLIC_API_BASE_URL" in eas.build.preview.env, false);
+  assert.equal("EXPO_PUBLIC_API_BASE_URL" in eas.build.production.env, false);
+});
+
+test("mobile API client probes health and classifies connectivity failures", () => {
+  const api = readFileSync("apps/mobile/src/api.ts", "utf8");
+  const rootLayout = readFileSync("apps/mobile/app/_layout.tsx", "utf8");
+  assert.match(api, /Constants\.expoConfig\?\.extra\?\.apiBaseUrl/);
+  assert.match(api, /process\.env\.EXPO_PUBLIC_API_BASE_URL \|\| expoConfiguredBase/);
+  assert.match(api, /fetchWithTimeout/);
+  assert.match(api, /AbortController/);
+  assert.match(api, /new ApiClientError\("timeout"/);
+  assert.match(api, /new ApiClientError\("offline"/);
+  assert.match(api, /typeof parsed\.detail === "string" \? parsed\.detail/);
+  assert.match(api, /code === "invalid_credentials" \? "invalid_credentials"/);
+  assert.match(api, /`\$\{API_V1\}\/health`/);
+  assert.match(rootLayout, /probeApiHealth\(4000\)/);
+  assert.match(rootLayout, /logDevelopmentApiDiagnostics\("ok"\)/);
+  assert.match(rootLayout, /logDevelopmentApiDiagnostics\("failed"\)/);
+  assert.doesNotMatch(api, /API unavailable\. Check your connection and try again\./);
+});
+
+test("auth screens use safe-area keyboard shell and compact controls", () => {
+  const authScreen = readFileSync("apps/mobile/src/features/auth/AuthScreen.tsx", "utf8");
+  assert.match(authScreen, /function AuthShell/);
+  assert.match(authScreen, /useSafeAreaInsets/);
+  assert.match(authScreen, /KeyboardAvoidingView/);
+  assert.match(authScreen, /keyboardShouldPersistTaps="handled"/);
+  assert.match(authScreen, /contentInsetAdjustmentBehavior="automatic"/);
+  assert.match(authScreen, /paddingTop: Math\.max\(24, insets\.top \+ 16\)/);
+  assert.match(authScreen, /function CompactToggle/);
+  assert.match(authScreen, /Feather name=\{selected \? icon : "square"\}/);
+  assert.match(authScreen, /label=\{showPassword \? "Hide password" : "Show password"\}/);
+  assert.match(authScreen, /label="Remember this session"/);
+  assert.doesNotMatch(authScreen, /ChoiceChip label=\{showPassword/);
+  assert.doesNotMatch(authScreen, /ChoiceChip label="Remember this session"/);
+});
+
+test("login connectivity errors use retry state and session reset is development-only", () => {
+  const authScreen = readFileSync("apps/mobile/src/features/auth/AuthScreen.tsx", "utf8");
+  assert.match(authScreen, /Unable to connect/);
+  assert.match(authScreen, /We couldn't reach MoveInRange\. Check your connection and try again\./);
+  assert.match(authScreen, /<ActionButton label="Retry" onPress=\{onRetry\} \/>/);
+  assert.match(authScreen, /process\.env\.NODE_ENV !== "production"/);
+  assert.match(authScreen, /process\.env\.EXPO_PUBLIC_ENABLE_SESSION_RESET === "true"/);
+  assert.doesNotMatch(authScreen, /<ActionButton label="Clear saved session"/);
+  assert.doesNotMatch(authScreen, /<SecondaryLink href=\{LOGIN_ROUTE\} label="Clear saved session"/);
+});
+
 test("mobile hard-coded navigation targets correspond to real Expo Router routes", () => {
   const routes = mobileRoutes();
   const targets = [];
@@ -309,7 +371,10 @@ test("product workflow is decomposed into feature-specific screens", () => {
   const workflow = readFileSync("apps/mobile/src/screens/ProductWorkflowScreen.tsx", "utf8");
   assert.ok(workflow.split("\n").length <= 120, "ProductWorkflowScreen must remain a small dispatcher");
   assert.doesNotMatch(workflow, /function renderBody/);
+  assert.doesNotMatch(workflow, /AuthScreen/);
+  assert.doesNotMatch(workflow, /case "auth"/);
   const featureFiles = [
+    "apps/mobile/src/features/auth/AuthScreen.tsx",
     "apps/mobile/src/features/onboarding/OnboardingScreen.tsx",
     "apps/mobile/src/features/readiness/ReadinessScreen.tsx",
     "apps/mobile/src/features/plans/PlanScreens.tsx",
@@ -324,6 +389,18 @@ test("product workflow is decomposed into feature-specific screens", () => {
   for (const file of featureFiles) assert.equal(existsSync(file), true, file);
   assert.match(readFileSync("apps/mobile/src/features/exercises/ExerciseScreens.tsx", "utf8"), /camera_consent: true/);
   assert.match(readFileSync("apps/mobile/src/features/diabetes/DiabetesScreen.tsx", "utf8"), /not an insulin or treatment recommendation/);
+});
+
+test("product workflow imports resolve with exact source-file casing", () => {
+  const workflowPath = "apps/mobile/src/screens/ProductWorkflowScreen.tsx";
+  const workflow = readFileSync(workflowPath, "utf8");
+  const missing = [];
+  for (const match of workflow.matchAll(/from "(\.\.[^"]+)"/g)) {
+    const withoutExtension = join(dirname(workflowPath), match[1]).replace(/\\/g, "/");
+    const candidates = [`${withoutExtension}.tsx`, `${withoutExtension}.ts`, `${withoutExtension}/index.tsx`, `${withoutExtension}/index.ts`];
+    if (!candidates.some((candidate) => existsSync(candidate))) missing.push(match[1]);
+  }
+  assert.deepEqual(missing, []);
 });
 
 test("mobile product shell exposes Home Program Move Progress Profile tabs", () => {

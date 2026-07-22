@@ -1,5 +1,4 @@
 export type WorkflowKind =
-  | "auth"
   | "onboarding"
   | "readiness"
   | "quick-session"
