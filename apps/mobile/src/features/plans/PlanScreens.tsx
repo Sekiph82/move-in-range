@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { router } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch, createQuickSession, generateDailyPlan, generateMonthlyPlan, generateWeeklyPlan, modifyPlan } from "../../api";
+import { ApiClientError, apiFetch, createGenerationRequestId, createQuickSession, generateDailyPlan, generateMonthlyPlan, generateWeeklyPlan, modifyPlan } from "../../api";
 import { useTheme } from "../../theme";
 import { ExerciseMediaFrame } from "../shared/ExerciseMediaFrame";
 import { ActionButton, BodyText, ChipGroup, ErrorText, LoadingState, Panel, SecondaryLink, TextField } from "../shared/ui";
@@ -49,9 +49,36 @@ function PlanSummary({ plan }: { plan?: MovementPlan | null }) {
 export function DailyPlanScreen() {
   const [minutes, setMinutes] = useState("15");
   const [changes, setChanges] = useState<string[]>(["easier"]);
+  const [generationNotice, setGenerationNotice] = useState("");
+  const [recoveredFromTimeout, setRecoveredFromTimeout] = useState(false);
   const queryClient = useQueryClient();
   const daily = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
-  const generate = useMutation({ mutationFn: () => generateDailyPlan(Number(minutes) || 15), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] }) });
+  const generate = useMutation({
+    mutationFn: async () => generateDailyPlan(Number(minutes) || 15, createGenerationRequestId("today")),
+    onMutate: () => {
+      setRecoveredFromTimeout(false);
+      setGenerationNotice("Building today's plan...");
+    },
+    onSuccess: async (response: any) => {
+      if (response?.plan) queryClient.setQueryData(["today-plan"], { plan: response.plan });
+      await queryClient.invalidateQueries({ queryKey: ["today-plan"] });
+      await queryClient.refetchQueries({ queryKey: ["today-plan"], type: "active" });
+      await queryClient.invalidateQueries({ queryKey: ["calendar"] });
+      setGenerationNotice("Today's plan is ready.");
+    },
+    onError: async (error) => {
+      if (error instanceof ApiClientError && error.kind === "timeout") {
+        setGenerationNotice("Checking whether the plan finished in the background...");
+        const latest = await queryClient.fetchQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
+        if (latest.plan) {
+          setGenerationNotice("Today's plan is ready.");
+          setRecoveredFromTimeout(true);
+        }
+        return;
+      }
+      setGenerationNotice("");
+    }
+  });
   const modify = useMutation({
     mutationFn: () => modifyPlan(daily.data?.plan?.id ?? "", changes[0] ?? "make_easier", { requested_changes: changes, reason: "user_adjustment" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] })
@@ -68,9 +95,10 @@ export function DailyPlanScreen() {
         <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
           <TextField label="Available minutes" keyboardType="number-pad" value={minutes} onChangeText={setMinutes} />
         </View>
-        <ActionButton label={generate.isPending ? "Generating..." : "Generate today"} onPress={() => generate.mutate()} />
+        {generationNotice ? <BodyText muted>{generationNotice}</BodyText> : null}
+        <ActionButton label={generate.isPending ? "Building today's plan..." : "Generate today"} disabled={generate.isPending} onPress={() => generate.mutate()} />
         <ActionButton label="Check readiness & start" disabled={!daily.data?.plan?.id} onPress={startWorkout} />
-        <ErrorText error={generate.error} />
+        <ErrorText error={recoveredFromTimeout ? null : generate.error} />
       </Panel>
       <Panel title="Ordered movements">
         <View style={{ gap: 12 }}>
@@ -116,7 +144,7 @@ export function WeeklyPlanScreen() {
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const weekly = useQuery({ queryKey: ["weekly"], queryFn: () => apiFetch<{ plan: WeeklyPlan | null }>("/plans/weekly/current") });
-  const generate = useMutation({ mutationFn: generateWeeklyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
+  const generate = useMutation({ mutationFn: () => generateWeeklyPlan(), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
   const days = weekly.data?.plan?.days ?? [];
   const selectedDay = useMemo(() => days.find((day) => day.date === selectedDate) ?? days.find((day) => day.status === "planned") ?? days[0], [days, selectedDate]);
   return (
@@ -161,7 +189,7 @@ export function MonthlyPlanScreen() {
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const monthly = useQuery({ queryKey: ["monthly"], queryFn: () => apiFetch<{ plan: MonthlyPlan | null }>("/plans/monthly/current") });
-  const generate = useMutation({ mutationFn: generateMonthlyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
+  const generate = useMutation({ mutationFn: () => generateMonthlyPlan(), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
   const weeks = monthly.data?.plan?.weeks ?? [];
   const allDays = useMemo(() => weeks.flatMap((week) => week.days ?? []), [weeks]);
   const selectedDay = useMemo(() => allDays.find((day) => day.date === selectedDate) ?? allDays.find((day) => day.status === "planned") ?? allDays[0], [allDays, selectedDate]);

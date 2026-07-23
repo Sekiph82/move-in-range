@@ -176,3 +176,33 @@ export function onboardingPayload(draft: OnboardingDraft) {
     onboarding_complete: true
   };
 }
+
+function firstKnown(value: unknown, fallback: string) {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+export function onboardingDraftFromProfile(profile: Record<string, unknown> | undefined, language: "en" | "tr"): OnboardingDraft {
+  const goals = stringArray(profile?.goals);
+  const limitations = stringArray(profile?.movement_limitations);
+  const conditions = stringArray(profile?.conditions);
+  const equipment = stringArray(profile?.equipment);
+  const preferredDays = firstKnown(profile?.preferred_days_per_week, "");
+  const preferredMinutes = profile?.preferred_minutes;
+  return {
+    ...initialOnboardingDraft,
+    language,
+    primaryGoal: goals[0] ?? initialOnboardingDraft.primaryGoal,
+    activityLevel: firstKnown(profile?.activity_level, initialOnboardingDraft.activityLevel),
+    limitations: limitations.length ? limitations : conditions.length ? conditions : initialOnboardingDraft.limitations,
+    limitationBodyAreas: stringArray(profile?.limitation_body_areas),
+    equipment: equipment.length ? equipment : initialOnboardingDraft.equipment,
+    preferredDays: ["2", "3", "4", "flexible"].includes(preferredDays) ? preferredDays : initialOnboardingDraft.preferredDays,
+    preferredMinutes: typeof preferredMinutes === "number" ? String(preferredMinutes) : firstKnown(preferredMinutes, initialOnboardingDraft.preferredMinutes),
+    currentStep: 0,
+    submitted: false
+  };
+}

@@ -1,6 +1,8 @@
 import hashlib
 import json
+import logging
 import secrets
+from time import perf_counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -84,6 +86,7 @@ from .services.platform import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("moveinrange.api")
 ADMIN_ROLES = {"super_admin", "clinical_reviewer", "exercise_reviewer", "content_editor", "support", "analyst"}
 
 CONDITIONS = [
@@ -225,6 +228,7 @@ class ProfilePayload(BaseModel):
 
 
 class ReadinessPayload(BaseModel):
+    idempotency_key: str | None = None
     energy: int = Field(ge=1, le=5)
     sleep_quality: int = Field(default=3, ge=1, le=5)
     pain: int = Field(ge=0, le=10)
@@ -648,8 +652,24 @@ def save_onboarding(payload: OnboardingPayload, user: User = Depends(require_use
     profile = _profile_for(user.id, db)
     health = dict(profile.health_payload or {})
     health["onboarding_draft"] = draft
+    if progress.status == "complete":
+        controlled_keys = {
+            "goals",
+            "activity_level",
+            "conditions",
+            "movement_limitations",
+            "limitation_body_areas",
+            "equipment",
+            "preferred_training_days",
+            "preferred_days_per_week",
+            "preferred_minutes",
+            "consent_accepted",
+        }
+        for key in controlled_keys:
+            if key in payload.payload:
+                health[key] = payload.payload[key]
     profile.health_payload = health
-    profile.onboarding_complete = progress.status == "complete"
+    profile.onboarding_complete = profile.onboarding_complete or progress.status == "complete"
     db.add(AuditLog(actor_id=user.id, action="onboarding.save_step", target_type="onboarding", target_id=payload.step, redacted_payload={"completed": payload.completed}))
     db.commit()
     db.refresh(progress)
@@ -1017,16 +1037,54 @@ def unfavorite(exercise_id: str, user: User = Depends(require_user), db: Session
 
 @router.post("/plans/daily/generate", status_code=status.HTTP_201_CREATED)
 def generate_daily(payload: ReadinessPayload | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    started = perf_counter()
+    timings: dict[str, int] = {}
+
+    def mark(label: str, since: float) -> float:
+        now = perf_counter()
+        timings[label] = int((now - since) * 1000)
+        return now
+
     _rate_limit(f"daily-plan:{user.id}", get_settings().auth_rate_limit * 2)
+    checkpoint = mark("rate_limit", started)
     readiness = payload or _latest_or_default_readiness(user.id, db)
+    idempotency_key = readiness.idempotency_key.strip() if readiness.idempotency_key else None
+    if idempotency_key:
+        existing = _latest_plan_by_generation_key(user.id, "daily", idempotency_key, db)
+        if existing:
+            timings["total"] = int((perf_counter() - started) * 1000)
+            logger.info("daily_plan_generation", extra={"user_id_hash": token_hash(user.id)[:12], "idempotent": True, "timings_ms": timings})
+            return {"blocked": False, "plan": existing.payload, "idempotent": True, "timings_ms": timings}
+    checkpoint = mark("readiness_load", checkpoint)
     decision = evaluate_safety(readiness.model_dump())
+    checkpoint = mark("safety", checkpoint)
     if decision["action"] == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
         return {"blocked": True, "safety_decision": {**decision, "timestamp": datetime.now(UTC).isoformat()}, "plan": None}
-    plan_payload = _daily_plan_payload(user.id, readiness.model_dump(), decision, db, plan_date=datetime.now(UTC).date().isoformat(), session_type="daily")
+    allowed_equipment = _allowed_equipment_for_user(user.id, db)
+    checkpoint = mark("profile", checkpoint)
+    exercise_pool = _plan_exercise_pool(user.id, readiness.model_dump(), decision, db, allowed_equipment)
+    checkpoint = mark("exercise_pool", checkpoint)
+    plan_payload = _daily_plan_payload(
+        user.id,
+        readiness.model_dump(),
+        decision,
+        db,
+        plan_date=datetime.now(UTC).date().isoformat(),
+        session_type="daily",
+        exercise_pool=exercise_pool,
+        allowed_equipment=allowed_equipment,
+    )
+    plan_payload["generation_request_id"] = idempotency_key
+    plan_payload["timings_ms"] = timings
+    checkpoint = mark("selection_enrichment", checkpoint)
     plan = Plan(id=plan_payload["id"], user_id=user.id, plan_type="daily", payload=plan_payload, safety_action=decision["action"])
     db.add(plan)
     db.commit()
-    return {"blocked": False, "plan": plan_payload}
+    mark("persistence", checkpoint)
+    timings["total"] = int((perf_counter() - started) * 1000)
+    plan_payload["timings_ms"] = timings
+    logger.info("daily_plan_generation", extra={"user_id_hash": token_hash(user.id)[:12], "idempotent": False, "exercise_pool_count": len(exercise_pool), "timings_ms": timings})
+    return {"blocked": False, "plan": plan_payload, "idempotent": False, "timings_ms": timings}
 
 
 @router.get("/plans/daily/today")
@@ -3579,6 +3637,13 @@ def _fallback_exercises(db: Session) -> list[Exercise]:
 
 def _latest_plan(user_id: str, plan_type: str, db: Session) -> Plan | None:
     return db.query(Plan).filter(Plan.user_id == user_id, Plan.plan_type == plan_type).order_by(desc(Plan.created_at)).first()
+
+
+def _latest_plan_by_generation_key(user_id: str, plan_type: str, generation_request_id: str, db: Session) -> Plan | None:
+    if not generation_request_id:
+        return None
+    recent = db.query(Plan).filter(Plan.user_id == user_id, Plan.plan_type == plan_type).order_by(desc(Plan.created_at)).limit(30).all()
+    return next((plan for plan in recent if (plan.payload or {}).get("generation_request_id") == generation_request_id), None)
 
 
 def _get_session(session_id: str, user_id: str, db: Session) -> SessionRecord:

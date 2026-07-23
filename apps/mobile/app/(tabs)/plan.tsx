@@ -10,8 +10,8 @@ export default function PlanScreen() {
   const weekly = useQuery({ queryKey: ["weekly"], queryFn: () => apiFetch<any>("/plans/weekly/current") });
   const monthly = useQuery({ queryKey: ["monthly"], queryFn: () => apiFetch<any>("/plans/monthly/current") });
   const advanced = useQuery({ queryKey: ["advanced"], queryFn: () => apiFetch<any>("/plans/advanced/latest") });
-  const makeWeekly = useMutation({ mutationFn: generateWeeklyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
-  const makeMonthly = useMutation({ mutationFn: generateMonthlyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
+  const makeWeekly = useMutation({ mutationFn: () => generateWeeklyPlan(), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
+  const makeMonthly = useMutation({ mutationFn: () => generateMonthlyPlan(), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
   const makeAdvanced = useMutation({ mutationFn: () => generateAdvancedPlan({ available_minutes: 20, target_focuses: ["back", "core"], equipment: ["body weight", "chair"], no_floor: true }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["advanced"] }) });
   const easier = useMutation({ mutationFn: () => modifyPlan(advanced.data?.plan?.id, "make_easier", { pain: 3 }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["advanced"] }) });
   return (

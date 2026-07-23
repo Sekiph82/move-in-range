@@ -16,7 +16,14 @@ export default function HomeScreen() {
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest") });
   const plan = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
   const calendar = useQuery({ queryKey: ["calendar"], queryFn: () => apiFetch<any>("/calendar") });
-  const createPlan = useMutation({ mutationFn: () => generateDailyPlan(15), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] }) });
+  const createPlan = useMutation({
+    mutationFn: () => generateDailyPlan(15),
+    onSuccess: async (response: any) => {
+      if (response?.plan) queryClient.setQueryData(["today-plan"], { plan: response.plan });
+      await queryClient.invalidateQueries({ queryKey: ["today-plan"] });
+      await queryClient.refetchQueries({ queryKey: ["today-plan"], type: "active" });
+    }
+  });
   const safety = readiness.data?.item?.decision;
   const blocked = safety?.action === "BLOCK_AND_SHOW_SAFETY_MESSAGE";
   const items = plan.data?.plan?.items ?? [];
@@ -46,8 +53,8 @@ export default function HomeScreen() {
         <Pressable accessibilityRole="button" accessibilityLabel="Open readiness check" onPress={() => router.push("/readiness" as never)} style={{ minHeight: 48, flexGrow: 1, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface }}>
           <Text style={{ color: theme.primary, fontWeight: "800" }}>{hasValidSameDayReadiness(latestReadiness) ? "View readiness" : "Check readiness"}</Text>
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Generate daily plan" disabled={blocked} onPress={() => createPlan.mutate()} style={{ minHeight: 48, flexGrow: 1, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface, opacity: blocked ? 0.5 : 1 }}>
-          <Text style={{ color: theme.primary, fontWeight: "800" }}>{createPlan.isPending ? "Generating..." : "Generate plan"}</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Generate daily plan" disabled={blocked || createPlan.isPending} onPress={() => createPlan.mutate()} style={{ minHeight: 48, flexGrow: 1, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface, opacity: blocked || createPlan.isPending ? 0.5 : 1 }}>
+          <Text style={{ color: theme.primary, fontWeight: "800" }}>{createPlan.isPending ? "Building plan..." : "Generate plan"}</Text>
         </Pressable>
       </View>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 10 }}>

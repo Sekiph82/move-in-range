@@ -20,6 +20,18 @@ export class ApiClientError extends Error {
   }
 }
 
+export const API_TIMEOUTS = {
+  health: 8000,
+  read: 8000,
+  mutation: 12000,
+  planGeneration: 30000,
+  longOperation: 45000
+} as const;
+
+type ApiFetchConfig = {
+  timeoutMs?: number;
+};
+
 const expoConfiguredBase = typeof Constants.expoConfig?.extra?.apiBaseUrl === "string" ? Constants.expoConfig.extra.apiBaseUrl : undefined;
 const configuredBase = process.env.EXPO_PUBLIC_API_BASE_URL || expoConfiguredBase;
 export const API_BASE_URL = normalizeApiBaseUrl(configuredBase);
@@ -128,12 +140,12 @@ function requireAuthTokenResponse(payload: unknown): AuthTokenResponse {
   return value as AuthTokenResponse;
 }
 
-async function postJson(path: string, body: Record<string, unknown>) {
+async function postJson(path: string, body: Record<string, unknown>, config: ApiFetchConfig = {}) {
   const response = await fetchWithTimeout(`${API_V1}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
-  });
+  }, config.timeoutMs ?? API_TIMEOUTS.mutation);
   if (!response.ok) {
     const text = await response.text();
     throw normalizeApiError(response.status, text);
@@ -280,8 +292,10 @@ export async function ensureLocalSession() {
   return payload.access_token as string;
 }
 
-export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(path: string, options: RequestInit = {}, config: ApiFetchConfig = {}): Promise<T> {
   const token = await ensureLocalSession();
+  const method = String(options.method ?? "GET").toUpperCase();
+  const defaultTimeout = method === "GET" || method === "HEAD" ? API_TIMEOUTS.read : API_TIMEOUTS.mutation;
   const response = await fetchWithTimeout(`${API_V1}${path}`, {
     ...options,
     headers: {
@@ -289,7 +303,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
       authorization: `Bearer ${token}`,
       ...(options.headers ?? {})
     }
-  });
+  }, config.timeoutMs ?? defaultTimeout);
   if (response.status === 401) {
     await tokenStore.clear();
     throw new ApiClientError("auth", "Session expired. Please retry after signing in again.", response.status);
@@ -316,29 +330,8 @@ export const defaultReadiness = {
   stress: 2
 };
 
-export function saveProfile(language: "en" | "tr") {
-  return apiFetch("/profile", {
-    method: "PUT",
-    body: JSON.stringify({
-      preferred_name: "Aylin",
-      country: language === "tr" ? "TR" : "US",
-      timezone: language === "tr" ? "Europe/Istanbul" : "America/New_York",
-      language,
-      conditions: ["type_2_diabetes", "knee_sensitivity"],
-      sensitivities: { knee: { bilateral: true, severity: 3 } },
-      equipment: ["body weight", "chair"],
-      preferred_training_days: ["Mon", "Wed", "Fri"],
-      goals: ["mobility", "consistency"],
-      medical_clearance: "cleared",
-      consent_accepted: true,
-      diabetes: { enabled: true, unit: "mg/dL", exercise_glucose_logging: true },
-      onboarding_complete: true
-    })
-  });
-}
-
 export function saveOnboardingStep(step: string, payload: Record<string, unknown>, completed = true, language: "en" | "tr" = "en") {
-  return apiFetch("/onboarding", { method: "PUT", body: JSON.stringify({ step, payload, completed, language }) });
+  return apiFetch("/onboarding", { method: "PUT", body: JSON.stringify({ step, payload, completed, language }) }, { timeoutMs: API_TIMEOUTS.mutation });
 }
 
 export function recordConsent(consent_type: string, granted: boolean, evidence: Record<string, unknown> = {}) {
@@ -354,27 +347,31 @@ export function saveGoalsTargets(goals: string[], target_focuses: string[], natu
 }
 
 export function submitReadiness(payload: Partial<typeof defaultReadiness> = {}) {
-  return apiFetch("/readiness-checks", { method: "POST", body: JSON.stringify({ ...defaultReadiness, ...payload }) });
+  return apiFetch("/readiness-checks", { method: "POST", body: JSON.stringify({ ...defaultReadiness, ...payload }) }, { timeoutMs: API_TIMEOUTS.mutation });
 }
 
-export function generateDailyPlan(minutes = 15) {
-  return apiFetch("/plans/daily/generate", { method: "POST", body: JSON.stringify({ ...defaultReadiness, available_minutes: minutes }) });
+export function createGenerationRequestId(scope = "daily") {
+  return `${scope}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function generateWeeklyPlan() {
-  return apiFetch("/plans/weekly/generate", { method: "POST", body: JSON.stringify({}) });
+export function generateDailyPlan(minutes = 15, idempotencyKey = createGenerationRequestId("daily")) {
+  return apiFetch("/plans/daily/generate", { method: "POST", body: JSON.stringify({ ...defaultReadiness, available_minutes: minutes, idempotency_key: idempotencyKey }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
 }
 
-export function generateMonthlyPlan() {
-  return apiFetch("/plans/monthly/generate", { method: "POST", body: JSON.stringify({}) });
+export function generateWeeklyPlan(idempotencyKey = createGenerationRequestId("weekly")) {
+  return apiFetch("/plans/weekly/generate", { method: "POST", body: JSON.stringify({ idempotency_key: idempotencyKey }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
+}
+
+export function generateMonthlyPlan(idempotencyKey = createGenerationRequestId("monthly")) {
+  return apiFetch("/plans/monthly/generate", { method: "POST", body: JSON.stringify({ idempotency_key: idempotencyKey }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
 }
 
 export function generateAdvancedPlan(payload: Record<string, unknown>) {
-  return apiFetch("/plans/advanced/generate", { method: "POST", body: JSON.stringify(payload) });
+  return apiFetch("/plans/advanced/generate", { method: "POST", body: JSON.stringify({ ...payload, idempotency_key: payload.idempotency_key ?? createGenerationRequestId("advanced") }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
 }
 
 export function createQuickSession(payload: Record<string, unknown>) {
-  return apiFetch("/quick-session", { method: "POST", body: JSON.stringify(payload) });
+  return apiFetch("/quick-session", { method: "POST", body: JSON.stringify({ ...payload, idempotency_key: payload.idempotency_key ?? createGenerationRequestId("quick") }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
 }
 
 export function modifyPlan(planId: string, intent: string, request_payload: Record<string, unknown> = {}) {

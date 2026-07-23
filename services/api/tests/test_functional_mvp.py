@@ -80,6 +80,81 @@ def _exercise_signature(day):
     return tuple(item["exercise_id"] for item in day.get("items", []))
 
 
+def test_daily_generation_is_idempotent_and_timed(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "daily-idempotent@example.test")
+    request = {"energy": 3, "sleep_quality": 3, "pain": 2, "available_minutes": 15, "stress": 2, "idempotency_key": "daily-key-1"}
+    first = client.post("/api/v1/plans/daily/generate", headers=headers, json=request)
+    second = client.post("/api/v1/plans/daily/generate", headers=headers, json=request)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_payload = first.json()
+    second_payload = second.json()
+    assert first_payload["plan"]["id"] == second_payload["plan"]["id"]
+    assert first_payload["plan"]["generation_request_id"] == "daily-key-1"
+    assert second_payload["idempotent"] is True
+    assert "exercise_pool" in first_payload["timings_ms"]
+    assert "total" in first_payload["timings_ms"]
+
+    from app.db.models import Plan
+    from app.db.session import SessionLocal
+
+    with SessionLocal() as db:
+        plans = db.query(Plan).filter(Plan.plan_type == "daily").all()
+        assert len(plans) == 1
+
+
+def test_onboarding_completion_merges_only_editor_owned_profile_fields(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "onboarding-edit@example.test")
+    profile = client.put(
+        "/api/v1/profile",
+        headers=headers,
+        json={
+            "preferred_name": "Mover",
+            "country": "US",
+            "timezone": "America/New_York",
+            "language": "en",
+            "conditions": ["legacy_condition"],
+            "sensitivities": {"legacy": True},
+            "equipment": ["body weight"],
+            "goals": ["mobility"],
+            "medical_clearance": "cleared",
+            "consent_accepted": True,
+            "diabetes": {"enabled": False},
+        },
+    )
+    assert profile.status_code == 200
+    response = client.put(
+        "/api/v1/onboarding",
+        headers=headers,
+        json={
+            "step": "review_complete",
+            "completed": True,
+            "language": "en",
+            "payload": {
+                "goals": ["strength"],
+                "activity_level": "regular",
+                "movement_limitations": ["joint"],
+                "limitation_body_areas": ["Shoulder"],
+                "equipment": ["chair"],
+                "preferred_training_days": ["Mon", "Wed", "Fri"],
+                "preferred_days_per_week": "3",
+                "preferred_minutes": 15,
+                "onboarding_complete": True,
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    updated = client.get("/api/v1/profile", headers=headers).json()["profile"]
+    assert updated["onboarding_complete"] is True
+    assert updated["goals"] == ["strength"]
+    assert updated["equipment"] == ["chair"]
+    assert updated["limitation_body_areas"] == ["Shoulder"]
+    assert updated["sensitivities"] == {"legacy": True}
+    assert updated["diabetes"] == {"enabled": False}
+
+
 def test_functional_mvp_workflow(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     headers = _register(client, "mover@example.test")

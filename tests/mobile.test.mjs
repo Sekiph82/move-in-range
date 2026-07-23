@@ -6,7 +6,7 @@ const { OfflineOutbox } = await import("../apps/mobile/src/storage/offlineOutbox
 const { GuidedWorkoutPlayerState } = await import("../apps/mobile/src/workout/workoutPlayer.ts");
 const { TokenStore } = await import("../apps/mobile/src/storage/tokenStore.ts");
 const { emptyOnboardingDraft, isOnboardingComplete, saveStep, validateOnboardingStep } = await import("../apps/mobile/src/onboarding/onboardingState.ts");
-const { ONBOARDING_STEPS, BODY_AREAS, onboardingNeedsBodyAreas, onboardingPayload, validateOnboardingStepPayload } = await import("../apps/mobile/src/features/onboarding/model.ts");
+const { ONBOARDING_STEPS, BODY_AREAS, onboardingDraftFromProfile, onboardingNeedsBodyAreas, onboardingPayload, validateOnboardingStepPayload } = await import("../apps/mobile/src/features/onboarding/model.ts");
 const { loginSchema, registerSchema, resetPasswordSchema, glucoseSchema, inviteSchema } = await import("../apps/mobile/src/features/validation/schemas.ts");
 const { resolveWorkoutMedia, scheduleLocalVoiceCues } = await import("../apps/mobile/src/guidance/mediaVoice.ts");
 const { canActivateProvider, providerBlockedReason } = await import("../apps/mobile/src/integrations/providerState.ts");
@@ -283,6 +283,27 @@ test("mobile API client probes health and classifies connectivity failures", () 
   assert.doesNotMatch(api, /API unavailable\. Check your connection and try again\./);
 });
 
+test("mobile API client uses operation-specific timeouts for generation", () => {
+  const api = readFileSync("apps/mobile/src/api.ts", "utf8");
+  const daily = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
+  assert.match(api, /API_TIMEOUTS = \{/);
+  assert.match(api, /health: 8000/);
+  assert.match(api, /read: 8000/);
+  assert.match(api, /mutation: 12000/);
+  assert.match(api, /planGeneration: 30000/);
+  assert.match(api, /config\.timeoutMs \?\? defaultTimeout/);
+  assert.match(api, /generateDailyPlan\(minutes = 15, idempotencyKey = createGenerationRequestId\("daily"\)\)/);
+  assert.match(api, /idempotency_key: idempotencyKey/);
+  assert.match(api, /timeoutMs: API_TIMEOUTS\.planGeneration/);
+  assert.match(daily, /createGenerationRequestId\("today"\)/);
+  assert.match(daily, /Building today's plan/);
+  assert.match(daily, /disabled=\{generate\.isPending\}/);
+  assert.match(daily, /queryClient\.setQueryData\(\["today-plan"\]/);
+  assert.match(daily, /queryClient\.refetchQueries\(\{ queryKey: \["today-plan"\], type: "active" \}\)/);
+  assert.match(daily, /error instanceof ApiClientError && error\.kind === "timeout"/);
+  assert.match(daily, /fetchQuery\(\{ queryKey: \["today-plan"\]/);
+});
+
 test("auth screens use safe-area keyboard shell and compact controls", () => {
   const authScreen = readFileSync("apps/mobile/src/features/auth/AuthScreen.tsx", "utf8");
   assert.match(authScreen, /function AuthShell/);
@@ -410,7 +431,7 @@ test("mobile product shell exposes Home Program Move Progress Profile tabs", () 
   assert.match(tabs, /name="progress"/);
   assert.match(tabs, /name="plan" options=\{\{ href: null \}\}/);
   assert.match(tabs, /name="insights" options=\{\{ href: null \}\}/);
-  for (const hidden of ["daily-plan", "weekly-plan", "monthly-plan", "exercises", "exercise/\\[id\\]", "readiness", "settings", "privacy"]) {
+  for (const hidden of ["daily-plan", "weekly-plan", "monthly-plan", "exercises", "exercise/\\[id\\]", "readiness", "onboarding-edit", "settings", "privacy"]) {
     assert.match(tabs, new RegExp(`name="${hidden}" options=\\{\\{ href: null \\}\\}`));
   }
 });
@@ -549,10 +570,19 @@ test("localized speech cues use app language and translated countdown words", ()
 test("profile and settings expose logout and persisted language controls", () => {
   const profile = readFileSync("apps/mobile/app/(tabs)/profile.tsx", "utf8");
   const settings = readFileSync("apps/mobile/src/features/settings/SettingsScreen.tsx", "utf8");
+  const api = readFileSync("apps/mobile/src/api.ts", "utf8");
   const provider = readFileSync("apps/mobile/src/i18n/LanguageProvider.tsx", "utf8");
   assert.match(profile, /Log out/);
   assert.match(profile, /clearExerciseCache/);
+  assert.match(profile, /"Movement profile"/);
+  assert.match(profile, /"\/onboarding-edit"/);
   assert.doesNotMatch(profile, /\["\/auth", "Auth"\]/);
+  assert.doesNotMatch(profile, /Complete guided onboarding sample/);
+  assert.doesNotMatch(profile, /Save onboarding profile/);
+  assert.doesNotMatch(settings, /Save safe default settings/);
+  assert.doesNotMatch(settings, /twenty minute back and core plan/);
+  assert.doesNotMatch(api, /preferred_name: "Aylin"/);
+  assert.doesNotMatch(api, /date_of_birth: "1982-04-20"/);
   assert.match(settings, /settings\.english/);
   assert.match(settings, /setLanguage\("en"\)/);
   assert.match(settings, /setLanguage\("tr"\)/);
@@ -628,6 +658,8 @@ test("session gate protects auth, onboarding, and app routes centrally", () => {
   assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: false, onboardingComplete: false }), { state: "SIGNED_OUT", redirectTo: LOGIN_ROUTE });
   assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: false }), { state: "AUTHENTICATED_ONBOARDING_INCOMPLETE", redirectTo: "/onboarding" });
   assert.deepEqual(resolveSessionGate("/onboarding", { hasSession: true, onboardingComplete: true }), { state: "AUTHENTICATED_READY", redirectTo: "/(tabs)" });
+  assert.deepEqual(resolveSessionGate("/onboarding-edit", { hasSession: true, onboardingComplete: true }), { state: "AUTHENTICATED_READY", redirectTo: undefined });
+  assert.deepEqual(resolveSessionGate("/onboarding-edit", { hasSession: false, onboardingComplete: true }), { state: "SIGNED_OUT", redirectTo: LOGIN_ROUTE });
   assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: true, offline: true }), { state: "OFFLINE_WITH_VALID_SESSION" });
   assert.deepEqual(resolveSessionGate("/daily-plan", { hasSession: true, onboardingComplete: true, sessionExpired: true }), { state: "SESSION_EXPIRED", redirectTo: LOGIN_ROUTE });
 });
@@ -686,4 +718,47 @@ test("onboarding screen is page-by-page card flow with local draft persistence",
   assert.doesNotMatch(workflow, /Twenty-two focused steps/);
   const api = readFileSync("apps/mobile/src/api.ts", "utf8");
   assert.match(api, /AsyncStorage\.removeItem\(ONBOARDING_LOCAL_DRAFT_KEY\)/);
+});
+
+test("completed users can edit onboarding without first-run redirect or sample data", () => {
+  const route = readFileSync("apps/mobile/app/(tabs)/onboarding-edit.tsx", "utf8");
+  const tabs = readFileSync("apps/mobile/app/(tabs)/_layout.tsx", "utf8");
+  const workflow = readFileSync("apps/mobile/src/screens/ProductWorkflowScreen.tsx", "utf8");
+  const source = readFileSync("apps/mobile/src/features/onboarding/OnboardingScreen.tsx", "utf8");
+  assert.match(route, /kind="onboarding-edit"/);
+  assert.match(tabs, /name="onboarding-edit" options=\{\{ href: null \}\}/);
+  assert.match(workflow, /"onboarding-edit": \{ title: "Movement profile"/);
+  assert.match(workflow, /case "onboarding-edit": return <OnboardingScreen mode="edit" \/>/);
+  assert.match(source, /mode = "first-run"/);
+  assert.match(source, /const isEdit = mode === "edit"/);
+  assert.match(source, /ONBOARDING_STEPS\.filter\(\(step\) => step\.key !== "welcome"\)/);
+  assert.match(source, /onboardingDraftFromProfile/);
+  assert.match(source, /router\.replace\(isEdit \? "\/(\(tabs\)\/)?profile" : "\/(\(tabs\))?"/);
+  assert.match(source, /Save changes/);
+  assert.match(source, /Cancel/);
+  assert.doesNotMatch(source, /preferred_name: "Aylin"/);
+});
+
+test("onboarding edit prefill maps saved profile fields without erasing unrelated data", () => {
+  const draft = onboardingDraftFromProfile({
+    goals: ["strength"],
+    activity_level: "regular",
+    movement_limitations: ["joint"],
+    limitation_body_areas: ["Shoulder"],
+    equipment: ["chair", "resistance band"],
+    preferred_days_per_week: "4",
+    preferred_minutes: 30,
+    unrelated_medical_record: "preserve-on-server"
+  }, "tr");
+  assert.equal(draft.language, "tr");
+  assert.equal(draft.primaryGoal, "strength");
+  assert.equal(draft.activityLevel, "regular");
+  assert.deepEqual(draft.limitations, ["joint"]);
+  assert.deepEqual(draft.limitationBodyAreas, ["Shoulder"]);
+  assert.deepEqual(draft.equipment, ["chair", "resistance band"]);
+  assert.equal(draft.preferredDays, "4");
+  assert.equal(draft.preferredMinutes, "30");
+  const payload = onboardingPayload(draft);
+  assert.equal("unrelated_medical_record" in payload, false);
+  assert.equal(payload.onboarding_complete, true);
 });

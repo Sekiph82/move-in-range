@@ -21,6 +21,7 @@ type Props = {
 
 const routeMeta: Record<WorkflowKind, RouteMeta> = {
   onboarding: { title: "Onboarding", subtitle: "A short card setup captures only the essentials before planning." },
+  "onboarding-edit": { title: "Movement profile", subtitle: "Update goals, limitations, equipment, and training preferences." },
   readiness: { title: "Readiness", subtitle: "A daily safety check gates movement intensity." },
   "quick-session": { title: "Quick session", subtitle: "Create a short plan from available time and constraints." },
   "daily-plan": { title: "Daily plan", subtitle: "Generate, inspect, modify, and start today's plan." },
@@ -46,6 +47,7 @@ const routeMeta: Record<WorkflowKind, RouteMeta> = {
 function WorkflowBody({ kind, id }: Props) {
   switch (kind) {
     case "onboarding": return <OnboardingScreen />;
+    case "onboarding-edit": return <OnboardingScreen mode="edit" />;
     case "readiness": return <ReadinessScreen />;
     case "quick-session": return <QuickSessionScreen />;
     case "daily-plan": return <DailyPlanScreen />;

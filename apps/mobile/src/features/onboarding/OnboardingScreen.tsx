@@ -8,7 +8,7 @@ import { apiFetch, generateDailyPlan, saveOnboardingStep } from "../../api";
 import { useAppLanguage } from "../../i18n/LanguageProvider";
 import { useTheme } from "../../theme";
 import { ActionButton, BodyText, ChoiceChip, ErrorText, LoadingState, Panel } from "../shared/ui";
-import { BODY_AREAS, DAY_OPTIONS, MINUTE_OPTIONS, ONBOARDING_LOCAL_DRAFT_KEY, ONBOARDING_STEPS, copyText, initialOnboardingDraft, onboardingNeedsBodyAreas, onboardingPayload, toggleMulti, type OnboardingDraft, type OnboardingOption, validateOnboardingStepPayload } from "./model";
+import { BODY_AREAS, DAY_OPTIONS, MINUTE_OPTIONS, ONBOARDING_LOCAL_DRAFT_KEY, ONBOARDING_STEPS, copyText, initialOnboardingDraft, onboardingDraftFromProfile, onboardingNeedsBodyAreas, onboardingPayload, toggleMulti, type OnboardingDraft, type OnboardingOption, validateOnboardingStepPayload } from "./model";
 
 type StoredDraft = {
   marker: string;
@@ -69,17 +69,20 @@ function reviewRows(draft: OnboardingDraft) {
   ];
 }
 
-export function OnboardingScreen() {
+export function OnboardingScreen({ mode = "first-run" }: { mode?: "first-run" | "edit" }) {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const { language } = useAppLanguage();
+  const isEdit = mode === "edit";
   const [draft, setDraft] = useState<OnboardingDraft>({ ...initialOnboardingDraft, language });
   const [restored, setRestored] = useState(false);
   const onboarding = useQuery({ queryKey: ["onboarding"], queryFn: () => apiFetch<any>("/onboarding") });
+  const profile = useQuery({ queryKey: ["profile"], enabled: isEdit, queryFn: () => apiFetch<any>("/profile") });
   const progress = onboarding.data?.progress;
   const marker = progressMarker(progress);
-  const stepIndex = Math.min(Math.max(draft.currentStep, 0), ONBOARDING_STEPS.length - 1);
-  const current = ONBOARDING_STEPS[stepIndex];
+  const flowSteps = useMemo(() => (isEdit ? ONBOARDING_STEPS.filter((step) => step.key !== "welcome") : ONBOARDING_STEPS), [isEdit]);
+  const stepIndex = Math.min(Math.max(draft.currentStep, 0), flowSteps.length - 1);
+  const current = flowSteps[stepIndex];
   const errors = useMemo(() => validateOnboardingStepPayload(current.key, draft), [current.key, draft]);
   const showLimitationAreas = current.key === "limitations" && onboardingNeedsBodyAreas(draft);
 
@@ -88,6 +91,7 @@ export function OnboardingScreen() {
   }, [language]);
 
   useEffect(() => {
+    if (isEdit) return;
     if (!onboarding.isSuccess || restored) return;
     let active = true;
     AsyncStorage.getItem(ONBOARDING_LOCAL_DRAFT_KEY)
@@ -107,13 +111,19 @@ export function OnboardingScreen() {
     return () => {
       active = false;
     };
-  }, [language, marker, onboarding.isSuccess, progress?.status, restored]);
+  }, [isEdit, language, marker, onboarding.isSuccess, progress?.status, restored]);
 
   useEffect(() => {
-    if (!restored || progress?.status === "complete") return;
+    if (!isEdit || restored || !profile.isSuccess) return;
+    setDraft(onboardingDraftFromProfile(profile.data?.profile, language));
+    setRestored(true);
+  }, [isEdit, language, profile.data?.profile, profile.isSuccess, restored]);
+
+  useEffect(() => {
+    if (isEdit || !restored || progress?.status === "complete") return;
     const payload: StoredDraft = { marker, draft };
     AsyncStorage.setItem(ONBOARDING_LOCAL_DRAFT_KEY, JSON.stringify(payload)).catch(() => undefined);
-  }, [draft, marker, progress?.status, restored]);
+  }, [draft, isEdit, marker, progress?.status, restored]);
 
   const patch = (partial: Partial<OnboardingDraft>) => setDraft((currentDraft) => ({ ...currentDraft, ...partial }));
   const choose = (value: string) => {
@@ -125,32 +135,35 @@ export function OnboardingScreen() {
     }
     if (current.key === "equipment") patch({ equipment: toggleMulti(draft.equipment, value) });
   };
-  const next = () => patch({ currentStep: Math.min(stepIndex + 1, ONBOARDING_STEPS.length - 1) });
+  const next = () => patch({ currentStep: Math.min(stepIndex + 1, flowSteps.length - 1) });
   const back = () => patch({ currentStep: Math.max(stepIndex - 1, 0) });
 
   const submit = useMutation({
     mutationFn: async () => {
       const payload = onboardingPayload(draft);
-      const response = await saveOnboardingStep("review_complete", { ...payload, step_number: ONBOARDING_STEPS.length, labels: { en: current.title.en, tr: current.title.tr } }, true, draft.language);
-      await AsyncStorage.removeItem(ONBOARDING_LOCAL_DRAFT_KEY);
-      await generateDailyPlan(Number(draft.preferredMinutes) || 15).catch(() => undefined);
+      const response = await saveOnboardingStep("review_complete", { ...payload, edit_mode: isEdit, step_number: flowSteps.length, labels: { en: current.title.en, tr: current.title.tr } }, true, draft.language);
+      if (!isEdit) {
+        await AsyncStorage.removeItem(ONBOARDING_LOCAL_DRAFT_KEY);
+        await generateDailyPlan(Number(draft.preferredMinutes) || 15).catch(() => undefined);
+      }
       return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["onboarding"] });
+      queryClient.invalidateQueries({ queryKey: ["profile"] });
       queryClient.invalidateQueries({ queryKey: ["today-plan"] });
       patch({ submitted: true });
-      router.replace("/(tabs)");
+      router.replace(isEdit ? "/(tabs)/profile" : "/(tabs)");
     }
   });
 
-  if (onboarding.isLoading || !restored) return <LoadingState label="Loading onboarding draft" />;
+  if (onboarding.isLoading || (isEdit && profile.isLoading) || !restored) return <LoadingState label={isEdit ? "Loading movement profile" : "Loading onboarding draft"} />;
 
   return (
     <View style={{ gap: 14 }}>
-      <Panel title={`${stepIndex + 1} of ${ONBOARDING_STEPS.length}`}>
+      <Panel title={isEdit ? `Edit onboarding - ${stepIndex + 1} of ${flowSteps.length}` : `${stepIndex + 1} of ${flowSteps.length}`}>
         <View style={{ height: 8, borderRadius: 999, backgroundColor: theme.border, overflow: "hidden" }}>
-          <View style={{ height: 8, width: `${((stepIndex + 1) / ONBOARDING_STEPS.length) * 100}%`, backgroundColor: theme.primary }} />
+          <View style={{ height: 8, width: `${((stepIndex + 1) / flowSteps.length) * 100}%`, backgroundColor: theme.primary }} />
         </View>
         <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 24, fontWeight: "900" }}>{copyText(current.title, language)}</Text>
         <BodyText muted>{copyText(current.subtitle, language)}</BodyText>
@@ -199,16 +212,16 @@ export function OnboardingScreen() {
 
         {errors.map((error) => <BodyText key={error} muted>{error.replaceAll("_", " ")}</BodyText>)}
         <View style={{ flexDirection: "row", gap: 10 }}>
-          <View style={{ flex: 1 }}><ActionButton label="Back" disabled={stepIndex === 0 || submit.isPending} onPress={back} /></View>
+          <View style={{ flex: 1 }}><ActionButton label={isEdit && stepIndex === 0 ? "Cancel" : "Back"} disabled={submit.isPending} onPress={isEdit && stepIndex === 0 ? () => router.replace("/(tabs)/profile" as never) : back} /></View>
           <View style={{ flex: 1 }}>
-            {stepIndex < ONBOARDING_STEPS.length - 1 ? (
+            {stepIndex < flowSteps.length - 1 ? (
               <ActionButton label="Continue" disabled={errors.length > 0} onPress={next} />
             ) : (
-              <ActionButton label={submit.isPending ? "Creating plan..." : "Create my plan"} disabled={errors.length > 0 || submit.isPending} onPress={() => submit.mutate()} />
+              <ActionButton label={submit.isPending ? (isEdit ? "Saving..." : "Creating plan...") : isEdit ? "Save changes" : "Create my plan"} disabled={errors.length > 0 || submit.isPending} onPress={() => submit.mutate()} />
             )}
           </View>
         </View>
-        <ErrorText error={onboarding.error ?? submit.error} />
+        <ErrorText error={onboarding.error ?? profile.error ?? submit.error} />
       </Panel>
     </View>
   );

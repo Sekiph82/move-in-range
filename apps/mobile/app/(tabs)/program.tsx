@@ -12,9 +12,16 @@ export default function ProgramTab() {
   const daily = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
   const weekly = useQuery({ queryKey: ["weekly"], queryFn: () => apiFetch<{ plan: WeeklyPlan | null }>("/plans/weekly/current") });
   const monthly = useQuery({ queryKey: ["monthly"], queryFn: () => apiFetch<{ plan: MonthlyPlan | null }>("/plans/monthly/current") });
-  const makeDaily = useMutation({ mutationFn: () => generateDailyPlan(15), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["today-plan"] }) });
-  const makeWeekly = useMutation({ mutationFn: generateWeeklyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
-  const makeMonthly = useMutation({ mutationFn: generateMonthlyPlan, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
+  const makeDaily = useMutation({
+    mutationFn: () => generateDailyPlan(15),
+    onSuccess: async (response: any) => {
+      if (response?.plan) queryClient.setQueryData(["today-plan"], { plan: response.plan });
+      await queryClient.invalidateQueries({ queryKey: ["today-plan"] });
+      await queryClient.refetchQueries({ queryKey: ["today-plan"], type: "active" });
+    }
+  });
+  const makeWeekly = useMutation({ mutationFn: () => generateWeeklyPlan(), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly"] }) });
+  const makeMonthly = useMutation({ mutationFn: () => generateMonthlyPlan(), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["monthly"] }) });
   const first = daily.data?.plan?.items?.[0];
   const plannedWeekDays = weekly.data?.plan?.days?.filter((day) => day.status === "planned") ?? [];
   const plannedMonthDays = monthly.data?.plan?.weeks?.flatMap((week) => week.days ?? []).filter((day) => day.status === "planned") ?? [];
@@ -25,7 +32,7 @@ export default function ProgramTab() {
         <Text style={{ color: theme.text, fontSize: 20, fontWeight: "900" }}>Today program</Text>
         {first ? <ExerciseMediaFrame media={first.media} title={first.name} section={first.section} target={first.equipment} /> : null}
         <Text style={{ color: theme.muted }}>{daily.data?.plan ? `${daily.data.plan.total_minutes ?? 0} minutes, ${daily.data.plan.items?.length ?? 0} movements` : "No daily session saved."}</Text>
-        <Pressable accessibilityRole="button" onPress={() => daily.data?.plan ? router.push("/daily-plan" as never) : makeDaily.mutate()} style={{ minHeight: 48, justifyContent: "center" }}>
+        <Pressable accessibilityRole="button" disabled={makeDaily.isPending} onPress={() => daily.data?.plan ? router.push("/daily-plan" as never) : makeDaily.mutate()} style={{ minHeight: 48, justifyContent: "center", opacity: makeDaily.isPending ? 0.6 : 1 }}>
           <Text style={{ color: theme.primary, fontWeight: "800" }}>{daily.data?.plan ? "Open today" : makeDaily.isPending ? "Generating..." : "Generate today"}</Text>
         </Pressable>
       </View>

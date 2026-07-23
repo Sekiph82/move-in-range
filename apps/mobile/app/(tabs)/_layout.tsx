@@ -19,6 +19,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="exercises" options={{ href: null }} />
       <Tabs.Screen name="exercise/[id]" options={{ href: null }} />
       <Tabs.Screen name="readiness" options={{ href: null }} />
+      <Tabs.Screen name="onboarding-edit" options={{ href: null }} />
       <Tabs.Screen name="settings" options={{ href: null }} />
       <Tabs.Screen name="privacy" options={{ href: null }} />
     </Tabs>
