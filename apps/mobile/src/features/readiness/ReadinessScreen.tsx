@@ -155,7 +155,7 @@ export function ReadinessScreen() {
   const isStartIntent = params.intent === "start";
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest"), enabled: !isStartIntent });
   const start = useMutation({
-    mutationFn: () => startSession(params.planId),
+    mutationFn: () => startSession(params.planId, false),
     onSuccess: (data) => router.replace(workoutHref(data.session.id, { source: params.source, planId: params.planId, sessionDate: params.sessionDate, selectedDay: params.selectedDay, sessionType: params.sessionType, returnTo: params.returnTo }) as never)
   });
   const readinessMutation = useMutation({

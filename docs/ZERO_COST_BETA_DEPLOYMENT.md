@@ -30,7 +30,7 @@ Android APK / Expo Go iPhone / product web
 ## Branch and PR
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 git fetch origin --prune
 git checkout codex/release-rehearsal
 git pull --ff-only origin codex/release-rehearsal
@@ -62,7 +62,7 @@ Secret values are added through Vercel/Supabase/Resend dashboards or interactive
 Alembic is authoritative. Migrations are explicit:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\services\api
+cd <repo-root>\services\api
 $env:DATABASE_URL=$env:MIGRATION_DATABASE_URL
 python -m alembic -c alembic.ini upgrade head
 python -m alembic -c alembic.ini current
@@ -112,7 +112,7 @@ curl https://<API_URL>/api/v1/ready
 After Vercel API is deployed, update EAS preview env:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\apps\mobile
+cd <repo-root>\apps\mobile
 npx.cmd eas-cli env:create --environment preview --name EXPO_PUBLIC_API_BASE_URL --value https://<MOVEINRANGE_API_VERCEL_URL> --visibility plaintext
 npx.cmd eas-cli env:list --environment preview
 ```
@@ -133,7 +133,7 @@ Do not use `api.moveinrange.invalid`, `localhost`, or `10.0.2.2` for the deploye
 ## iPhone Expo Go
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\apps\mobile
+cd <repo-root>\apps\mobile
 $env:EXPO_PUBLIC_API_BASE_URL="https://<MOVEINRANGE_API_VERCEL_URL>"
 npx.cmd expo start --tunnel --clear
 ```
@@ -162,7 +162,7 @@ Run against the Vercel API and redact tokens from output:
 Optional staging beta user:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\services\api
+cd <repo-root>\services\api
 $env:DATABASE_URL=$env:MIGRATION_DATABASE_URL
 python -m app.scripts.create_beta_user --email beta-user@example.com --prompt-password
 ```

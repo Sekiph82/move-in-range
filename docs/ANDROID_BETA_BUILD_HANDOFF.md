@@ -75,7 +75,7 @@ Local API address for emulator:
 Expo development build:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 npm.cmd install
 $env:EXPO_PUBLIC_API_BASE_URL='http://10.0.2.2:8200'
 npm.cmd --workspace @moveinrange/mobile run android
@@ -84,7 +84,7 @@ npm.cmd --workspace @moveinrange/mobile run android
 EAS preview build:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\apps\mobile
+cd <repo-root>\apps\mobile
 npm.cmd install
 npx.cmd eas-cli whoami
 npx.cmd eas-cli build --platform android --profile preview --clear-cache

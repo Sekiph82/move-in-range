@@ -61,7 +61,10 @@ export type PlanExerciseItem = {
 
 export type MovementPlan = {
   id: string;
+  plan_version?: string;
+  generation_request_id?: string;
   date?: string;
+  title?: string;
   session_type?: string;
   total_minutes?: number;
   total_duration?: number;
@@ -84,6 +87,8 @@ export type ProgramDay = {
   focus?: string;
   session_type?: string;
   session_id?: string;
+  daily_plan_id?: string;
+  plan_version?: string;
   planned_duration?: number;
   duration_minutes?: number;
   intensity?: string;

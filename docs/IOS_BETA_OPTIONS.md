@@ -11,7 +11,7 @@
 Run:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\apps\mobile
+cd <repo-root>\apps\mobile
 $env:EXPO_PUBLIC_API_BASE_URL="https://<MOVEINRANGE_API_VERCEL_URL>"
 npx.cmd expo start --tunnel --clear
 ```
@@ -75,7 +75,7 @@ Do not trigger paid Apple enrollment from this repository.
 iOS export validation command:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\apps\mobile
+cd <repo-root>\apps\mobile
 npm.cmd exec -- expo config --type public
 npm.cmd exec -- expo export --platform ios --clear
 ```

@@ -243,6 +243,7 @@ class ReadinessPayload(BaseModel):
     stress: int = Field(default=2, ge=1, le=5)
     resting_heart_rate: int | None = None
     diabetes: dict[str, Any] | None = None
+    generation_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionStartPayload(BaseModel):
@@ -330,6 +331,7 @@ class ProviderConnectPayload(BaseModel):
     provider_key: str
     scopes: list[str] = Field(default_factory=list)
     mock: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class NotificationPreferencePayload(BaseModel):
@@ -615,6 +617,25 @@ def update_equipment(payload: dict[str, list[str]], user: User = Depends(require
 @router.put("/profile/goals")
 def update_goals(payload: dict[str, list[str]], user: User = Depends(require_user), db: Session = Depends(get_db)):
     return _patch_profile_list(user, db, "goals", payload.get("goals", []))
+
+
+@router.put("/profile/general")
+def update_general_information(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    profile = _profile_for(user.id, db)
+    data = payload.payload
+    health = dict(profile.health_payload or {})
+    if isinstance(data.get("preferred_name"), str) and data["preferred_name"].strip():
+        profile.preferred_name = data["preferred_name"].strip()
+        health["preferred_name"] = profile.preferred_name
+    for key in ["gender", "date_of_birth", "height_cm", "weight_kg", "height", "weight", "units"]:
+        if key in data:
+            health[key] = data[key]
+    if isinstance(data.get("conditions"), list):
+        health["conditions"] = [str(item) for item in data["conditions"] if str(item).strip()]
+    profile.health_payload = health
+    db.add(AuditLog(actor_id=user.id, action="profile.general.update", target_type="profile", target_id=str(profile.id), redacted_payload={"fields": sorted(data.keys())}))
+    db.commit()
+    return _profile_payload(user, profile)
 
 
 @router.get("/onboarding")
@@ -1064,6 +1085,7 @@ def generate_daily(payload: ReadinessPayload | None = None, user: User = Depends
     checkpoint = mark("profile", checkpoint)
     exercise_pool = _plan_exercise_pool(user.id, readiness.model_dump(), decision, db, allowed_equipment)
     checkpoint = mark("exercise_pool", checkpoint)
+    media_by_exercise_id, localizations_by_exercise_id = _preload_plan_assets(exercise_pool, db)
     plan_payload = _daily_plan_payload(
         user.id,
         readiness.model_dump(),
@@ -1073,8 +1095,11 @@ def generate_daily(payload: ReadinessPayload | None = None, user: User = Depends
         session_type="daily",
         exercise_pool=exercise_pool,
         allowed_equipment=allowed_equipment,
+        media_by_exercise_id=media_by_exercise_id,
+        localizations_by_exercise_id=localizations_by_exercise_id,
     )
     plan_payload["generation_request_id"] = idempotency_key
+    plan_payload["plan_version"] = plan_payload.get("plan_version") or f"v{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
     plan_payload["timings_ms"] = timings
     checkpoint = mark("selection_enrichment", checkpoint)
     plan = Plan(id=plan_payload["id"], user_id=user.id, plan_type="daily", payload=plan_payload, safety_action=decision["action"])
@@ -1091,6 +1116,14 @@ def generate_daily(payload: ReadinessPayload | None = None, user: User = Depends
 def today_plan(user: User = Depends(require_user), db: Session = Depends(get_db)):
     plan = _latest_plan(user.id, "daily", db)
     return {"plan": plan.payload if plan else None}
+
+
+@router.get("/plans/{plan_id}")
+def get_plan(plan_id: str, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    plan = db.get(Plan, plan_id)
+    if not plan or plan.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "plan_not_found"})
+    return {"plan": plan.payload, "plan_type": plan.plan_type, "status": plan.status}
 
 
 @router.post("/plans/daily")
@@ -1168,7 +1201,12 @@ def create_quick_session(payload: ProgramRequestPayload, user: User = Depends(re
 
 
 @router.post("/plans/weekly/generate", status_code=status.HTTP_201_CREATED)
-def generate_weekly(user: User = Depends(require_user), db: Session = Depends(get_db)):
+def generate_weekly(payload: dict[str, Any] | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    idempotency_key = str((payload or {}).get("idempotency_key") or "").strip() or None
+    if idempotency_key:
+        existing = _latest_plan_by_generation_key(user.id, "weekly", idempotency_key, db)
+        if existing:
+            return {"plan": existing.payload, "idempotent": True}
     readiness = _latest_or_default_readiness(user.id, db)
     decision = evaluate_safety(readiness.model_dump())
     profile = _profile_for(user.id, db)
@@ -1182,6 +1220,7 @@ def generate_weekly(user: User = Depends(require_user), db: Session = Depends(ge
     focus_cycle = ["mobility", "upper_body", "balance", "conditioning", "lower_body", "core", "recovery"]
     allowed_equipment = _allowed_equipment_for_user(user.id, db)
     exercise_pool = _plan_exercise_pool(user.id, readiness.model_dump(), decision, db, allowed_equipment)
+    media_by_exercise_id, localizations_by_exercise_id = _preload_plan_assets(exercise_pool, db)
     for index, day in enumerate(days):
         planned_movement = day in preferred_days and not previous_was_movement and decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"
         status_value = "planned" if planned_movement else "recovery"
@@ -1201,14 +1240,21 @@ def generate_weekly(user: User = Depends(require_user), db: Session = Depends(ge
                 avoid_primary_ids=recent_primary_ids,
                 exercise_pool=exercise_pool,
                 allowed_equipment=allowed_equipment,
+                media_by_exercise_id=media_by_exercise_id,
+                localizations_by_exercise_id=localizations_by_exercise_id,
             )
             signature = _plan_items_signature(day_payload["items"], focus_cycle[index])
             used_signatures.add(signature)
             if day_payload["items"]:
                 recent_primary_ids = {day_payload["items"][0]["exercise_id"]}
+            day_payload["parent_week_id"] = None
+            day_payload["plan_version"] = day_payload.get("plan_version") or f"v{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+            db.add(Plan(id=day_payload["id"], user_id=user.id, plan_type="daily", payload=day_payload, safety_action=decision["action"]))
         schedule.append(
             {
                 "id": (day_payload or {}).get("session_id") or f"rest_{(week_start + timedelta(days=index)).isoformat()}",
+                "daily_plan_id": (day_payload or {}).get("id"),
+                "plan_version": (day_payload or {}).get("plan_version"),
                 "day": day,
                 "date": (week_start + timedelta(days=index)).isoformat(),
                 "day_index": index,
@@ -1232,10 +1278,16 @@ def generate_weekly(user: User = Depends(require_user), db: Session = Depends(ge
         "week_start": week_start.isoformat(),
         "total_planned_minutes": sum(day["duration_minutes"] for day in schedule),
         "explanation": "Weekly plan spaces movement days with recovery days and keeps intensity conservative after safety modifications.",
+        "generation_request_id": idempotency_key,
     }
+    for day in schedule:
+        if day.get("daily_plan_id"):
+            child = db.get(Plan, day["daily_plan_id"])
+            if child:
+                child.payload = {**child.payload, "parent_week_id": payload["id"]}
     db.add(Plan(id=payload["id"], user_id=user.id, plan_type="weekly", payload=payload, safety_action=decision["action"]))
     db.commit()
-    return {"plan": payload}
+    return {"plan": payload, "idempotent": False}
 
 
 @router.get("/plans/weekly/current")
@@ -1245,7 +1297,12 @@ def current_weekly(user: User = Depends(require_user), db: Session = Depends(get
 
 
 @router.post("/plans/monthly/generate", status_code=status.HTTP_201_CREATED)
-def generate_monthly(user: User = Depends(require_user), db: Session = Depends(get_db)):
+def generate_monthly(payload: dict[str, Any] | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    idempotency_key = str((payload or {}).get("idempotency_key") or "").strip() or None
+    if idempotency_key:
+        existing = _latest_plan_by_generation_key(user.id, "monthly", idempotency_key, db)
+        if existing:
+            return {"plan": existing.payload, "idempotent": True}
     readiness = _latest_or_default_readiness(user.id, db)
     readiness_payload = readiness.model_dump()
     decision = evaluate_safety(readiness_payload)
@@ -1271,6 +1328,7 @@ def generate_monthly(user: User = Depends(require_user), db: Session = Depends(g
     recent_primary_ids: set[str] = set()
     allowed_equipment = _allowed_equipment_for_user(user.id, db)
     exercise_pool = _plan_exercise_pool(user.id, readiness_payload, decision, db, allowed_equipment)
+    media_by_exercise_id, localizations_by_exercise_id = _preload_plan_assets(exercise_pool, db)
     weeks: list[dict[str, Any]] = []
     for week, phase, reason in phases:
         week_hold = hold_reason is not None and week > 1
@@ -1297,15 +1355,22 @@ def generate_monthly(user: User = Depends(require_user), db: Session = Depends(g
                     avoid_primary_ids=recent_primary_ids,
                     exercise_pool=exercise_pool,
                     allowed_equipment=allowed_equipment,
+                    media_by_exercise_id=media_by_exercise_id,
+                    localizations_by_exercise_id=localizations_by_exercise_id,
                 )
                 signature = _plan_items_signature(day_payload["items"], day_payload["session_type"])
                 used_week_signatures.add(signature)
                 week_signatures.append(signature)
                 if day_payload["items"]:
                     recent_primary_ids = {day_payload["items"][0]["exercise_id"]}
+                day_payload["parent_month_week"] = week
+                day_payload["plan_version"] = day_payload.get("plan_version") or f"v{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+                db.add(Plan(id=day_payload["id"], user_id=user.id, plan_type="daily", payload=day_payload, safety_action=decision["action"]))
             week_days.append(
                 {
                     "id": (day_payload or {}).get("session_id") or f"rest_{plan_date}",
+                    "daily_plan_id": (day_payload or {}).get("id"),
+                    "plan_version": (day_payload or {}).get("plan_version"),
                     "day": day,
                     "date": plan_date,
                     "day_index": index,
@@ -1342,10 +1407,17 @@ def generate_monthly(user: User = Depends(require_user), db: Session = Depends(g
         "timeline": ["Adaptation", "Consistency", "Gentle progression", "Recovery and reassessment"],
         "actions": ["open_week", "open_day", "pause", "extend", "reduce_intensity", "change_frequency", "regenerate_future_days"],
         "blocking_rules": ["pain increase", "concerning symptoms", "low readiness", "poor adherence", "clinician restriction", "safety block"],
+        "generation_request_id": idempotency_key,
     }
+    for week in weeks:
+        for day in week["days"]:
+            if day.get("daily_plan_id"):
+                child = db.get(Plan, day["daily_plan_id"])
+                if child:
+                    child.payload = {**child.payload, "parent_month_id": payload["id"], "parent_month_week": week["week"]}
     db.add(Plan(id=payload["id"], user_id=user.id, plan_type="monthly", payload=payload, safety_action=decision["action"]))
     db.commit()
-    return {"plan": payload}
+    return {"plan": payload, "idempotent": False}
 
 
 @router.get("/plans/monthly/current")
@@ -1402,13 +1474,17 @@ def start_session(payload: SessionStartPayload, user: User = Depends(require_use
     if latest and latest.decision.get("action") == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "readiness_blocks_workout", "safety_message": latest.decision.get("explanation")})
     if payload.resume:
-        existing = db.query(SessionRecord).filter(SessionRecord.user_id == user.id, SessionRecord.status == "in_progress").order_by(desc(SessionRecord.created_at)).first()
+        existing_query = db.query(SessionRecord).filter(SessionRecord.user_id == user.id, SessionRecord.status == "in_progress")
+        if payload.plan_id:
+            existing_query = existing_query.filter(SessionRecord.plan_id == payload.plan_id)
+        existing = existing_query.order_by(desc(SessionRecord.created_at)).first()
         if existing:
             return {"session": _session_payload(existing), "resumed": True}
     plan = db.get(Plan, payload.plan_id) if payload.plan_id else _latest_plan(user.id, "daily", db)
     if plan and plan.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "plan_not_found"})
-    session = SessionRecord(id="ses_" + secrets.token_hex(12), user_id=user.id, plan_id=plan.id if plan else None, payload={"plan": plan.payload if plan else None})
+    plan_item_ids = [item.get("plan_item_id") or item.get("id") for item in (plan.payload.get("items", []) if plan else []) if item.get("plan_item_id") or item.get("id")]
+    session = SessionRecord(id="ses_" + secrets.token_hex(12), user_id=user.id, plan_id=plan.id if plan else None, payload={"plan": plan.payload if plan else None, "plan_item_ids": plan_item_ids, "plan_version": (plan.payload or {}).get("plan_version") if plan else None})
     db.add(session)
     db.commit()
     return {"session": _session_payload(session), "resumed": False}
@@ -1564,6 +1640,23 @@ def providers():
     return {"items": [{"key": key, **value} for key, value in PROVIDER_REGISTRY.items()]}
 
 
+@router.post("/integrations/test-connection")
+def test_integration_connection(payload: ProductPayload, user: User = Depends(require_user)):
+    provider_key = str(payload.payload.get("provider_key", ""))
+    config = payload.payload.get("config") or {}
+    if provider_key not in PROVIDER_REGISTRY:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "provider_not_found"})
+    if provider_key == "nightscout":
+        server_url = str(config.get("server_url", "")).strip()
+        if not server_url.startswith("https://"):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "nightscout_https_required"})
+        return {"ok": True, "status": "configuration_valid", "provider_key": provider_key}
+    provider = PROVIDER_REGISTRY[provider_key]
+    if provider["status"] != "mock_ready":
+        return {"ok": False, "status": provider["status"], "provider_key": provider_key}
+    return {"ok": True, "status": "available", "provider_key": provider_key}
+
+
 @router.post("/integrations/connect", status_code=status.HTTP_201_CREATED)
 def connect_provider(payload: ProviderConnectPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     if payload.provider_key not in PROVIDER_REGISTRY:
@@ -1576,7 +1669,7 @@ def connect_provider(payload: ProviderConnectPayload, user: User = Depends(requi
         status="mock_connected" if provider["status"] == "mock_ready" and payload.mock else provider["status"],
         scopes=payload.scopes or provider["scopes"],
         token_reference=None if payload.mock else "external_secret_store_required",
-        provenance={"mock": payload.mock, "blocked_reason": None if provider["status"] == "mock_ready" else provider["status"]},
+        provenance={"mock": payload.mock, "blocked_reason": None if provider["status"] == "mock_ready" else provider["status"], "configuration_present": bool(payload.config)},
     )
     db.add(connection)
     db.add(AuditLog(actor_id=user.id, action="provider.connect", target_type="provider", target_id=payload.provider_key, redacted_payload={"mock": payload.mock, "status": connection.status}))
@@ -3284,8 +3377,25 @@ def _impact_for_exercise(exercise: Exercise) -> str:
     return "low"
 
 
-def _plan_item_payload(exercise: Exercise, db: Session, language: str, block: str, duration_seconds: int, rest_seconds: int, index: int, approved_substitutions: list[str] | None = None) -> dict[str, Any]:
-    brief = _exercise_brief_payload(exercise, db, language)
+def _plan_item_payload(
+    exercise: Exercise,
+    db: Session,
+    language: str,
+    block: str,
+    duration_seconds: int,
+    rest_seconds: int,
+    index: int,
+    approved_substitutions: list[str] | None = None,
+    media_by_exercise_id: dict[str, ExerciseMedia] | None = None,
+    localizations_by_exercise_id: dict[str, list[ExerciseLocalization]] | None = None,
+) -> dict[str, Any]:
+    brief = _exercise_brief_payload(
+        exercise,
+        db,
+        language,
+        media=(media_by_exercise_id or {}).get(exercise.id),
+        localizations=(localizations_by_exercise_id or {}).get(exercise.id),
+    )
     return {
         "exercise_id": brief["id"],
         "source_id": brief["source_id"],
@@ -3470,6 +3580,20 @@ def _plan_exercise_pool(user_id: str, readiness: dict[str, Any], decision: dict[
     return exercises or _fallback_exercises(db)
 
 
+def _preload_plan_assets(exercises: list[Exercise], db: Session) -> tuple[dict[str, ExerciseMedia], dict[str, list[ExerciseLocalization]]]:
+    exercise_ids = [exercise.id for exercise in exercises]
+    if not exercise_ids:
+        return {}, {}
+    media_by_exercise_id = {
+        media.exercise_id: media
+        for media in db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id.in_(exercise_ids)).all()
+    }
+    localizations_by_exercise_id: dict[str, list[ExerciseLocalization]] = {}
+    for localization in db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id.in_(exercise_ids)).all():
+        localizations_by_exercise_id.setdefault(localization.exercise_id, []).append(localization)
+    return media_by_exercise_id, localizations_by_exercise_id
+
+
 def _select_plan_exercises(
     user_id: str,
     readiness: dict[str, Any],
@@ -3531,6 +3655,8 @@ def _daily_plan_payload(
     avoid_primary_ids: set[str] | None = None,
     exercise_pool: list[Exercise] | None = None,
     allowed_equipment: set[str] | None = None,
+    media_by_exercise_id: dict[str, ExerciseMedia] | None = None,
+    localizations_by_exercise_id: dict[str, list[ExerciseLocalization]] | None = None,
 ) -> dict[str, Any]:
     plan_date = plan_date or datetime.now(UTC).date().isoformat()
     minutes = min([5, 10, 15, 20, 30, 45, 60], key=lambda value: abs(value - readiness.get("available_minutes", 15)))
@@ -3566,7 +3692,7 @@ def _daily_plan_payload(
                 for candidate in exercises
                 if candidate.id != exercise.id and candidate.equipment == exercise.equipment and candidate.body_part == exercise.body_part
             ][:3]
-            item = _plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index, substitutions)
+            item = _plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index, substitutions, media_by_exercise_id, localizations_by_exercise_id)
             item["id"] = "item_" + hashlib.sha256(f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{index}:{exercise.id}".encode("utf-8")).hexdigest()[:16]
             item["plan_item_id"] = item["id"]
             item["session_date"] = plan_date

@@ -285,23 +285,24 @@ test("mobile API client probes health and classifies connectivity failures", () 
 
 test("mobile API client uses operation-specific timeouts for generation", () => {
   const api = readFileSync("apps/mobile/src/api.ts", "utf8");
-  const daily = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
+  const wizard = readFileSync("apps/mobile/src/features/plans/PlanGenerationWizardScreen.tsx", "utf8");
   assert.match(api, /API_TIMEOUTS = \{/);
   assert.match(api, /health: 8000/);
   assert.match(api, /read: 8000/);
   assert.match(api, /mutation: 12000/);
   assert.match(api, /planGeneration: 30000/);
   assert.match(api, /config\.timeoutMs \?\? defaultTimeout/);
-  assert.match(api, /generateDailyPlan\(minutes = 15, idempotencyKey = createGenerationRequestId\("daily"\)\)/);
+  assert.match(api, /generateDailyPlan\(minutes = 15, idempotencyKey = createGenerationRequestId\("daily"\), context: PlanGenerationRequest = \{\}\)/);
   assert.match(api, /idempotency_key: idempotencyKey/);
   assert.match(api, /timeoutMs: API_TIMEOUTS\.planGeneration/);
-  assert.match(daily, /createGenerationRequestId\("today"\)/);
-  assert.match(daily, /Building today's plan/);
-  assert.match(daily, /disabled=\{generate\.isPending\}/);
-  assert.match(daily, /queryClient\.setQueryData\(\["today-plan"\]/);
-  assert.match(daily, /queryClient\.refetchQueries\(\{ queryKey: \["today-plan"\], type: "active" \}\)/);
-  assert.match(daily, /error instanceof ApiClientError && error\.kind === "timeout"/);
-  assert.match(daily, /fetchQuery\(\{ queryKey: \["today-plan"\]/);
+  assert.match(api, /timeoutMs: 40000/);
+  assert.match(api, /timeoutMs: 60000/);
+  assert.match(wizard, /createGenerationRequestId\(scope\)/);
+  assert.match(wizard, /Generate today/);
+  assert.match(wizard, /disabled=\{generate\.isPending\}/);
+  assert.match(wizard, /queryClient\.setQueryData\(\["plan", plan\.id\]/);
+  assert.match(wizard, /queryClient\.refetchQueries\(\{ queryKey: \["today-plan"\], type: "active" \}\)/);
+  assert.match(wizard, /router\.replace\(previewHref\(previewPlanId/);
 });
 
 test("auth screens use safe-area keyboard shell and compact controls", () => {
@@ -431,7 +432,7 @@ test("mobile product shell exposes Home Program Move Progress Profile tabs", () 
   assert.match(tabs, /name="progress"/);
   assert.match(tabs, /name="plan" options=\{\{ href: null \}\}/);
   assert.match(tabs, /name="insights" options=\{\{ href: null \}\}/);
-  for (const hidden of ["daily-plan", "weekly-plan", "monthly-plan", "exercises", "exercise/\\[id\\]", "readiness", "onboarding-edit", "settings", "privacy"]) {
+  for (const hidden of ["daily-plan", "weekly-plan", "monthly-plan", "exercises", "exercise/\\[id\\]", "readiness", "generate-plan", "workout-preview", "general-info", "onboarding-edit", "settings", "privacy"]) {
     assert.match(tabs, new RegExp(`name="${hidden}" options=\\{\\{ href: null \\}\\}`));
   }
 });
@@ -479,8 +480,11 @@ test("guided workout screen is state driven and not a debug control stack", () =
   assert.match(workoutScreens, /Alert\.alert/);
   assert.match(workoutScreens, /Haptics\.impactAsync/);
   assert.match(workoutScreens, /formatClock/);
-  assert.match(workoutScreens, /Open full feedback/);
+  assert.match(workoutScreens, /Save feedback/);
+  assert.match(workoutScreens, /recordWorkoutFeedback/);
+  assert.match(workoutScreens, /feedbackSaved/);
   assert.doesNotMatch(workoutScreens, /Next actions/);
+  assert.doesNotMatch(workoutScreens, /Save quick feedback/);
   assert.doesNotMatch(workoutScreens, /Preparation, work, rest, pause, skip, substitute, and completion controls are available/);
 });
 
@@ -500,20 +504,24 @@ test("readiness is visual and gates every new workout start", () => {
   const home = readFileSync("apps/mobile/app/(tabs)/index.tsx", "utf8");
   const daily = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
   const workout = readFileSync("apps/mobile/src/features/workout/WorkoutScreens.tsx", "utf8");
+  const preview = readFileSync("apps/mobile/src/features/workout/WorkoutPreviewScreen.tsx", "utf8");
   const readiness = readFileSync("apps/mobile/src/features/readiness/ReadinessScreen.tsx", "utf8");
   const startContext = readFileSync("apps/mobile/src/features/readiness/startContext.ts", "utf8");
-  assert.match(home, /readinessStartHref\(\{ source: "home"/);
+  assert.match(home, /\/workout-preview\?planId=/);
   assert.doesNotMatch(home, /submitReadiness/);
   assert.doesNotMatch(home, /readinessReady/);
   assert.doesNotMatch(home, /startSession/);
-  assert.match(daily, /readinessStartHref\(\{ source: "today"/);
-  assert.match(daily, /readinessStartHref\(\{ source: "week"/);
-  assert.match(daily, /readinessStartHref\(\{ source: "month"/);
-  assert.match(daily, /sessionDate: selectedDay\.date/);
-  assert.match(daily, /returnTo: "\/weekly-plan"/);
-  assert.match(daily, /returnTo: "\/monthly-plan"/);
+  assert.match(daily, /\/workout-preview\?planId=/);
+  assert.match(daily, /selectedDay\.daily_plan_id/);
+  assert.match(daily, /returnTo=\/weekly-plan/);
+  assert.match(daily, /returnTo=\/monthly-plan/);
+  assert.match(preview, /readinessStartHref\(\{ source: "preview"/);
+  assert.match(preview, /Workout Preview/);
+  assert.match(preview, /Modify today's workout/);
   assert.match(workout, /readinessStartHref\(\{ source: "preview"/);
   assert.match(workout, /selectedSessionPlan\(planPayload, params\.sessionDate, params\.selectedDay\)/);
+  assert.match(workout, /startSession\(id && id !== "today" \? params\.planId : daily\.data\?\.plan\?\.id, true\)/);
+  assert.match(workout, /assertCanonicalPlanItems/);
   assert.match(workout, /autoResumeStartedRef/);
   assert.match(workout, /isExistingSessionRoute \? start\.isPending \? "Resuming\.\.\." : "Resume guided workout" : "Check readiness & start"/);
   assert.doesNotMatch(daily, /hasValidSameDayReadiness/);
@@ -725,15 +733,19 @@ test("completed users can edit onboarding without first-run redirect or sample d
   const tabs = readFileSync("apps/mobile/app/(tabs)/_layout.tsx", "utf8");
   const workflow = readFileSync("apps/mobile/src/screens/ProductWorkflowScreen.tsx", "utf8");
   const source = readFileSync("apps/mobile/src/features/onboarding/OnboardingScreen.tsx", "utf8");
+  const profileEditors = readFileSync("apps/mobile/src/features/profile/ProfileEditorScreens.tsx", "utf8");
   assert.match(route, /kind="onboarding-edit"/);
   assert.match(tabs, /name="onboarding-edit" options=\{\{ href: null \}\}/);
   assert.match(workflow, /"onboarding-edit": \{ title: "Movement profile"/);
-  assert.match(workflow, /case "onboarding-edit": return <OnboardingScreen mode="edit" \/>/);
+  assert.match(workflow, /case "onboarding-edit": return <MovementProfileScreen \/>/);
+  assert.match(profileEditors, /title="Movement Profile"/);
+  assert.match(profileEditors, /Edit movement profile/);
+  assert.match(profileEditors, /<OnboardingScreen mode="edit" returnTo="\/onboarding-edit" \/>/);
   assert.match(source, /mode = "first-run"/);
   assert.match(source, /const isEdit = mode === "edit"/);
   assert.match(source, /ONBOARDING_STEPS\.filter\(\(step\) => step\.key !== "welcome"\)/);
   assert.match(source, /onboardingDraftFromProfile/);
-  assert.match(source, /router\.replace\(isEdit \? "\/(\(tabs\)\/)?profile" : "\/(\(tabs\))?"/);
+  assert.match(source, /router\.replace\(isEdit \? returnTo as never : "\/(\(tabs\))?" as never/);
   assert.match(source, /Save changes/);
   assert.match(source, /Cancel/);
   assert.doesNotMatch(source, /preferred_name: "Aylin"/);
@@ -761,4 +773,48 @@ test("onboarding edit prefill maps saved profile fields without erasing unrelate
   const payload = onboardingPayload(draft);
   assert.equal("unrelated_medical_record" in payload, false);
   assert.equal(payload.onboarding_complete, true);
+});
+
+test("sprint flow uses wizard preview canonical player feedback profile integrations and shared safe areas", () => {
+  const home = readFileSync("apps/mobile/app/(tabs)/index.tsx", "utf8");
+  const program = readFileSync("apps/mobile/app/(tabs)/program.tsx", "utf8");
+  const daily = readFileSync("apps/mobile/src/features/plans/PlanScreens.tsx", "utf8");
+  const wizard = readFileSync("apps/mobile/src/features/plans/PlanGenerationWizardScreen.tsx", "utf8");
+  const preview = readFileSync("apps/mobile/src/features/workout/WorkoutPreviewScreen.tsx", "utf8");
+  const workout = readFileSync("apps/mobile/src/features/workout/WorkoutScreens.tsx", "utf8");
+  const profile = readFileSync("apps/mobile/app/(tabs)/profile.tsx", "utf8");
+  const editors = readFileSync("apps/mobile/src/features/profile/ProfileEditorScreens.tsx", "utf8");
+  const integrations = readFileSync("apps/mobile/src/features/integrations/IntegrationsScreen.tsx", "utf8");
+  const shared = readFileSync("apps/mobile/src/features/shared/ui.tsx", "utf8");
+  const routes = mobileRoutes();
+  for (const route of ["/generate-plan", "/workout-preview", "/general-info", "/onboarding-edit"]) assert.equal(routes.has(route), true, route);
+  assert.match(home, /router\.push\("\/generate-plan\?scope=daily/);
+  assert.doesNotMatch(home, /generateDailyPlan/);
+  assert.match(program, /scope=weekly/);
+  assert.match(program, /scope=monthly/);
+  assert.match(daily, /scope=daily/);
+  for (const text of ["How are you feeling today?", "What would you like to work on?", "How much time do you have?", "What style fits today?"]) assert.match(wizard, new RegExp(text.replace(/[?]/g, "\\?")));
+  assert.match(wizard, /previewPlanId/);
+  assert.match(preview, /planItemIds/);
+  assert.match(preview, /assertCanonicalPlanItems/);
+  assert.match(preview, /readinessStartHref/);
+  assert.match(workout, /params\.planId/);
+  assert.match(workout, /payload\?\.plan_item_ids/);
+  assert.match(workout, /recordWorkoutFeedback/);
+  assert.match(workout, /effortOptions/);
+  assert.match(workout, /futurePreferenceOptions/);
+  assert.match(profile, /General Information/);
+  assert.match(profile, /Movement profile/);
+  assert.match(editors, /title="General Information"/);
+  assert.match(editors, /title="Movement Profile"/);
+  assert.match(editors, /\/profile\/general/);
+  assert.match(integrations, /Configure Nightscout/);
+  assert.match(integrations, /Test connection/);
+  assert.match(integrations, /View requirements/);
+  assert.match(shared, /function TabScreenScroll/);
+  assert.match(shared, /usePathname/);
+  for (const file of ["index", "program", "move", "progress", "profile"]) {
+    const source = readFileSync(`apps/mobile/app/(tabs)/${file}.tsx`, "utf8");
+    assert.match(source, /TabScreenScroll/);
+  }
 });

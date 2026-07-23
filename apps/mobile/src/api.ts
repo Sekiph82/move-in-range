@@ -354,16 +354,48 @@ export function createGenerationRequestId(scope = "daily") {
   return `${scope}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function generateDailyPlan(minutes = 15, idempotencyKey = createGenerationRequestId("daily")) {
-  return apiFetch("/plans/daily/generate", { method: "POST", body: JSON.stringify({ ...defaultReadiness, available_minutes: minutes, idempotency_key: idempotencyKey }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
+export type GenerationScope = "daily" | "weekly" | "monthly" | "replace-day";
+
+export type PlanGenerationRequest = {
+  scope?: GenerationScope;
+  feeling?: string;
+  focus?: string;
+  secondary_focus?: string | null;
+  available_minutes?: number;
+  desired_session_type?: string;
+  selected_date?: string | null;
+  existing_plan_id?: string | null;
+  idempotency_key?: string;
+};
+
+function readinessFromGeneration(payload: PlanGenerationRequest, fallbackMinutes: number) {
+  const energyByFeeling: Record<string, number> = { excellent: 5, good: 4, okay: 3, low_energy: 2, exhausted: 1 };
+  return {
+    ...defaultReadiness,
+    energy: energyByFeeling[payload.feeling ?? ""] ?? defaultReadiness.energy,
+    available_minutes: payload.available_minutes ?? fallbackMinutes,
+    desired_session_type: payload.desired_session_type ?? defaultReadiness.desired_session_type,
+    generation_context: {
+      scope: payload.scope ?? "daily",
+      feeling: payload.feeling ?? "good",
+      focus: payload.focus ?? "full_body",
+      secondary_focus: payload.secondary_focus ?? null,
+      selected_date: payload.selected_date ?? null,
+      existing_plan_id: payload.existing_plan_id ?? null
+    }
+  };
 }
 
-export function generateWeeklyPlan(idempotencyKey = createGenerationRequestId("weekly")) {
-  return apiFetch("/plans/weekly/generate", { method: "POST", body: JSON.stringify({ idempotency_key: idempotencyKey }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
+export function generateDailyPlan(minutes = 15, idempotencyKey = createGenerationRequestId("daily"), context: PlanGenerationRequest = {}) {
+  return apiFetch("/plans/daily/generate", { method: "POST", body: JSON.stringify({ ...readinessFromGeneration(context, minutes), idempotency_key: idempotencyKey }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
 }
 
-export function generateMonthlyPlan(idempotencyKey = createGenerationRequestId("monthly")) {
-  return apiFetch("/plans/monthly/generate", { method: "POST", body: JSON.stringify({ idempotency_key: idempotencyKey }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
+export function generateWeeklyPlan(idempotencyKey = createGenerationRequestId("weekly"), context: PlanGenerationRequest = {}) {
+  return apiFetch("/plans/weekly/generate", { method: "POST", body: JSON.stringify({ ...context, idempotency_key: idempotencyKey }) }, { timeoutMs: 40000 });
+}
+
+export function generateMonthlyPlan(idempotencyKey = createGenerationRequestId("monthly"), context: PlanGenerationRequest = {}) {
+  return apiFetch("/plans/monthly/generate", { method: "POST", body: JSON.stringify({ ...context, idempotency_key: idempotencyKey }) }, { timeoutMs: 60000 });
 }
 
 export function generateAdvancedPlan(payload: Record<string, unknown>) {
@@ -378,8 +410,12 @@ export function modifyPlan(planId: string, intent: string, request_payload: Reco
   return apiFetch(`/plans/${planId}/modify`, { method: "POST", body: JSON.stringify({ intent, request_payload }) });
 }
 
-export function startSession(planId?: string) {
-  return apiFetch<{ session: { id: string; payload?: { plan?: unknown } } }>("/sessions", { method: "POST", body: JSON.stringify({ plan_id: planId, resume: true }) });
+export function fetchPlanById(planId: string) {
+  return apiFetch(`/plans/${encodeURIComponent(planId)}`);
+}
+
+export function startSession(planId?: string, resume = true) {
+  return apiFetch<{ session: { id: string; plan_id?: string | null; payload?: { plan?: unknown; plan_item_ids?: string[] } }; resumed?: boolean }>("/sessions", { method: "POST", body: JSON.stringify({ plan_id: planId, resume }) });
 }
 
 export function patchSession(sessionId: string, payload: Record<string, unknown>) {
@@ -407,6 +443,13 @@ export function recordExerciseFeedback(sessionId: string) {
   });
 }
 
+export function recordWorkoutFeedback(payload: Record<string, unknown>) {
+  return apiFetch("/exercise-feedback", {
+    method: "POST",
+    body: JSON.stringify({ payload: { ...payload, feedback_type: "post_workout_feedback", idempotency_key: payload.idempotency_key ?? `feedback-${Date.now()}` } })
+  }, { timeoutMs: API_TIMEOUTS.mutation });
+}
+
 export function logGlucose(payload: { value: number; unit: "mg/dL" | "mmol/L"; timing: "pre" | "post" | "delayed"; session_id?: string }) {
   return apiFetch("/glucose", {
     method: "POST",
@@ -418,8 +461,16 @@ export function logDiabetesContext(payload: Record<string, unknown>) {
   return apiFetch("/diabetes/context", { method: "POST", body: JSON.stringify({ payload }) });
 }
 
-export function connectProvider(provider_key: string, mock = true) {
-  return apiFetch("/integrations/connect", { method: "POST", body: JSON.stringify({ provider_key, mock }) });
+export function connectProvider(provider_key: string, mock = false, config: Record<string, unknown> = {}) {
+  return apiFetch("/integrations/connect", { method: "POST", body: JSON.stringify({ provider_key, mock, config }) }, { timeoutMs: 30000 });
+}
+
+export function disconnectProvider(connectionId: number) {
+  return apiFetch(`/integrations/${connectionId}`, { method: "DELETE" });
+}
+
+export function testProviderConnection(provider_key: string, config: Record<string, unknown> = {}) {
+  return apiFetch("/integrations/test-connection", { method: "POST", body: JSON.stringify({ payload: { provider_key, config } }) }, { timeoutMs: 30000 });
 }
 
 export function favoriteExercise(exerciseId: string) {

@@ -13,7 +13,7 @@
 Required local commands:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 npm.cmd install
 npm.cmd run format:check
 npm.cmd run lint

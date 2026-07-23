@@ -73,7 +73,7 @@ The temporary root config had `com.sekiphayit.moveinrange`, but no successful ar
 Run EAS commands from:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\apps\mobile
+cd <repo-root>\apps\mobile
 ```
 
 The mobile app root contains:

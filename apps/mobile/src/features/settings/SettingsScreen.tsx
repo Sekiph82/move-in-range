@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { apiFetch, logoutUser } from "../../api";
+import { speakCue } from "../../guidance/speechCues";
 import { LOGIN_ROUTE } from "../auth/sessionGate";
 import { clearExerciseCache } from "../exercises/exerciseCache";
 import { useAppLanguage } from "../../i18n/LanguageProvider";
@@ -34,6 +35,7 @@ export function SettingsScreen() {
         <ChoiceChip label={t("settings.workoutVoice")} selected={voiceEnabled} onPress={() => void setVoiceEnabled(!voiceEnabled)} />
         <ChoiceChip label={t("settings.haptics")} selected={hapticsEnabled} onPress={() => void setHapticsEnabled(!hapticsEnabled)} />
         <BodyText muted>{t("settings.voiceAuto")}</BodyText>
+        <ActionButton label="Test voice" onPress={() => speakCue("workout.getReady", { language, enabled: true })} />
       </View>
       <ActionButton label={logoutMutation.isPending ? "Signing out..." : "Sign out"} onPress={() => logoutMutation.mutate()} />
       <ErrorText error={logoutMutation.error} />

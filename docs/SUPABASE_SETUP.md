@@ -32,7 +32,7 @@ ENABLE_STARTUP_DB_INIT=false
 Run migrations explicitly; do not run schema migration on every request:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range\services\api
+cd <repo-root>\services\api
 $env:DATABASE_URL=$env:MIGRATION_DATABASE_URL
 python -m alembic -c alembic.ini upgrade head
 python -m alembic -c alembic.ini current

@@ -13,7 +13,7 @@ The API project must not use Docker on Vercel. `api/index.py` exports the existi
 CLI checks:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 npx.cmd vercel --version
 npx.cmd vercel whoami
 npx.cmd vercel login

@@ -1,6 +1,6 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { Link, router } from "expo-router";
+import { Link, router, usePathname } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../../theme";
 import { TABS_ROUTE } from "../auth/sessionGate";
@@ -146,9 +146,31 @@ export function RouteScaffold({ title, subtitle, children }: { title: string; su
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.background }}
       contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: Math.max(20, insets.top + 12), paddingBottom: Math.max(28, insets.bottom + 24), gap: 16 }}
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 10, paddingBottom: Math.max(28, insets.bottom + 24), gap: 16 }}
     >
       <RouteHeader title={title} subtitle={subtitle} />
+      {children}
+    </ScrollView>
+  );
+}
+
+export function TabScreenScroll({ children, testID }: { children: ReactNode; testID?: string }) {
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const ref = useRef<ScrollView>(null);
+  const pathname = usePathname();
+  useEffect(() => {
+    ref.current?.scrollTo({ y: 0, animated: false });
+  }, [pathname]);
+  return (
+    <ScrollView
+      ref={ref}
+      testID={testID}
+      style={{ flex: 1, backgroundColor: theme.background }}
+      contentInsetAdjustmentBehavior="never"
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 8, paddingBottom: Math.max(96, insets.bottom + 88), gap: 16 }}
+    >
       {children}
     </ScrollView>
   );

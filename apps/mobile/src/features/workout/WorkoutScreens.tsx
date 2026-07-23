@@ -4,7 +4,7 @@ import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch, completeSession, patchSession, recordExerciseFeedback, reportPain, startSession } from "../../api";
+import { apiFetch, completeSession, patchSession, recordWorkoutFeedback, reportPain, startSession } from "../../api";
 import { useTheme } from "../../theme";
 import { useAppLanguage } from "../../i18n/LanguageProvider";
 import { cueForCountdown, resetSpeechCueHistory, speakCue, type SpeechCueKey } from "../../guidance/speechCues";
@@ -13,6 +13,7 @@ import { ActionButton, BodyText, ChipGroup, ErrorText, LoadingState, Panel, Seco
 import type { MonthlyPlan, MovementPlan, PlanExerciseItem, ProgramDay, WeeklyPlan } from "../shared/productTypes";
 import { readinessBlocksStart } from "../readiness/readinessGate";
 import { readinessStartHref } from "../readiness/startContext";
+import { assertCanonicalPlanItems } from "./WorkoutPreviewScreen";
 
 type PlayerPhase = "IDLE" | "STARTING" | "PREPARING" | "WORKING" | "RESTING" | "SIDE_SWITCH" | "PAUSED" | "SUBSTITUTING" | "PAIN_CHECK" | "TRANSITIONING" | "COMPLETING" | "COMPLETED" | "STOPPED" | "ERROR";
 
@@ -54,6 +55,11 @@ const initialState: PlayerState = {
   sound: true,
   haptics: true
 };
+
+const effortOptions = ["Too easy", "Comfortable", "Challenging", "Too difficult"];
+const painResponseOptions = ["No pain", "Mild discomfort", "Moderate pain", "Strong pain"];
+const futurePreferenceOptions = ["Keep it similar", "Make it easier", "Make it harder", "More recovery", "Change focus"];
+const feedbackBodyAreas = ["Shoulder", "Neck", "Back", "Hip", "Knee", "Ankle", "Arm", "Wrist/Hand", "Other"];
 
 function secondsFor(item: PlanExerciseItem | undefined, phase: PlayerPhase) {
   if (!item) return 0;
@@ -114,10 +120,15 @@ function phaseLabel(phase: PlayerPhase) {
 export function WorkoutScreen({ id }: { id?: string }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ sessionDate?: string; selectedDay?: string }>();
+  const params = useLocalSearchParams<{ sessionDate?: string; selectedDay?: string; planId?: string }>();
   const { language, voiceEnabled, hapticsEnabled, t } = useAppLanguage();
   const queryClient = useQueryClient();
   const [state, setState] = useState<PlayerState>(initialState);
+  const [effort, setEffort] = useState("");
+  const [painResponse, setPainResponse] = useState("");
+  const [futurePreference, setFuturePreference] = useState("");
+  const [feedbackPainAreas, setFeedbackPainAreas] = useState<string[]>([]);
+  const [feedbackSaved, setFeedbackSaved] = useState(false);
   const lastCueRef = useRef<string>("");
   const completionSubmittedRef = useRef(false);
   const autoResumeStartedRef = useRef(false);
@@ -138,10 +149,15 @@ export function WorkoutScreen({ id }: { id?: string }) {
         router.replace(readinessStartHref({ source: "preview", planId, sessionDate: daily.data?.plan?.date, sessionType: daily.data?.plan?.session_type, returnTo: "/workout/today" }) as never);
         throw new Error("Complete readiness before starting this workout.");
       }
-      const response = await startSession(id && id !== "today" ? undefined : daily.data?.plan?.id);
+      const response = await startSession(id && id !== "today" ? params.planId : daily.data?.plan?.id, true);
       const planPayload = (response.session?.payload?.plan ?? daily.data?.plan ?? null) as MovementPlan | WeeklyPlan | MonthlyPlan | null;
       const plan = selectedSessionPlan(planPayload, params.sessionDate, params.selectedDay);
       if (!plan?.items?.length) throw new Error("Generate a plan before starting the guided player.");
+      if (params.planId && "id" in plan && plan.id !== params.planId) throw new Error("Workout plan changed before start. Reopen the preview and try again.");
+      assertCanonicalPlanItems(plan, (response.session?.payload?.plan ?? plan) as MovementPlan);
+      const sessionItemIds = response.session?.payload?.plan_item_ids ?? [];
+      const planItemIds = plan.items.map((item) => item.plan_item_id ?? item.id ?? item.exercise_id);
+      if (sessionItemIds.length && sessionItemIds.join("|") !== planItemIds.join("|")) throw new Error("Workout session items do not match the selected preview.");
       return { sessionId: response.session.id as string, plan: plan as MovementPlan };
     },
     onSuccess: ({ sessionId, plan }) => {
@@ -165,7 +181,25 @@ export function WorkoutScreen({ id }: { id?: string }) {
     mutationFn: () => reportPain(state.sessionId ?? "local-session"),
     onSuccess: () => setState((current) => ({ ...current, phase: "PAIN_CHECK", painEvents: current.painEvents + 1, pausedAt: Date.now() }))
   });
-  const feedback = useMutation({ mutationFn: () => recordExerciseFeedback(state.sessionId ?? "local-session") });
+  const feedback = useMutation({
+    mutationFn: () => recordWorkoutFeedback({
+      session_id: state.sessionId,
+      plan_id: state.plan?.id,
+      plan_version: state.plan?.plan_version,
+      effort,
+      pain_response: painResponse,
+      pain_body_areas: feedbackPainAreas,
+      future_preference: futurePreference,
+      completed_exercises: state.completed,
+      skipped_exercises: state.skipped,
+      timestamp: new Date().toISOString(),
+      idempotency_key: `feedback-${state.sessionId}-${state.plan?.id}`
+    }),
+    onSuccess: () => {
+      setFeedbackSaved(true);
+      queryClient.invalidateQueries({ queryKey: ["insights"] });
+    }
+  });
 
   useEffect(() => {
     if (!isExistingSessionRoute || state.phase !== "IDLE" || autoResumeStartedRef.current) return;
@@ -335,9 +369,36 @@ export function WorkoutScreen({ id }: { id?: string }) {
         ) : null}
         {state.phase === "COMPLETED" ? (
           <View style={{ gap: 10 }}>
-            <BodyText>Session complete. Completed {state.completed.length} movements, skipped {state.skipped.length}, pain events {state.painEvents}.</BodyText>
-            <ActionButton label={feedback.isPending ? "Saving feedback..." : "Save quick feedback"} disabled={!state.sessionId} onPress={() => feedback.mutate()} />
-            <SecondaryLink href={`/workout/${state.sessionId ?? "local-session"}/feedback`} label="Open full feedback" />
+            {feedbackSaved ? (
+              <>
+                <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 22, fontWeight: "900" }}>Workout complete</Text>
+                <BodyText>Completed {state.completed.length} movements, skipped {state.skipped.length}. Feedback saved.</BodyText>
+                <BodyText muted>Future plans will use this cautiously without changing completed history.</BodyText>
+                <ActionButton label="Done" onPress={() => router.replace("/(tabs)" as never)} />
+                <SecondaryLink href="/progress" label="View progress" />
+              </>
+            ) : (
+              <>
+                <BodyText>Session complete. Choose how this workout felt before saving feedback.</BodyText>
+                <BodyText>Overall effort</BodyText>
+                <ChipGroup labels={effortOptions} selected={effort ? [effort] : []} onToggle={setEffort} />
+                <BodyText>Pain response</BodyText>
+                <ChipGroup labels={painResponseOptions} selected={painResponse ? [painResponse] : []} onToggle={(value) => {
+                  setPainResponse(value);
+                  if (value === "No pain") setFeedbackPainAreas([]);
+                }} />
+                {painResponse && painResponse !== "No pain" ? (
+                  <>
+                    <BodyText>Feedback pain areas</BodyText>
+                    <ChipGroup labels={feedbackBodyAreas} selected={feedbackPainAreas} onToggle={(value) => setFeedbackPainAreas(feedbackPainAreas.includes(value) ? feedbackPainAreas.filter((item) => item !== value) : [...feedbackPainAreas, value])} />
+                  </>
+                ) : null}
+                <BodyText>Future preference</BodyText>
+                <ChipGroup labels={futurePreferenceOptions} selected={futurePreference ? [futurePreference] : []} onToggle={setFuturePreference} />
+                <ActionButton label={feedback.isPending ? "Saving feedback..." : "Save feedback"} disabled={!state.sessionId || !effort || !painResponse || !futurePreference || feedback.isPending} onPress={() => feedback.mutate()} />
+                <SecondaryLink href={`/workout/${state.sessionId ?? "local-session"}/feedback`} label="Open detailed feedback" />
+              </>
+            )}
           </View>
         ) : null}
         {state.phase === "SUBSTITUTING" ? <SubstitutionPanel item={activeItem} onReturn={() => setState((current) => ({ ...current, phase: "PAUSED" }))} /> : null}

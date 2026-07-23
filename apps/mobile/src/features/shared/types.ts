@@ -1,6 +1,9 @@
 export type WorkflowKind =
   | "onboarding"
   | "onboarding-edit"
+  | "general-info"
+  | "generate-plan"
+  | "workout-preview"
   | "readiness"
   | "quick-session"
   | "daily-plan"

@@ -1,6 +1,6 @@
 # Testing
 
-Run from `C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range`.
+Run from `<repo-root>`.
 
 ```powershell
 npm.cmd run format:check

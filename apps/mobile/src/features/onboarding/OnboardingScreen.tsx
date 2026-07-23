@@ -69,7 +69,7 @@ function reviewRows(draft: OnboardingDraft) {
   ];
 }
 
-export function OnboardingScreen({ mode = "first-run" }: { mode?: "first-run" | "edit" }) {
+export function OnboardingScreen({ mode = "first-run", returnTo = "/(tabs)/profile" }: { mode?: "first-run" | "edit"; returnTo?: string }) {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const { language } = useAppLanguage();
@@ -153,7 +153,7 @@ export function OnboardingScreen({ mode = "first-run" }: { mode?: "first-run" | 
       queryClient.invalidateQueries({ queryKey: ["profile"] });
       queryClient.invalidateQueries({ queryKey: ["today-plan"] });
       patch({ submitted: true });
-      router.replace(isEdit ? "/(tabs)/profile" : "/(tabs)");
+      router.replace(isEdit ? returnTo as never : "/(tabs)" as never);
     }
   });
 
@@ -212,7 +212,7 @@ export function OnboardingScreen({ mode = "first-run" }: { mode?: "first-run" | 
 
         {errors.map((error) => <BodyText key={error} muted>{error.replaceAll("_", " ")}</BodyText>)}
         <View style={{ flexDirection: "row", gap: 10 }}>
-          <View style={{ flex: 1 }}><ActionButton label={isEdit && stepIndex === 0 ? "Cancel" : "Back"} disabled={submit.isPending} onPress={isEdit && stepIndex === 0 ? () => router.replace("/(tabs)/profile" as never) : back} /></View>
+          <View style={{ flex: 1 }}><ActionButton label={isEdit && stepIndex === 0 ? "Cancel" : "Back"} disabled={submit.isPending} onPress={isEdit && stepIndex === 0 ? () => router.replace(returnTo as never) : back} /></View>
           <View style={{ flex: 1 }}>
             {stepIndex < flowSteps.length - 1 ? (
               <ActionButton label="Continue" disabled={errors.length > 0} onPress={next} />

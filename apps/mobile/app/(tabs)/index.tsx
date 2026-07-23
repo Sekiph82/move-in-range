@@ -1,29 +1,18 @@
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { router } from "expo-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch, generateDailyPlan } from "../../src/api";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "../../src/api";
 import { ExerciseMediaFrame } from "../../src/features/shared/ExerciseMediaFrame";
 import { hasValidSameDayReadiness } from "../../src/features/readiness/readinessGate";
-import { readinessStartHref } from "../../src/features/readiness/startContext";
 import type { MovementPlan } from "../../src/features/shared/productTypes";
 import { useTheme } from "../../src/theme";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { TabScreenScroll } from "../../src/features/shared/ui";
 
 export default function HomeScreen() {
   const theme = useTheme();
-  const insets = useSafeAreaInsets();
-  const queryClient = useQueryClient();
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: () => apiFetch<any>("/readiness-checks/latest") });
   const plan = useQuery({ queryKey: ["today-plan"], queryFn: () => apiFetch<{ plan: MovementPlan | null }>("/plans/daily/today") });
   const calendar = useQuery({ queryKey: ["calendar"], queryFn: () => apiFetch<any>("/calendar") });
-  const createPlan = useMutation({
-    mutationFn: () => generateDailyPlan(15),
-    onSuccess: async (response: any) => {
-      if (response?.plan) queryClient.setQueryData(["today-plan"], { plan: response.plan });
-      await queryClient.invalidateQueries({ queryKey: ["today-plan"] });
-      await queryClient.refetchQueries({ queryKey: ["today-plan"], type: "active" });
-    }
-  });
   const safety = readiness.data?.item?.decision;
   const blocked = safety?.action === "BLOCK_AND_SHOW_SAFETY_MESSAGE";
   const items = plan.data?.plan?.items ?? [];
@@ -32,10 +21,10 @@ export default function HomeScreen() {
   const startLabel = "Check readiness & start";
   const startWorkout = () => {
     if (!plan.data?.plan?.id) return;
-    router.push(readinessStartHref({ source: "home", planId: plan.data.plan.id, sessionDate: plan.data.plan.date, sessionType: plan.data.plan.session_type, returnTo: "/(tabs)" }) as never);
+    router.push(`/workout-preview?planId=${encodeURIComponent(plan.data.plan.id)}&source=home&returnTo=/(tabs)` as never);
   };
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingHorizontal: 20, paddingTop: Math.max(20, insets.top + 12), paddingBottom: Math.max(32, insets.bottom + 88), gap: 16 }}>
+    <TabScreenScroll testID="home-tab-scroll">
       <View style={{ gap: 6 }}>
         <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 30, fontWeight: "900" }}>Home</Text>
         <Text style={{ color: theme.muted, fontSize: 16 }}>Move safely. Learn your range.</Text>
@@ -53,8 +42,8 @@ export default function HomeScreen() {
         <Pressable accessibilityRole="button" accessibilityLabel="Open readiness check" onPress={() => router.push("/readiness" as never)} style={{ minHeight: 48, flexGrow: 1, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface }}>
           <Text style={{ color: theme.primary, fontWeight: "800" }}>{hasValidSameDayReadiness(latestReadiness) ? "View readiness" : "Check readiness"}</Text>
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Generate daily plan" disabled={blocked || createPlan.isPending} onPress={() => createPlan.mutate()} style={{ minHeight: 48, flexGrow: 1, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface, opacity: blocked || createPlan.isPending ? 0.5 : 1 }}>
-          <Text style={{ color: theme.primary, fontWeight: "800" }}>{createPlan.isPending ? "Building plan..." : "Generate plan"}</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Generate daily plan" disabled={blocked} onPress={() => router.push("/generate-plan?scope=daily&source=home&returnTo=/(tabs)" as never)} style={{ minHeight: 48, flexGrow: 1, borderRadius: 8, borderColor: theme.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: "center", backgroundColor: theme.surface, opacity: blocked ? 0.5 : 1 }}>
+          <Text style={{ color: theme.primary, fontWeight: "800" }}>Generate plan</Text>
         </Pressable>
       </View>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 10 }}>
@@ -62,7 +51,6 @@ export default function HomeScreen() {
         <Text style={{ color: theme.text }}>Completed events: {(calendar.data?.items ?? []).filter((item: any) => item.status === "completed").length}</Text>
         <Text style={{ color: theme.muted }}>Recent activity and recovery days update as sessions are completed.</Text>
       </View>
-      {createPlan.error ? <Text style={{ color: theme.safety }}>{String(createPlan.error instanceof Error ? createPlan.error.message : "Action failed")}</Text> : null}
-    </ScrollView>
+    </TabScreenScroll>
   );
 }

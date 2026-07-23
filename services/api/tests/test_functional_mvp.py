@@ -104,6 +104,73 @@ def test_daily_generation_is_idempotent_and_timed(tmp_path, monkeypatch):
         assert len(plans) == 1
 
 
+def test_plan_lookup_and_session_preserve_canonical_item_ids(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "canonical-plan@example.test")
+    request = {"energy": 4, "sleep_quality": 3, "pain": 1, "available_minutes": 15, "stress": 2, "idempotency_key": "canonical-daily-1"}
+    generated = client.post("/api/v1/plans/daily/generate", headers=headers, json=request)
+    assert generated.status_code == 201, generated.text
+    plan = generated.json()["plan"]
+    preview = client.get(f"/api/v1/plans/{plan['id']}", headers=headers)
+    assert preview.status_code == 200, preview.text
+    preview_ids = [item["plan_item_id"] for item in preview.json()["plan"]["items"]]
+    session = client.post("/api/v1/sessions", headers=headers, json={"plan_id": plan["id"], "resume": False})
+    assert session.status_code == 201, session.text
+    payload = session.json()["session"]["payload"]
+    assert payload["plan"]["id"] == plan["id"]
+    assert payload["plan_item_ids"] == preview_ids
+
+
+def test_weekly_generation_is_idempotent_and_links_daily_plans(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "weekly-idempotent@example.test")
+    request = {"idempotency_key": "weekly-key-1"}
+    first = client.post("/api/v1/plans/weekly/generate", headers=headers, json=request)
+    second = client.post("/api/v1/plans/weekly/generate", headers=headers, json=request)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["plan"]["id"] == second.json()["plan"]["id"]
+    planned_days = [day for day in first.json()["plan"]["days"] if day["status"] == "planned"]
+    assert planned_days
+    assert all(day["daily_plan_id"] for day in planned_days)
+    child = client.get(f"/api/v1/plans/{planned_days[0]['daily_plan_id']}", headers=headers)
+    assert child.status_code == 200, child.text
+    assert child.json()["plan"]["id"] == planned_days[0]["daily_plan_id"]
+
+
+def test_general_information_patch_preserves_unowned_profile_fields(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "general-info@example.test")
+    profile = client.put(
+        "/api/v1/profile",
+        headers=headers,
+        json={
+            "preferred_name": "General User",
+            "language": "en",
+            "timezone": "UTC",
+            "conditions": ["legacy-condition"],
+            "equipment": ["chair"],
+            "goals": ["mobility"],
+            "activity_level": "starting",
+            "consent_accepted": True,
+            "onboarding_complete": True,
+        },
+    )
+    assert profile.status_code == 200, profile.text
+    patched = client.put(
+        "/api/v1/profile/general",
+        headers=headers,
+        json={"payload": {"preferred_name": "Updated User", "gender": "Male", "date_of_birth": "1982-04-20", "height_cm": 178, "weight_kg": 94, "conditions": ["legacy-condition", "Type 1 Diabetes"]}},
+    )
+    assert patched.status_code == 200, patched.text
+    data = patched.json()["profile"]
+    assert data["preferred_name"] == "Updated User"
+    assert data["equipment"] == ["chair"]
+    assert data["goals"] == ["mobility"]
+    assert data["conditions"] == ["legacy-condition", "Type 1 Diabetes"]
+    assert data["date_of_birth"] == "1982-04-20"
+
+
 def test_onboarding_completion_merges_only_editor_owned_profile_fields(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     headers = _register(client, "onboarding-edit@example.test")

@@ -3,7 +3,7 @@
 Use this checklist only when Android or iOS device tooling is genuinely available.
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 npm.cmd run api
 npm.cmd run mobile
 ```

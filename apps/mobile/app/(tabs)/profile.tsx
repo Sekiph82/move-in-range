@@ -1,9 +1,10 @@
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, router } from "expo-router";
 import { apiFetch, logoutUser } from "../../src/api";
 import { LOGIN_ROUTE } from "../../src/features/auth/sessionGate";
 import { clearExerciseCache } from "../../src/features/exercises/exerciseCache";
+import { TabScreenScroll } from "../../src/features/shared/ui";
 import { useAppLanguage } from "../../src/i18n/LanguageProvider";
 import { useTheme } from "../../src/theme";
 
@@ -25,11 +26,12 @@ export default function ProfileScreen() {
   });
   const item = profile.data?.profile;
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
+    <TabScreenScroll testID="profile-tab-scroll">
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Profile</Text>
       <Text style={{ color: theme.muted, fontSize: 16 }}>Account, movement profile, settings, privacy, and connected tools.</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
         {[
+          ["/general-info", "General Information"],
           ["/onboarding-edit", "Movement profile"],
           ["/settings", "Settings"],
           ["/integrations", "Integrations"],
@@ -68,6 +70,6 @@ export default function ProfileScreen() {
       </Pressable>
       <Text style={{ color: theme.muted }}>{t("settings.language")}: {language === "tr" ? t("settings.turkish") : t("settings.english")}</Text>
       {logout.error ? <Text style={{ color: theme.safety }}>{String(logout.error.message)}</Text> : null}
-    </ScrollView>
+    </TabScreenScroll>
   );
 }

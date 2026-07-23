@@ -22,7 +22,7 @@ Android emulator users should set `EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:8200
 Run from:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 copy .env.example .env
 npm.cmd install
 docker compose up -d postgres redis

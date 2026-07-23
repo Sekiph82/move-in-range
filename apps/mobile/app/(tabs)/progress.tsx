@@ -1,6 +1,7 @@
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../../src/api";
+import { TabScreenScroll } from "../../src/features/shared/ui";
 import { useTheme } from "../../src/theme";
 
 export default function ProgressTab() {
@@ -10,7 +11,7 @@ export default function ProgressTab() {
   const data = insights.data;
   const events = calendar.data?.items ?? [];
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
+    <TabScreenScroll testID="progress-tab-scroll">
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 30, fontWeight: "900" }}>Progress</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
         {[
@@ -35,6 +36,6 @@ export default function ProgressTab() {
         <Text style={{ color: theme.text }}>Status: {data?.glucose?.status ?? "INSUFFICIENT_DATA"}</Text>
         <Text style={{ color: theme.muted }}>{data?.glucose?.disclaimer ?? "This is not an insulin or treatment recommendation."}</Text>
       </View>
-    </ScrollView>
+    </TabScreenScroll>
   );
 }
