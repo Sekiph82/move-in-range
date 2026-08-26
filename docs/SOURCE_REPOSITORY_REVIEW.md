@@ -1,3 +1,15 @@
-# SOURCE REPOSITORY REVIEW
+# Source Repository Review
 
-Dataset: local exercises-dataset-main contains data/exercises.json, data/exercises.schema.json, 1,324 records, English/Turkish plus eight other instruction languages, image and GIF paths, media_id, and attribution fields. License file grants MIT terms for code/data structure but includes a media exception warning that cloning does not grant a media license. LogPress: reference app is React Native 0.80 with navigation stacks, custom bottom tab bar, AsyncStorage persistence, localization files including Turkish, workout tracking screens, exercise service, Redux slices, and theme context. Reused patterns: mobile-first tab navigation, local persistence/outbox concept, exercise cards, workout player state, localization and theme context. Rejected patterns: LogPress branding, package identifiers, Supabase/Firebase/Adapty/OpenAI configs, paywalls, leaderboards, copyrighted assets, and broad AI analysis flows.
+## Exercise Dataset
+
+Reviewed the local exercise dataset import source.
+
+- `data/exercises.json` contains 1,324 exercise records.
+- `data/exercises.schema.json` describes the JSON shape.
+- Instructions are available in 10 locales: English, Spanish, French, Hindi, Italian, Korean, Polish, Russian, Turkish, and Chinese.
+- Records include category/body part, equipment, target, secondary muscles, media ids, image/GIF paths, and attribution.
+- MoveInRange imports metadata and attribution but does not commit the full image/GIF library.
+
+## MVP Application Impact
+
+The functional MVP keeps MoveInRange medically conservative and API-backed. Exercise data is imported through the FastAPI importer into SQLAlchemy tables, while media is hosted outside Git and exposed through canonical HTTPS URLs.

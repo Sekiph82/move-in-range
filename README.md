@@ -1,53 +1,174 @@
 # MoveInRange
 
-**Health-aware movement planning**
-Move safely. Learn your range.
+Health-aware movement planning. Move safely. Learn your range.
 
-MoveInRange is a monorepo containing an Expo React Native mobile app, FastAPI backend, Next.js admin console, shared deterministic health-rule packages, exercise import tooling, CI, and safety documentation.
+MoveInRange is a monorepo with an Expo mobile MVP, FastAPI API, Next.js admin console, deterministic safety rules, and exercise dataset import tooling.
 
 MoveInRange does not diagnose, prescribe medication, calculate insulin doses, recommend insulin changes, override clinician restrictions, or provide emergency care.
 
-## Applications
+## Canonical Local URLs
 
-- apps/mobile: Expo Router mobile application with Today, Plan, Move, Insights, and Profile tabs.
-- apps/admin: Next.js App Router administration console for policies, exercise review, simulator, audit logs, and feature flags.
-- services/api: FastAPI backend with versioned /api/v1 routes, SQLAlchemy models, Alembic migration, importer, and tests.
-- packages/health-rules: deterministic medical safety, planning, eligibility, and diabetes context engines.
-- packages/exercise-domain: exercise normalization, classification, search, and substitution helpers.
+```env
+API_BASE_URL=http://localhost:8200
+ADMIN_BASE_URL=http://localhost:3200
+EXPO_PUBLIC_API_BASE_URL=http://localhost:8200
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8200
+```
+
+Android emulator users should set `EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:8200`. Expo Go on a physical device must use the Windows computer LAN IPv4 address, not `localhost`.
 
 ## Windows PowerShell Setup
 
-~~~powershell
-git clone https://github.com/Sekiph82/move-in-range.git
-cd move-in-range
-git checkout codex/initial-moveinrange-platform
+Run from:
+
+```powershell
+cd <repo-root>
 copy .env.example .env
 npm.cmd install
 docker compose up -d postgres redis
 npm.cmd run db:migrate
 npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
 npm.cmd run api
+```
+
+In separate terminals:
+
+```powershell
 npm.cmd run admin
 npm.cmd run mobile
-~~~
+```
 
-PowerShell may block npm.ps1; use npm.cmd.
+The API binds to `0.0.0.0:8200`. The admin app runs on `http://localhost:3200`.
 
-## Requirements
+The admin console signs in server-side with:
 
-- Node.js 20 or newer. This workspace was inspected with Node v24.14.0.
-- Python 3.12 or newer for the FastAPI service.
-- Docker Desktop for PostgreSQL and Redis.
-- Expo Go or an Android emulator for mobile development. iOS device builds are not available from Windows without Apple tooling.
+```env
+LOCAL_ADMIN_EMAIL=admin@moveinrange.local
+LOCAL_ADMIN_PASSWORD=MoveInRangeAdminLocal!
+```
 
-## Verification Commands
+Do not expose these values through `NEXT_PUBLIC_*`. Production must set a long random `AUTH_SECRET`, explicit `CORS_ORIGINS`, and real admin credentials.
 
-~~~powershell
+The normal admin flow is:
+
+```text
+http://localhost:3200/login
+```
+
+The admin app stores backend admin credentials in HttpOnly cookies through `/api/admin-session/login`; it does not auto-login with environment passwords inside the rendered page.
+
+## Dataset Import
+
+Relative path:
+
+```cmd
+npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
+```
+
+Absolute path template:
+
+```cmd
+npm.cmd run import:exercises -- "<dataset-root>\data\exercises.json"
+```
+
+Verified local import: 1,324 exercises, 0 failed rows, 10 instruction locales. Third-party media is not committed; metadata and attribution are retained.
+
+## Local Demo Account
+
+The mobile app can create or reuse a local development account automatically:
+
+```text
+demo@moveinrange.local
+MoveInRangeLocalDemo!
+```
+
+Use these only for local development.
+
+## Complete Product Platform
+
+The complete-product layer adds API-backed foundations for:
+
+- multi-step onboarding, consent history, identity, physiological context, health profile, goals, target muscles, capacity, and baseline assessments
+- advanced deterministic planning, all core program-variant families, quick-session mode, plan modification, calendar, progression, achievements, and feedback
+- workout media fallback, silhouette policy, Turkish/English voice cue scheduling, offline state helpers, and restart-safe workout state
+- diabetes context, delayed glucose checks, CGM/wearable/health-platform provider architecture, mock sync, and honest blocked states for real providers
+- notification preferences and jobs, privacy export/deletion jobs, caregiver relationships, professional relationships, camera mock analysis, and admin management views
+- staging/production environment templates, production Docker Compose, backup/restore documentation, and checklist validation
+
+External integrations are not claimed as live. Dexcom, FreeStyle Libre, Tidepool, Garmin, Fitbit, FCM, APNs, HealthKit, Health Connect, Bluetooth sensors, camera pose estimation, licensed media, and paid infrastructure activation require credentials, entitlements, hardware, licensing, or deployment authorization.
+
+## Verification
+
+```powershell
+npm.cmd install
+npm.cmd run format:check
 npm.cmd run lint
+npm.cmd run checklist:check
 npm.cmd run typecheck
 npm.cmd run test
 npm.cmd run build
+npm.cmd run db:migrate
 npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
-~~~
+ruff check services/api
+python -m pytest services/api/tests
+npm.cmd run security:check
+npm.cmd audit
+```
 
-See docs/TESTING.md and docs/DEPLOYMENT.md for details.
+Authoritative PostgreSQL validation uses a PostgreSQL database, not SQLite:
+
+```powershell
+docker compose down -v
+docker compose up -d postgres redis
+$env:DATABASE_URL="postgresql+psycopg://moveinrange:moveinrange@localhost:5432/moveinrange"
+$env:TEST_DATABASE_URL="postgresql+psycopg://moveinrange:moveinrange@localhost:5432/moveinrange"
+npm.cmd run db:migrate
+npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
+python -m pytest services/api/tests
+```
+
+CI uses the dedicated database `moveinrange_test` and the PostgreSQL integration test fails if `TEST_DATABASE_URL` points to SQLite.
+
+When Docker Desktop is available, run the release-candidate PostgreSQL/Redis validation script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\validate-postgres.ps1
+```
+
+Runtime readiness:
+
+```powershell
+Invoke-RestMethod http://localhost:8200/api/v1/health
+Invoke-RestMethod http://localhost:8200/api/v1/ready
+```
+
+## Applications
+
+- `apps/mobile`: Expo Router mobile MVP with API-backed profile, readiness, plans, exercise library, guided workout actions, glucose logging, insights, and offline outbox helpers.
+- `apps/admin`: Next.js admin console that reads policy, exercise, audit, and simulator data from the API when it is running.
+- `services/api`: FastAPI backend with local auth, SQLAlchemy persistence, exercise import, safety, planning, sessions, glucose, insights, and admin endpoints.
+
+## Release Candidate Notes
+
+- Access-token revocation uses PostgreSQL by default for staging/production, Redis only when explicitly selected, and refuses in-memory fallback in deployment.
+- Refresh tokens are tracked by DB-backed token family records; replay revokes the family.
+- SQLite remains a local fallback only. PostgreSQL is the authoritative CI path.
+- Real Android/emulator validation must use the URL guidance below; Metro startup alone is not a device pass.
+
+## Mobile Device URLs
+
+Android emulator:
+
+```powershell
+$env:EXPO_PUBLIC_API_BASE_URL="http://10.0.2.2:8200"
+npm.cmd run mobile
+```
+
+Physical device on Expo Go:
+
+```powershell
+$env:EXPO_PUBLIC_API_BASE_URL="http://<windows-lan-ip>:8200"
+npm.cmd run mobile
+```
+
+Allow Windows Firewall inbound access to port `8200`. `localhost` on a physical device points at the device, not the Windows API host.

@@ -9,6 +9,7 @@ node_modules/
 venv/
 __pycache__/
 .pytest_cache/
+.pytest-tmp/
 .ruff_cache/
 *.pyc
 
@@ -26,12 +27,16 @@ GoogleService-Info.plist
 
 # build outputs
 dist/
+**/dist/
 build/
 .next/
 .expo/
+.expo-web-export/
+apps/mobile/android/
 coverage/
 htmlcov/
 *.tsbuildinfo
+test-results/
 
 # databases and generated health exports
 *.sqlite
@@ -48,3 +53,6 @@ services/api/media/
 .DS_Store
 .idea/
 .vscode/
+.local/
+.vercel/
+supabase/.temp/

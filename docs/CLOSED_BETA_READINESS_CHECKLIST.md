@@ -1,0 +1,83 @@
+# Closed Beta Readiness Checklist
+
+Legend: `[ ] NOT STARTED`, `[~] IN PROGRESS`, `[x] COMPLETE`, `[!] BLOCKED`, `[-] NOT APPLICABLE`
+
+- [x] COMPLETE Authentication lifecycle
+  - route: `/auth/login`, `/auth/register`, `/auth/forgot-password`, `/auth/reset-password`, `/auth/session-expired`
+  - component: `AuthScreen`, `SessionGuard`, `api.ts`, backend auth routes
+  - user action: register, login, restore, refresh, logout, request reset, validate reset, reset password
+  - API endpoint: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `POST /auth/forgot-password`, `POST /auth/reset-password/validate`, `POST /auth/reset-password`
+  - persistence: `users`, `auth_refresh_tokens`, `password_reset_tokens`, SecureStore
+  - authorization: bearer access tokens, refresh family rotation, disabled user rejection
+  - validation: backend password strength and mobile zod schemas
+  - unit test: mobile auth schema and session gate tests
+  - integration test: `test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions`
+  - product E2E: `product web-compatible closed beta flow uses real mobile routes and API`
+  - admin E2E: Playwright invalid/valid login, logout, CSRF
+  - Android validation: blocked by missing SDK/emulator
+  - manual evidence: `docs/AUTH_LIFECYCLE_AUDIT.md`
+  - blocker: None for local auth lifecycle; production email provider remains external
+
+- [x] COMPLETE Structured onboarding steps 12-16
+  - route: `/onboarding`
+  - component: `OnboardingScreen`, `model.ts`
+  - user action: configure clinician restrictions, injury/surgery, mobility aids, activity, capacity
+  - API endpoint: `PUT /onboarding`, `GET /onboarding`
+  - persistence: versioned `onboarding_progress.draft_payload`, profile `health_payload.onboarding_draft`
+  - authorization: user bearer token via `require_user`
+  - validation: structured field validation for restriction review date, injury status, aid usage, sedentary hours, confidence
+  - unit test: onboarding metadata and validation tests
+  - integration test: product E2E onboarding save flow
+  - product E2E: structured steps 12-16 are saved in `tests/product-e2e.test.mjs`
+  - admin E2E: Not applicable for user onboarding
+  - Android validation: blocked by missing SDK/emulator
+  - manual evidence: `docs/ONBOARDING_STEP_ACCEPTANCE.md`
+  - blocker: None for structured fields
+
+- [x] COMPLETE Admin CRUD and mutation workflows
+  - route: `/users`, `/users/[id]`, `/exercises/[id]`, `/policies`, `/policies/[id]`, `/privacy-jobs`, `/notifications`, `/integrations`
+  - component: admin pages, `api/admin-session/mutate`
+  - user action: search, enable, disable, role update, edit exercise Turkish copy, add safety tag, publish/unpublish, create/edit/approve/publish/rollback policy, process privacy job, retry notification, disable integration
+  - API endpoint: admin PATCH/POST endpoints for users, exercises, policies, privacy jobs, notifications, integrations
+  - persistence: users, exercise localizations/tags/metadata, policies/approvals, privacy jobs, notification jobs, provider connections, audit logs
+  - authorization: role-checked admin bearer token and CSRF checked Next mutation proxy
+  - validation: action allow-lists, role allow-lists, unsupported action rejection
+  - unit test: admin route inventory and backend CRUD endpoint guard
+  - integration test: backend admin role tests
+  - product E2E: Not applicable
+  - admin E2E: Playwright mutation flow in `tests/browser-e2e.test.mjs`
+  - Android validation: Not applicable
+  - manual evidence: Playwright screenshots under ignored `test-results/acceptance`
+  - blocker: Separate human role-switch E2E is represented through super-admin role permissions in local beta
+
+- [x] COMPLETE Product E2E authoritative path
+  - route: real mobile route files and API-backed product endpoints
+  - component: mobile route inventory plus backend product endpoints
+  - user action: register, protected route denial, onboarding, readiness, daily plan, plan modification, workout pause/resume/complete, feedback, diabetes, calendar, privacy export, logout
+  - API endpoint: product endpoint chain in `tests/product-e2e.test.mjs`
+  - persistence: users, onboarding, profile, readiness, plans, sessions, feedback, glucose, diabetes context, privacy export jobs
+  - authorization: bearer token for all protected API calls
+  - validation: API status assertions and route file assertions
+  - unit test: route inventory tests
+  - integration test: product E2E against live API
+  - product E2E: `npm run e2e:product`
+  - admin E2E: Not applicable
+  - Android validation: blocked by missing SDK/emulator
+  - manual evidence: Docker test profile runs product E2E with zero skips
+  - blocker: Expo browser rendering harness remains blocked; this is a web-compatible API acceptance path, not native runtime validation
+
+- [!] BLOCKED Android runtime validation
+  - route: native Android app runtime
+  - component: Expo Android configuration
+  - user action: build/install/run on emulator or device
+  - API endpoint: API available at port 8200
+  - persistence: SecureStore/native device storage
+  - authorization: same local auth lifecycle
+  - validation: Android tooling discovery
+  - unit test: token storage fallback tests
+  - integration test: Docker API tests
+  - product E2E: web-compatible API path only
+  - admin E2E: Not applicable
+  - Android validation: blocked
+  - manual evidence: `adb`, `emulator`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, common SDK paths missing
+  - blocker: Android SDK/emulator/device absent; no large SDK image downloaded without authorization

@@ -1,0 +1,157 @@
+# Release Rehearsal Checklist
+
+Status key: `[x] COMPLETE`, `[!] BLOCKED`, `[-] NOT APPLICABLE`.
+
+- [x] COMPLETE RBAC operation correction
+  - code evidence: `services/api/app/routes.py`, `services/api/app/security.py`, `apps/admin/app/api/admin-session/mutate/route.ts`
+  - role: all admin roles
+  - API endpoint: `/api/v1/admin/users/{id}`, `/api/v1/admin/exercises/{id}/translation`, `/api/v1/admin/exercises/{id}/metadata`, `/api/v1/admin/exercises/{id}/safety`, `/api/v1/admin/exercises/{id}/substitutions`, `/api/v1/admin/exercises/{id}/publish`, `/api/v1/admin/policies/{version}/{action}`, `/api/v1/admin/integrations/{id}/{action}`, `/api/v1/admin/notifications/{id}/{action}`
+  - UI route: `/users`, `/exercises`, `/policies`, `/integrations`, `/notifications`
+  - persisted result: audit logs for successful and denied sensitive operations; policy actor ids and timestamps; exercise translation/safety/publication audit records
+  - unit test: `test_release_rehearsal_admin_rbac_matrix_and_separation`, `test_exercise_admin_operations_are_split_by_role_and_payload`
+  - PostgreSQL integration test: Docker `python -m pytest services/api/tests` with PostgreSQL service healthy
+  - browser E2E: `Playwright admin acceptance performs login, navigation, screenshots, logout, and CSRF rejection`
+  - Docker result: `docker compose --profile test run --rm tests` passed
+  - Android artifact evidence: not applicable to admin RBAC
+  - blocker: none
+  - go/no-go result: GO
+
+- [x] COMPLETE Production configuration guards
+  - code evidence: `services/api/app/settings.py`, `.env.example`
+  - role: platform operator
+  - API endpoint: application startup settings validation
+  - UI route: not applicable
+  - persisted result: unsafe production configuration fails before serving traffic
+  - unit test: `test_production_rejects_default_secret_and_wildcard_cors`
+  - PostgreSQL integration test: staging/production revocation guard requires durable PostgreSQL or explicitly configured Redis, with zero-cost staging using PostgreSQL
+  - browser E2E: not applicable
+  - Docker result: API health requires PostgreSQL revocation and PostgreSQL rate limiting; Redis remains optional local integration coverage
+  - Android artifact evidence: environment URL review documented in Android handoff
+  - blocker: none
+  - go/no-go result: GO
+
+- [x] COMPLETE PostgreSQL full dataset acceptance
+  - code evidence: `scripts/import-exercises.mjs`, `services/api/app/services/exercise_importer.py`
+  - role: platform operator
+  - API endpoint: `/api/v1/exercises`, `/api/v1/exercises/{id}`, `/api/v1/exercises/{id}/favorite`, `/api/v1/exercises/{id}/substitutions`
+  - UI route: `/exercises`
+  - persisted result: clean PostgreSQL database `moveinrange_dataset_20260719130413` stored 1324 exercises and 13240 localizations after two imports
+  - unit test: fixture importer tests remain in `test_functional_mvp.py` and `test_release_candidate_api_e2e.py`
+  - PostgreSQL integration test: full dataset imported twice against PostgreSQL, duplicate ids 0, failed rows 0, locales 10
+  - browser E2E: product exercise route smoke covered in product UI journey
+  - Docker result: PostgreSQL service healthy during import
+  - Android artifact evidence: not applicable
+  - blocker: none
+  - go/no-go result: GO
+
+- [x] COMPLETE Product UI E2E decomposition
+  - code evidence: `tests/product-ui-e2e.test.mjs`
+  - role: beta user
+  - API endpoint: auth, profile, readiness, plans, sessions, diabetes, privacy endpoints
+  - UI route: `/auth/*`, `/onboarding`, `/readiness`, `/daily-plan`, `/weekly-plan`, `/monthly-plan`, `/workout`, `/diabetes`, `/calendar`, `/privacy`, `/settings`
+  - persisted result: isolated users and API records per scenario
+  - unit test: `tests/mobile.test.mjs`
+  - PostgreSQL integration test: Docker test profile runs product E2E against API backed by PostgreSQL
+  - browser E2E: password reset, auth guards, readiness/plans, workout/feedback, diabetes/calendar, privacy/logout, full smoke journey
+  - Docker result: Node test suite 44 passed, 0 skipped
+  - Android artifact evidence: product web compatible export succeeded; native device validation blocked separately
+  - blocker: none for product web
+  - go/no-go result: GO
+
+- [x] COMPLETE Privacy export and deletion security
+  - code evidence: `services/api/app/routes.py`, `services/api/tests/test_complete_product_platform.py`
+  - role: beta user, support, super_admin
+  - API endpoint: `/api/v1/privacy/export-jobs`, `/api/v1/privacy/exports/{id}/download`, `/api/v1/privacy/deletion-jobs`, `/api/v1/admin/privacy-jobs/{kind}/{id}/{action}`
+  - UI route: `/privacy`, `/privacy-jobs`
+  - persisted result: export archive checksum; deletion job completion; selected health records removed; sessions revoked
+  - unit test: export secret-exclusion and deletion session-revocation assertions
+  - PostgreSQL integration test: Docker pytest uses PostgreSQL profile
+  - browser E2E: product privacy logout scenario and admin privacy processing scenario
+  - Docker result: full Docker suite passed
+  - Android artifact evidence: manual native privacy validation remains in handoff
+  - blocker: native device evidence not available
+  - go/no-go result: GO for web/API, GO WITH MANUAL CONDITION for Android
+
+- [x] COMPLETE Password reset security
+  - code evidence: `services/api/app/routes.py`, `services/api/app/email.py`, `services/api/app/settings.py`
+  - role: beta user
+  - API endpoint: `/api/v1/auth/forgot-password`, `/api/v1/auth/reset-password/validate`, `/api/v1/auth/reset-password`
+  - UI route: `/auth/forgot-password`, `/auth/reset-password`, `/auth/reset-password-success`
+  - persisted result: hashed reset token only; used token rejected; old sessions invalidated
+  - unit test: `test_password_reset_lifecycle_is_secure_single_use_and_revokes_sessions`
+  - PostgreSQL integration test: Docker pytest
+  - browser E2E: `product password reset sends an SMTP email and completes through visible reset screens`
+  - Docker result: Mailpit healthy, password-reset E2E passed, 0 skipped
+  - Android artifact evidence: reset-link scheme is `moveinrange`; native deep-link manual validation pending
+  - blocker: native device link validation unavailable
+  - go/no-go result: GO for web/API, GO WITH MANUAL CONDITION for Android
+
+- [x] COMPLETE Migration rehearsal
+  - code evidence: `services/api/alembic/versions/20260719_0009_release_rehearsal_rbac.py`
+  - role: platform operator
+  - API endpoint: startup migration service
+  - UI route: not applicable
+  - persisted result: disposable database `moveinrange_migration_rehearsal_20260719130819` reached `20260719_0009 (head)` after upgrade, downgrade one revision, upgrade
+  - unit test: migration script `npm run db:migrate`
+  - PostgreSQL integration test: migration rehearsal ran against PostgreSQL
+  - browser E2E: not applicable
+  - Docker result: `migrate` service exited 0 and test profile migration checks passed
+  - Android artifact evidence: not applicable
+  - blocker: none
+  - go/no-go result: GO
+
+- [x] COMPLETE Backup and restore rehearsal
+  - code evidence: Docker Postgres `pg_dump`, `psql`, `docs/BACKUP_RESTORE_REHEARSAL.md`
+  - role: platform operator
+  - API endpoint: health check after restore is documented
+  - UI route: not applicable
+  - persisted result: restore database `moveinrange_restore_20260719130849` matched source counts
+  - unit test: not applicable
+  - PostgreSQL integration test: source and restore counts matched for exercises, localizations, users
+  - browser E2E: not applicable
+  - Docker result: PostgreSQL service healthy; backup SHA-256 recorded; local backup file deleted
+  - Android artifact evidence: not applicable
+  - blocker: none
+  - go/no-go result: GO
+
+- [x] COMPLETE Android installable preview artifact
+  - code evidence: `apps/mobile/app.json`, `apps/mobile/package.json`, `apps/mobile/eas.json`, `docs/EAS_ANDROID_BUNDLE_ROOT_CAUSE.md`, Expo export/prebuild output
+  - role: Android beta tester
+  - API endpoint: environment target reviewed; preview/prod must not embed localhost
+  - UI route: native app routes generated by Expo Router
+  - persisted result: failed EAS build `f19b94bf-f646-499f-86dd-258a50d516b6` used repository root and `expo/AppEntry.js`; successful retry `ffa5f78e-d11b-4a42-8bf5-58e6d14e0b2f` built from `apps/mobile` at commit `9c1af90aac880f672280eca72faaa49b98f075f2`
+  - unit test: mobile typecheck and product web E2E passed
+  - PostgreSQL integration test: backend dependencies passed
+  - browser E2E: product web E2E passed
+  - Docker result: Docker suite passed
+  - Android artifact evidence: APK URL `https://expo.dev/artifacts/eas/wzoDpl-wBfzaOCmCl2cTJcUUfQZN1W83bf3UjQKDlYQ.apk`; local download `.local/eas-artifacts/MoveInRange-preview-ffa5f78e.apk`; size `83013799` bytes; SHA-256 `32B03B42E89A09255699AA32F9CC938230703AEBD92376FFE5559CBBC296D34E`; package `com.moveinrange.app`; profile `preview`; distribution `INTERNAL`; root-cause validation only
+  - blocker: none for root-cause installable artifact; fully working phone beta APK requires Vercel API URL in EAS preview env and a rebuild
+  - go/no-go result: GO for native artifact generation, BLOCKED EXTERNAL for fully working phone beta APK
+
+- [!] BLOCKED Native Android manual device acceptance
+  - code evidence: `docs/ANDROID_BETA_BUILD_HANDOFF.md`
+  - role: Android beta tester
+  - API endpoint: local emulator API must use host address, not `localhost` inside device
+  - UI route: all product routes
+  - persisted result: no device run evidence
+  - unit test: not a substitute for device validation
+  - PostgreSQL integration test: backend ready for device validation
+  - browser E2E: web-compatible coverage passed
+  - Docker result: local backend stack healthy
+  - Android artifact evidence: EAS preview APK `ffa5f78e-d11b-4a42-8bf5-58e6d14e0b2f` is available but not installed locally
+  - blocker: Android SDK/emulator/device unavailable; a new preview APK must be rebuilt after a real Vercel API URL is configured in EAS
+  - go/no-go result: BLOCKED EXTERNAL
+
+- [x] COMPLETE Dependency review
+  - code evidence: `package-lock.json`, `docs/RELEASE_SECURITY_REVIEW.md`
+  - role: maintainer
+  - API endpoint: not applicable
+  - UI route: not applicable
+  - persisted result: no dependency changes applied
+  - unit test: `npm audit --audit-level=high` passed
+  - PostgreSQL integration test: not applicable
+  - browser E2E: not applicable
+  - Docker result: full suite passed; moderate advisories documented
+  - Android artifact evidence: Expo upgrade path documented
+  - blocker: safe non-breaking fix unavailable for current moderate advisories
+  - go/no-go result: GO WITH MANUAL CONDITION
