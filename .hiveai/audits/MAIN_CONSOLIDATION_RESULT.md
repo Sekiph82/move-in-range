@@ -6,6 +6,7 @@ Branch: `codex/main-consolidation`
 Base: `origin/main` at `ccc91af`
 Integrated branch: `origin/codex/release-rehearsal` at `26ec74e`
 Merge commit: `1acca94`
+Pushed control-system commit: `0decf16`
 
 ## Branches and PRs Inspected
 
@@ -67,4 +68,4 @@ Modified: `.hiveai/PROJECT_DASHBOARD.md`, `apps/mobile/package.json`, and `packa
 
 ## Residual Risk and Decision
 
-The branch is structurally consolidated and host-validated but is not fully green because Docker-dependent tests were unavailable and the dependency audit has high findings. Therefore no automatic merge was performed and no consolidation PR was opened in this run. Push the branch for review only after those gates are rerun and resolved; preserve all stacked branches and PRs meanwhile.
+The branch is structurally consolidated and host-validated but is not fully green because Docker-dependent tests were unavailable and the dependency audit has high findings. The branch was pushed as `origin/codex/main-consolidation` at `0decf16`; no automatic merge was performed and no consolidation PR was opened in this run. Open the one consolidation PR only after those gates are rerun and resolved; preserve all stacked branches and PRs meanwhile.
