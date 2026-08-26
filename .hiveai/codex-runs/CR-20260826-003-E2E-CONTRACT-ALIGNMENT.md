@@ -173,3 +173,57 @@ performed in this prompt.
 - Next required action: ChatGPT audit layer must independently inspect this CR and write the
   authoritative post-run audit under the audit-layer path. Do not mark merge readiness DONE from
   this Codex run.
+
+## Repeat execution evidence (2026-08-26)
+
+This repeat run re-read the active protocol files and prompt before execution. The repository was
+clean at the start, the active branch was `codex/main-consolidation`, and the starting revision was
+`cd50dd989940c612ba9656c800c59a3df2f8a483`. No product source or test source changed during this
+repeat run; this section is the only file update from the repeat run.
+
+### Docker validation
+
+- Docker Desktop was started for validation and server version `29.5.3` became available.
+- `docker compose config -q`: passed.
+- `docker compose --profile test config -q`: passed.
+- `docker compose --profile test build`: passed.
+- `docker compose up -d --build`: passed.
+- `docker compose ps`: all six runtime services were `running (healthy)`:
+  `postgres`, `redis`, `mailpit`, `api`, `admin`, and `product-web`.
+- HTTP health checks returned `200`: API `/api/v1/health`, API `/api/v1/ready`, admin `/login`,
+  product web `/healthz`, and Mailpit `/api/v1/info`.
+- `docker compose logs --no-color --tail=80 postgres redis mailpit api admin product-web`:
+  normal startup/readiness output only; no service errors were observed.
+- `docker compose --profile test run --rm tests`: application and test assertions passed, but the
+  aggregate container exited `1` at the final dependency audit gate. Node tests were `75 passed,
+  0 failed, 0 skipped`; API pytest was `36 passed, 0 failed, 0 skipped`; format, lint, checklist,
+  typecheck, Ruff, migrations, exercise import, workspace build, and security scan passed.
+- The final `npm audit --audit-level=high` gate reported `24 vulnerabilities` (`14 high`,
+  `10 moderate`). No force remediation or major framework upgrade was performed because that is
+  outside this prompt and would change the Expo dependency line.
+- `docker compose --profile test down --remove-orphans`: passed. Docker Desktop was stopped after
+  validation; the final `docker info` exit was `1`, confirming it was no longer running.
+
+### Host validation
+
+- `npm run format:check`, `npm run lint`, `npm run checklist:check`, `npm run typecheck`,
+  `npm run build`, `npm run mobile:web:build`, and `npm run security:check`: passed.
+- `npm test`: `75 total`, `65 passed`, `0 failed`, `10 skipped`.
+- The ten host Node skips were legitimate live-environment precondition skips: two admin browser
+  scenarios require `ADMIN_E2E_BASE_URL`; seven product API/web scenarios require the documented
+  `PRODUCT_WEB_BASE_URL`, `API_BASE_URL`, and/or `MAILPIT_BASE_URL`; and the full product web UI
+  scenario requires `PRODUCT_WEB_BASE_URL`. Docker executed these scenarios in the test profile.
+- `ruff check services/api`: passed.
+- `python -m pytest services/api/tests -q`: `34 passed`, `0 failed`, `2 skipped`. The two skips were
+  legitimate host infrastructure preconditions: `test_postgres_migrated_mvp_workflow` requires
+  `TEST_DATABASE_URL`, and `test_redis_revocation_store_when_available` requires `REDIS_URL`.
+  Docker executed both with service URLs supplied.
+- `npx expo-doctor`: `18/18 checks passed`; iOS and Android web exports both passed. The export
+  warning about `.pytest-tmp` permissions did not fail the builds, and generated repeat export
+  directories were removed afterward.
+
+### Artifact boundary
+
+Only this matching CR run log was updated for the repeat execution. No authoritative audit,
+`TASKS.md`, dashboard, prompt pointer, or handoff file was written. The separate ChatGPT audit
+layer remains the next required action.
