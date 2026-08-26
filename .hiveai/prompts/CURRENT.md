@@ -1,13 +1,13 @@
 # Active Prompt Pointer
 
-Active prompt: `P-20260826-005-DEPENDENCY-MAJOR-MODERNIZATION`
+Active prompt: `P-20260826-006-FINAL-CONSOLIDATION-READINESS`
 
 Source:
-`.hiveai/prompts/P-20260826-005-DEPENDENCY-MAJOR-MODERNIZATION.md`
+`.hiveai/prompts/P-20260826-006-FINAL-CONSOLIDATION-READINESS.md`
 
 Expected Codex run log:
-`.hiveai/codex-runs/CR-20260826-005-DEPENDENCY-MAJOR-MODERNIZATION.md`
+`.hiveai/codex-runs/CR-20260826-006-FINAL-CONSOLIDATION-READINESS.md`
 
 Authoritative post-run audit will be written separately by the ChatGPT audit layer after the Codex run is committed and GitHub Actions evidence is reviewed.
 
-Scope: finish `MR-SEC-001` for real by deliberately modernizing the Expo/Metro and Next/PostCSS dependency families until the GitHub Security workflow passes with zero high/critical npm advisories, while preserving current MoveInRange product behavior and rerunning full host/Docker/native-export regression validation.
+Scope: perform final consolidation-readiness review now that stale E2E contracts are aligned and GitHub CI/Security are green; confirm ancestry, migrations, Docker/native exports, safety behavior, and prepare one consolidation PR to `main` without merging it.
