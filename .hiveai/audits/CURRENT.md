@@ -1,17 +1,19 @@
 # Current Audit Pointer
 
-Active audit: `A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
+Active authoritative audit: `A-20260826-003-CHATGPT-POSTRUN-AUDIT`
 
 Source:
-`.hiveai/audits/A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
+`.hiveai/audits/A-20260826-003-CHATGPT-POSTRUN-AUDIT.md`
 
-Related prompt:
-`.hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
+Audited Codex run:
+`.hiveai/codex-runs/CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
 
-Historical consolidation artifacts remain available:
+Current authoritative state:
 
-- `.hiveai/audits/BRANCH_CONSOLIDATION_AUDIT.md`
-- `.hiveai/audits/MAIN_CONSOLIDATION_RESULT.md`
-- `.hiveai/codex-runs/CR-20260826-001.md`
+- branch/file/control-system facts independently reviewed from GitHub;
+- stale E2E contracts are independently confirmed in current test source;
+- Codex local Docker/test/npm-audit claims remain execution evidence but are not independently reproduced by the ChatGPT audit layer;
+- `MR-AUDIT-001`, `MR-VAL-001`, and `MR-CONS-001` must not advance to final DONE/merge readiness from a same-run Codex-authored CR/A pair;
+- next active prompt is `P-20260826-003-E2E-CONTRACT-ALIGNMENT`.
 
-Current authoritative state: H!veAI/control-system structure, Docker Compose configuration, service health, migration lineage, and infrastructure-backed integration paths are verified by fresh run `CR-20260826-002`. Docker Node validation reports `70 passed, 5 failed, 0 skipped`; host Node validation reports `65 passed, 0 failed, 10 legitimate precondition skips`. The current npm baseline is `24 vulnerabilities (10 moderate, 14 high)`. Consolidation merge readiness remains `INCOMPLETE` because the five product E2E contract failures and dependency advisories remain unresolved.
+Historical audits remain append-only.

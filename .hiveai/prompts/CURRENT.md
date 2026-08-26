@@ -1,16 +1,13 @@
 # Active Prompt Pointer
 
-Active prompt: `P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
+Active prompt: `P-20260826-003-E2E-CONTRACT-ALIGNMENT`
 
 Source:
-`.hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
+`.hiveai/prompts/P-20260826-003-E2E-CONTRACT-ALIGNMENT.md`
 
 Expected Codex run log:
-`.hiveai/codex-runs/CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
+`.hiveai/codex-runs/CR-20260826-003-E2E-CONTRACT-ALIGNMENT.md`
 
-Expected independent audit:
-`.hiveai/audits/A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
+Authoritative post-run audit will be written separately by the ChatGPT audit layer after the Codex run is committed and reviewed.
 
-Scope: independently revalidate prior Codex claims, start Docker Desktop when required instead of accepting a stopped engine as a blocker, run the full repository/Docker/security validation, reconcile evidence, and update the canonical task ledger.
-
-Historical PASS/BLOCKED statements are not current proof. The active prompt requires fresh execution evidence before task status may advance.
+Scope: align stale product E2E contracts with the canonical seven-step onboarding and mandatory readiness-first workout flow, rerun full host/Docker validation, and record exact execution evidence without force dependency upgrades.
