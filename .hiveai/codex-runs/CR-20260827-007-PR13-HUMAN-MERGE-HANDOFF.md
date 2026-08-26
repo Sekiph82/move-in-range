@@ -48,10 +48,10 @@ to the explicitly requested P007 prompt and did not execute P008.
 - Base branch: `main`
 - Exact base SHA: `ccc91af1bafbe65a99cc9913a4989adbf8b4be4b`
 - Head branch: `codex/main-consolidation`
-- Exact head SHA reviewed: `97ba82dea2de6570c14ff81a68472ee6c086b4a0`
+- Exact head SHA reviewed before this CR commit: `97ba82dea2de6570c14ff81a68472ee6c086b4a0`
 - Mergeable: `MERGEABLE`
 - Merge state: `CLEAN`
-- Commit count: `100`
+- Commit count before this CR commit: `107`
 - Changed files: `337`
 - Additions/deletions: `31568` / `4482`
 - Reviews: none
@@ -83,6 +83,21 @@ were not used as evidence.
 
 The CI job initialized its configured containers before running the validation
 steps. Both exact-head required checks completed successfully.
+
+## Post-CR-Push Verification
+
+Pushing this CR changed the PR head to
+`37dd418e4bf76dc1ad142b27f9fb06f79dff6e4a`. The post-push PR snapshot remained
+`OPEN`, non-draft, `MERGEABLE`, and `CLEAN`, with `108` commits and `338`
+changed files. The post-push exact-head checks also passed:
+
+- CI run [33018964839](https://github.com/Sekiph82/move-in-range/actions/runs/33018964839), job `98344257493`: `success`
+- Security run [33018964830](https://github.com/Sekiph82/move-in-range/actions/runs/33018964830), job `98344257651`: `success`
+
+The post-push CI repeated the configured container initialization, JavaScript
+checks/tests, migration and import checks, Ruff/API pytest checks, and build.
+The post-push Security run passed `npm audit --audit-level=high`, the repository
+security check, and `pip-audit`.
 
 ## Changed-File Review
 
