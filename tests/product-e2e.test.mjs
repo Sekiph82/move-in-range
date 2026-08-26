@@ -6,13 +6,13 @@ const baseUrl = (process.env.PRODUCT_E2E_API_BASE_URL ?? process.env.API_BASE_UR
 const routeFiles = [
   "apps/mobile/app/auth/register.tsx",
   "apps/mobile/app/onboarding.tsx",
-  "apps/mobile/app/readiness.tsx",
-  "apps/mobile/app/daily-plan.tsx",
+  "apps/mobile/app/(tabs)/readiness.tsx",
+  "apps/mobile/app/(tabs)/daily-plan.tsx",
   "apps/mobile/app/workout/[sessionId].tsx",
   "apps/mobile/app/workout/[sessionId]/feedback.tsx",
   "apps/mobile/app/diabetes.tsx",
   "apps/mobile/app/calendar.tsx",
-  "apps/mobile/app/privacy.tsx"
+  "apps/mobile/app/(tabs)/privacy.tsx"
 ];
 
 async function api(path, { token, method = "GET", body } = {}) {
