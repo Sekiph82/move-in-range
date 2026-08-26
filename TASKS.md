@@ -13,20 +13,32 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: none
 - source: consolidation prompt; AGENTS.md; origin/main H!veAI manifest
 - acceptance criteria: TASKS.md, .hiveai/INDEX.md, prompts, audits, handoff, decisions, and codex-runs protocol exist; manifest remains pointer-only; historical runs are append-only.
-- evidence: canonical ledger, pointer manifest, protocol index, current prompt/audit pointers, handoff, decisions, and run-log protocol exist in the repository; control-system existence independently verified by audit A-20260826-002.
+- evidence: canonical ledger, pointer manifest, protocol index, current prompt/audit pointers, handoff, decisions, and run-log protocol exist in the repository; control-system existence independently verified by ChatGPT audit A-20260826-003.
 - Codex run reference: CR-20260826-001
 
 ## MR-AUDIT-001
 
 - milestone: project-control
 - title: Independently revalidate consolidation, Docker, dependency audit, and test claims
-- status: DONE
+- status: REVIEW
 - priority: P0
 - dependencies: MR-CTRL-001; MR-CONS-001
-- source: .hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md; .hiveai/audits/A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md
-- acceptance criteria: prior PASS/BLOCKED claims are rerun on the current branch; Docker Desktop is actively started when needed; Compose test profile is executed; npm audit baseline is reconciled; test/build/export/migration claims are independently classified with current evidence; a matching CR/A artifact pair is saved.
-- evidence: fresh run CR-20260826-002 independently reran host and Docker validation, started Docker Desktop when needed, verified Compose health and PostgreSQL/Redis integration execution with zero Docker skips, reconciled npm audit to 24 vulnerabilities (10 moderate, 14 high), and saved the matching run/audit artifacts. Five product E2E contract failures and the dependency gate remain explicitly recorded as blockers.
+- source: .hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md; .hiveai/audits/A-20260826-003-CHATGPT-POSTRUN-AUDIT.md
+- acceptance criteria: prior PASS/BLOCKED claims are rerun on the current branch; Docker Desktop is actively started when needed; Compose test profile is executed; npm audit baseline is reconciled; test/build/export/migration claims are independently classified with current evidence; Codex execution evidence is separately reviewed by the ChatGPT audit layer.
+- evidence: CR-20260826-002 records fresh local/Docker execution claims. ChatGPT audit A-20260826-003 independently verified branch/file/control-system facts and stale E2E contracts, but local Docker/test/npm-audit results are not independently reproducible through the GitHub connector and therefore remain execution evidence rather than separately reproduced proof.
 - Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
+
+## MR-E2E-001
+
+- milestone: consolidation
+- title: Align stale product E2E contracts with current canonical onboarding and readiness flow
+- status: READY
+- priority: P0
+- dependencies: MR-AUDIT-001
+- source: .hiveai/prompts/P-20260826-003-E2E-CONTRACT-ALIGNMENT.md; .hiveai/audits/A-20260826-003-CHATGPT-POSTRUN-AUDIT.md
+- acceptance criteria: E2E tests use the current 7-step onboarding contract, current readiness entry points, and mandatory readiness-before-new-workout flow; no safety requirement is weakened; full Docker Node suite is rerun with 0 stale-contract failures; matching CR evidence is produced and then separately audited by ChatGPT.
+- evidence: current test source independently confirms stale 22-step onboarding expectations, obsolete readiness labels, and a direct session-start assumption inconsistent with the current readiness gate.
+- Codex run reference: pending
 
 ## MR-CONS-001
 
@@ -37,7 +49,7 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: MR-CTRL-001
 - source: .hiveai/audits/BRANCH_CONSOLIDATION_AUDIT.md; PRs #1-#11; current origin/main and origin/codex/release-rehearsal
 - acceptance criteria: codex/main-consolidation is based on latest main, contains the full verified release-rehearsal content, preserves the main manifest, has no unresolved conflicts, and is pushed without merging into main.
-- evidence: repository history and consolidation artifacts show main plus release-rehearsal content with the H!veAI manifest retained; fresh CR-20260826-002 verifies Compose startup and service health, but five product E2E contract failures and dependency advisories keep merge readiness incomplete.
+- evidence: repository history and consolidation artifacts show main plus release-rehearsal content with the H!veAI manifest retained; ChatGPT audit A-20260826-003 confirms the current branch still requires E2E contract repair and separate security review before merge readiness.
 - Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-VAL-001
@@ -46,10 +58,10 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - title: Validate the consolidated repository and migration lineage
 - status: REVIEW
 - priority: P0
-- dependencies: MR-CONS-001; MR-AUDIT-001
-- source: active independent-audit prompt; docs/RELEASE_REHEARSAL_CHECKLIST.md; docs/STACKED_PR_MERGE_PLAN.md
-- acceptance criteria: applicable format, lint, checklist, typecheck, Node, build, mobile web, ruff, pytest, security, Docker/test profile, Expo, export, migration, and deployment checks are rerun and current evidence is recorded with exact blockers.
-- evidence: fresh CR-20260826-002 records format, lint, checklist, typecheck, build, mobile web build, ruff, migration, Expo, export, security, and Docker infrastructure checks as verified; Docker Node is 70 passed/5 failed/0 skipped, host Node is 65 passed/0 failed/10 legitimate precondition skips, and host API pytest is 34 passed/2 legitimate precondition skips.
+- dependencies: MR-CONS-001; MR-AUDIT-001; MR-E2E-001
+- source: active H!veAI prompts; docs/RELEASE_REHEARSAL_CHECKLIST.md; docs/STACKED_PR_MERGE_PLAN.md
+- acceptance criteria: applicable format, lint, checklist, typecheck, Node, build, mobile web, ruff, pytest, security, Docker/test profile, Expo, export, migration, and deployment checks are rerun and current evidence is recorded with exact blockers; final advancement requires separate ChatGPT post-run audit.
+- evidence: CR-20260826-002 records broad host/Docker validation claims, but the same run reports five Docker Node product E2E failures. ChatGPT audit A-20260826-003 independently confirms stale E2E expectations remain in current test source.
 - Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-DEV-001
@@ -71,9 +83,9 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - status: REVIEW
 - priority: P1
 - dependencies: MR-AUDIT-001; compatible Next/Expo upgrade plan; native regression environment
-- source: docs/RELEASE_SECURITY_REVIEW.md; docs/CLOSED_BETA_FINAL_SECURITY_REVIEW.md; active independent-audit prompt
-- acceptance criteria: establish one authoritative current npm audit baseline; then apply compatible dependency updates without force-breaking the Expo/Next graph, make the high audit gate pass, and rerun affected web/native/build checks.
-- evidence: fresh host and Docker `npm audit` plus `npm audit --audit-level=high` both report 24 vulnerabilities (10 moderate, 14 high); remediation remains blocked pending a compatible non-force dependency plan.
+- source: docs/RELEASE_SECURITY_REVIEW.md; docs/CLOSED_BETA_FINAL_SECURITY_REVIEW.md; active H!veAI audit trail
+- acceptance criteria: establish one authoritative current npm audit baseline; then apply compatible dependency updates without force-breaking the Expo/Next graph, make the high audit gate pass, and rerun affected web/native/build checks; final result is separately audited.
+- evidence: CR-20260826-002 reports 24 vulnerabilities (10 moderate, 14 high), but ChatGPT audit A-20260826-003 classifies that exact count as an unverified local execution claim until independently corroborated; no force remediation is authorized.
 - Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-DEPLOY-001
