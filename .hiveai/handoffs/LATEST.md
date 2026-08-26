@@ -1,30 +1,33 @@
 # Latest Handoff
 
-Run: `CR-20260826-001`
+Run: `CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
 Branch: `codex/main-consolidation`
-Base: `origin/main` at `ccc91af`
-Integrated head: `origin/codex/release-rehearsal` at `26ec74e`
-Merge commit: `1acca94`
-Pushed head: `0decf16`
+Starting revision: `c08014027d09f4a7cd4a379e16830e0c23fe32b4`
+Prompt: `P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
+Audit: `A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
 
 ## Current State
 
-- The 11-PR feature chain is linear and release-rehearsal contains all earlier branch heads.
-- The current main H!veAI dashboard manifest is preserved in the consolidation result.
-- No old branches or PRs were deleted, closed, or retargeted.
-- Consolidated-branch host validation is green for format, lint, checklist, typecheck, Node tests, admin build, mobile web build, ruff, API pytest, security check, Expo Doctor, iOS export, Android export, and migration checks.
+- Docker Desktop was started for this run and the Linux engine became ready.
+- Compose config/build/startup passed; Postgres, Redis, Mailpit, API, admin, and product web were healthy.
+- Docker Node suite: `75 tests`, `70 passed`, `5 failed`, `0 skipped`.
+- Docker API pytest: `36 passed`, `0 skipped`; Postgres and Redis integrations executed.
+- Host Node suite: `75 tests`, `65 passed`, `0 failed`, `10 legitimate precondition skips`.
+- Host API pytest: `34 passed`, `2 legitimate precondition skips` for absent host service URLs.
+- Current npm audit baseline: `24 vulnerabilities (10 moderate, 14 high)`.
+- Format, lint, checklist, typecheck, builds, exports, migrations, security scan, and Expo Doctor passed.
+- API Uvicorn access logging was disabled in the image so sensitive one-time query values are not emitted in routine access logs.
+- Compose containers were cleaned after evidence capture and Docker Desktop was stopped because this run started it.
 
-## External Blockers
+## Blockers
 
-- Native Android/iPhone acceptance needs the relevant device or emulator and a reachable API.
-- Dependency modernization is pending because the current audit reports high advisories and `npm audit fix` reaches `ERESOLVE`.
-- A fully working public phone beta requires a real Vercel API URL and a rebuilt EAS artifact.
-- Docker validation is blocked: the Docker CLI is installed but `desktop-linux` cannot connect to `dockerDesktopLinuxEngine`.
-- `npm audit --audit-level=high` is blocked by 14 high and 10 moderate current advisories after the Expo patch update; force-breaking upgrades were not applied.
+- Five Docker product E2E failures are stale contract mismatches: the current onboarding flow is seven steps, readiness uses current labels, and workout start is readiness-gated.
+- The npm high-severity audit gate remains blocked by 14 high advisories and 10 moderate advisories. No force upgrade was applied.
+- Native device, real provider, and public deployment validation remain unverified.
 
 ## Next Actions
 
-1. Start Docker Desktop's Linux engine and rerun `docker compose build`, `docker compose up -d --build`, and the test profile.
-2. Resolve dependency advisories in a dedicated modernization change with native regression coverage.
-3. Review the consolidation branch; open a PR only after the blocked gates are green.
-4. Await manual approval; do not merge or clean up stacked branches in this run.
+1. Resolve or formally update the five product E2E contracts after confirming the canonical product flow.
+2. Plan a compatible dependency modernization change and rerun all affected gates.
+3. Complete native/provider/deployment acceptance separately.
+4. Open a consolidation PR only after the blocked validation gates are green; do not merge or clean up stacked PRs in this run.

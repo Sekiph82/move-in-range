@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir -r /app/services/api/requirements.txt
 COPY services/api /app/services/api
 ENV PYTHONPATH=/app/services/api
 EXPOSE 8200
-CMD ["python", "-m", "uvicorn", "app.main:app", "--app-dir", "services/api", "--host", "0.0.0.0", "--port", "8200"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--app-dir", "services/api", "--host", "0.0.0.0", "--port", "8200", "--no-access-log"]

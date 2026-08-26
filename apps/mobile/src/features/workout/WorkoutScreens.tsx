@@ -325,6 +325,7 @@ export function WorkoutScreen({ id }: { id?: string }) {
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingHorizontal: 18, paddingTop: Math.max(18, insets.top + 10), paddingBottom: Math.max(24, insets.bottom + 28), gap: 14 }}>
+      <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Workout player</Text>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <Pressable accessibilityRole="button" accessibilityLabel={t("workout.exit")} onPress={confirmExit} style={{ minHeight: 44, minWidth: 64, borderRadius: 8, borderColor: theme.border, borderWidth: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.surface }}>
           <Text style={{ color: theme.safety, fontWeight: "900" }}>{t("workout.exit")}</Text>

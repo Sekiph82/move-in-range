@@ -161,7 +161,7 @@ export function OnboardingScreen({ mode = "first-run", returnTo = "/(tabs)/profi
 
   return (
     <View style={{ gap: 14 }}>
-      <Panel title={isEdit ? `Edit onboarding - ${stepIndex + 1} of ${flowSteps.length}` : `${stepIndex + 1} of ${flowSteps.length}`}>
+      <Panel title={isEdit ? `Edit onboarding - Step ${stepIndex + 1} of ${flowSteps.length}` : `Step ${stepIndex + 1} of ${flowSteps.length}`}>
         <View style={{ height: 8, borderRadius: 999, backgroundColor: theme.border, overflow: "hidden" }}>
           <View style={{ height: 8, width: `${((stepIndex + 1) / flowSteps.length) * 100}%`, backgroundColor: theme.primary }} />
         </View>

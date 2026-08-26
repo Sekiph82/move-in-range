@@ -20,13 +20,13 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 
 - milestone: project-control
 - title: Independently revalidate consolidation, Docker, dependency audit, and test claims
-- status: READY
+- status: DONE
 - priority: P0
 - dependencies: MR-CTRL-001; MR-CONS-001
 - source: .hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md; .hiveai/audits/A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md
 - acceptance criteria: prior PASS/BLOCKED claims are rerun on the current branch; Docker Desktop is actively started when needed; Compose test profile is executed; npm audit baseline is reconciled; test/build/export/migration claims are independently classified with current evidence; a matching CR/A artifact pair is saved.
-- evidence: repository-level baseline audit exists, but runtime validation remains pending; no PR-triggered workflow run was found for consolidation commit 0decf16.
-- Codex run reference: expected CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
+- evidence: fresh run CR-20260826-002 independently reran host and Docker validation, started Docker Desktop when needed, verified Compose health and PostgreSQL/Redis integration execution with zero Docker skips, reconciled npm audit to 24 vulnerabilities (10 moderate, 14 high), and saved the matching run/audit artifacts. Five product E2E contract failures and the dependency gate remain explicitly recorded as blockers.
+- Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-CONS-001
 
@@ -37,8 +37,8 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: MR-CTRL-001
 - source: .hiveai/audits/BRANCH_CONSOLIDATION_AUDIT.md; PRs #1-#11; current origin/main and origin/codex/release-rehearsal
 - acceptance criteria: codex/main-consolidation is based on latest main, contains the full verified release-rehearsal content, preserves the main manifest, has no unresolved conflicts, and is pushed without merging into main.
-- evidence: repository history and consolidation artifacts show main plus release-rehearsal content with the H!veAI manifest retained; runtime merge-readiness still depends on MR-AUDIT-001.
-- Codex run reference: CR-20260826-001
+- evidence: repository history and consolidation artifacts show main plus release-rehearsal content with the H!veAI manifest retained; fresh CR-20260826-002 verifies Compose startup and service health, but five product E2E contract failures and dependency advisories keep merge readiness incomplete.
+- Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-VAL-001
 
@@ -49,8 +49,8 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: MR-CONS-001; MR-AUDIT-001
 - source: active independent-audit prompt; docs/RELEASE_REHEARSAL_CHECKLIST.md; docs/STACKED_PR_MERGE_PLAN.md
 - acceptance criteria: applicable format, lint, checklist, typecheck, Node, build, mobile web, ruff, pytest, security, Docker/test profile, Expo, export, migration, and deployment checks are rerun and current evidence is recorded with exact blockers.
-- evidence: historical CR-20260826-001 claims are not authoritative current proof; A-20260826-002 marks runtime/build/test/Docker/npm-audit results UNVERIFIED pending fresh execution.
-- Codex run reference: CR-20260826-001; successor expected CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
+- evidence: fresh CR-20260826-002 records format, lint, checklist, typecheck, build, mobile web build, ruff, migration, Expo, export, security, and Docker infrastructure checks as verified; Docker Node is 70 passed/5 failed/0 skipped, host Node is 65 passed/0 failed/10 legitimate precondition skips, and host API pytest is 34 passed/2 legitimate precondition skips.
+- Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-DEV-001
 
@@ -73,8 +73,8 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: MR-AUDIT-001; compatible Next/Expo upgrade plan; native regression environment
 - source: docs/RELEASE_SECURITY_REVIEW.md; docs/CLOSED_BETA_FINAL_SECURITY_REVIEW.md; active independent-audit prompt
 - acceptance criteria: establish one authoritative current npm audit baseline; then apply compatible dependency updates without force-breaking the Expo/Next graph, make the high audit gate pass, and rerun affected web/native/build checks.
-- evidence: historical vulnerability counts conflict across CR-20260826-001 and TASKS evidence; A-20260826-002 declares the current baseline UNVERIFIED until npm audit is rerun.
-- Codex run reference: CR-20260826-001; successor expected CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
+- evidence: fresh host and Docker `npm audit` plus `npm audit --audit-level=high` both report 24 vulnerabilities (10 moderate, 14 high); remediation remains blocked pending a compatible non-force dependency plan.
+- Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-DEPLOY-001
 

@@ -30,7 +30,7 @@ export default function HomeScreen() {
         <Text style={{ color: theme.muted, fontSize: 16 }}>Move safely. Learn your range.</Text>
       </View>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 12 }}>
-        <Text style={{ color: theme.text, fontSize: 20, fontWeight: "900" }}>Today</Text>
+        <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 20, fontWeight: "900" }}>Today</Text>
         {first ? <ExerciseMediaFrame media={first.media} title={first.name} section={first.section} target={first.equipment} size="large" /> : <ExerciseMediaFrame title="Generate today's session" section="Readiness" target="Movement preview" size="large" />}
         <Text style={{ color: theme.text, fontWeight: "800" }}>{plan.data?.plan ? `${plan.data.plan.total_minutes ?? plan.data.plan.total_duration ?? 0} minutes - ${items.length} movements` : "No session planned yet"}</Text>
         <Text style={{ color: theme.muted }}>{safety?.explanation ?? "Complete readiness before movement."}</Text>

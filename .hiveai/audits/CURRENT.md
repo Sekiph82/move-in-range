@@ -14,4 +14,4 @@ Historical consolidation artifacts remain available:
 - `.hiveai/audits/MAIN_CONSOLIDATION_RESULT.md`
 - `.hiveai/codex-runs/CR-20260826-001.md`
 
-Current authoritative state: H!veAI/control-system structure is verified at repository level. Historical runtime/build/test/Docker/npm-audit claims are not accepted as current proof until the active independent-validation prompt re-runs them. Docker status is `UNVERIFIED`, not permanently blocked merely because the engine was previously stopped. Consolidation merge readiness remains `INCOMPLETE` pending fresh evidence.
+Current authoritative state: H!veAI/control-system structure, Docker Compose configuration, service health, migration lineage, and infrastructure-backed integration paths are verified by fresh run `CR-20260826-002`. Docker Node validation reports `70 passed, 5 failed, 0 skipped`; host Node validation reports `65 passed, 0 failed, 10 legitimate precondition skips`. The current npm baseline is `24 vulnerabilities (10 moderate, 14 high)`. Consolidation merge readiness remains `INCOMPLETE` because the five product E2E contract failures and dependency advisories remain unresolved.

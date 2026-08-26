@@ -61,7 +61,7 @@ async function waitForResetTokenFromMailpit(email) {
       if (!id || !haystack.includes(email)) continue;
       const detail = await mailpitJson(`/api/v1/message/${encodeURIComponent(id)}`);
       const body = `${detail.Text ?? detail.text ?? ""}\n${detail.HTML ?? detail.html ?? ""}`;
-      const match = body.match(/\/auth\/reset-password\?token=([A-Za-z0-9_-]+)/);
+      const match = body.match(/\/auth\/reset-password(?:[?#])token=([A-Za-z0-9_-]+)/);
       if (match) return match[1];
     }
     await new Promise((resolve) => setTimeout(resolve, 500));

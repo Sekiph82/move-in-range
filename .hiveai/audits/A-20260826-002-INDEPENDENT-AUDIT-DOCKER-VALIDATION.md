@@ -1,84 +1,54 @@
-# Audit A-20260826-002 — Independent Audit + Docker Validation
+# Audit A-20260826-002 - Independent Audit + Docker Validation
 
 Audit ID: `A-20260826-002`
 Related prompt: `P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
-Related historical Codex run reviewed: `CR-20260826-001`
+Fresh run: `CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
 Repository: `Sekiph82/move-in-range`
 Branch audited: `codex/main-consolidation`
 
-## Audit policy
+## Independent verification policy
 
-This audit does not accept historical Codex PASS/BLOCKED statements as authoritative proof. Historical run logs are treated as claims that must be independently revalidated by a fresh execution run.
+Historical Codex logs were treated as claims only. The current run re-executed the applicable commands and classified each gate from fresh exit codes and output. No main merge, stacked PR closure, branch deletion, or force dependency upgrade was performed.
 
-## Repository-level facts independently verified from GitHub
+## Current findings
 
-- `codex/main-consolidation` exists and contains the H!veAI control system.
-- The canonical task ledger exists at `TASKS.md`.
-- `.hiveai/INDEX.md`, `.hiveai/PROJECT_DASHBOARD.md`, prompt/audit pointers, handoff, decisions, and codex-runs protocol exist on the consolidation branch.
-- The historical run `CR-20260826-001` exists in `.hiveai/codex-runs/`.
-- The consolidation result audit exists at `.hiveai/audits/MAIN_CONSOLIDATION_RESULT.md`.
-- The current consolidation branch was built from main plus release-rehearsal according to repository history and the recorded consolidation artifacts.
-- No pull-request-triggered GitHub Actions workflow run was found for consolidation commit `0decf16`, so CI cannot independently corroborate the historical local test claims for that commit.
+- H!veAI control-system structure and canonical task ledger: `VERIFIED`.
+- Docker Desktop was started by this run after the initial unavailable `docker info`; Docker server `29.5.3` became ready within the allowed window.
+- `docker compose config -q`, test-profile config, test-profile build, full build, and `docker compose up -d --build`: exit `0`.
+- Postgres, Redis, Mailpit, API, admin, and product web were healthy; migration jobs completed successfully. Health endpoints returned HTTP `200`.
+- Docker API pytest: `36 passed`, `0 skipped`; PostgreSQL and Redis integration paths executed against Compose dependencies.
+- Docker Node suite: `75 tests`, `70 passed`, `5 failed`, `0 skipped`.
+- Host Node suite: `75 tests`, `65 passed`, `0 failed`, `10 legitimate environment skips`.
+- Host API pytest: `34 passed`, `2 legitimate environment skips` for absent host PostgreSQL/Redis URLs.
+- Format, lint, checklist, typecheck, builds, mobile web build, ruff, security scan, Expo Doctor, iOS export, Android export, clean migration, Alembic single-head, and Docker fixture import passed.
+- Fresh `npm audit` and `npm audit --audit-level=high` both report `24 vulnerabilities (10 moderate, 14 high)` and exit `1`.
 
-## Historical claims reviewed but NOT accepted as current proof
+## Claimed versus observed
 
-The following claims from `CR-20260826-001` remain `UNVERIFIED` until re-run by the new execution prompt:
+| Historical claim | Fresh observation | Classification |
+| --- | --- | --- |
+| Host validation green | All listed host gates pass, but host E2E/API preconditions skip 12 tests | `VERIFIED_WITH_LIMITS` |
+| Docker validation blocked | Docker Desktop started and Compose stack became healthy | `REGRESSED` historical claim; Docker is available |
+| Dependency count from prior artifacts | Both current audit commands report 24 total, 10 moderate, 14 high | `VERIFIED` current baseline |
+| Full product acceptance green | Five stale product E2E contract assertions fail in Docker | `BLOCKED` |
 
-- format check PASS
-- lint PASS
-- checklist PASS
-- typecheck PASS
-- Node test counts
-- admin build PASS
-- mobile web build PASS
-- ruff PASS
-- API pytest counts
-- security scan PASS
-- Expo Doctor PASS
-- iOS export PASS
-- Android export PASS
-- clean database migration PASS
-- Docker validation BLOCKED
-- npm audit vulnerability counts
+The five Docker failures are recorded exactly in `CR-20260826-002`: one static readiness-route expectation, two expectations for `Step 1 of 22` while the current flow renders `Step 1 of 7`, one obsolete readiness button label, and one session-POST timing/flow expectation that does not follow the current readiness gate. A direct container Playwright diagnostic confirmed registration, profile, product routes, and API network requests work in the Compose environment.
 
-## Discrepancy detected
+Host skips are legitimate only for missing host E2E URLs, `TEST_DATABASE_URL`, and `REDIS_URL`; their Docker equivalents ran with zero skips where Compose supplied the dependencies. No skip was used to hide a Docker failure.
 
-The historical run and `TASKS.md` do not agree on the dependency-audit baseline. One artifact records a larger high/moderate count while the task ledger records a different high/moderate count. Until `npm audit` and `npm audit --audit-level=high` are run again on the current branch, neither historical number is authoritative.
+## Security observation
 
-## Docker finding
+Pre-hardening API access logs exposed that query strings could contain one-time token values. No token value was copied into any artifact. The API Docker command was hardened with Uvicorn `--no-access-log`, the image was rebuilt, and post-hardening logs were inspected without request access-log query values. This is a logging-hardening change only; it does not claim provider or production deployment validation.
 
-The historical run classified Docker validation as blocked because the Docker Linux engine was unavailable. That is not sufficient evidence for a permanent blocker. The new prompt explicitly requires Codex to:
+## Required follow-up
 
-1. run `docker info`;
-2. attempt to start Docker Desktop if needed;
-3. wait for the Linux engine;
-4. run the full Compose test profile;
-5. stop Docker Desktop afterward only if this run started it.
-
-Therefore current Docker status is `UNVERIFIED`, not accepted as permanently BLOCKED.
-
-## Current authoritative status
-
-- H!veAI control-system existence: `VERIFIED`
-- Canonical TASKS ledger existence: `VERIFIED`
-- Historical test claims: `UNVERIFIED`
-- Docker full validation: `UNVERIFIED`
-- Current dependency-audit baseline: `UNVERIFIED`
-- Consolidation readiness for main merge: `INCOMPLETE`
-
-## Required next evidence
-
-Run prompt `P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md` and produce:
-
-- `.hiveai/codex-runs/CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
-- an updated version of this audit or a successor audit with actual rerun evidence
-- current Docker lifecycle evidence
-- current npm audit baseline
-- current test counts and skips
-- updated `TASKS.md`
+1. Decide whether the current seven-step onboarding/readiness UI is canonical, then update stale product E2E contracts or the product flow accordingly.
+2. Remediate the current 14 high and 10 moderate npm advisories through a compatible, separately reviewed dependency change; do not use `npm audit fix --force`.
+3. Re-run the complete Docker and host gates after those changes.
+4. Complete native device, provider, and public deployment validation separately; none is claimed here.
 
 ## Verdict
 
-`INCOMPLETE`
+`VERIFIED_WITH_BLOCKERS`
 
-Reason: repository/control-system structure is independently verified, but runtime/build/test/Docker/security claims from the prior Codex run have not yet been independently re-executed against the current branch.
+Docker and infrastructure validation is verified, but full product acceptance remains incomplete because of five product E2E contract failures and the dependency security gate remains blocked by 14 high advisories. Consolidation is not ready for a main merge.
