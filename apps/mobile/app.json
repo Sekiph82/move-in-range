@@ -6,14 +6,23 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "plugins": ["expo-router", "expo-secure-store", "expo-localization", "expo-notifications"],
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-localization",
+      "expo-notifications",
+      "expo-sqlite"
+    ],
     "ios": {
       "bundleIdentifier": "com.moveinrange.app",
       "supportsTablet": true
     },
     "android": {
       "package": "com.moveinrange.app",
-      "permissions": ["INTERNET", "VIBRATE"],
+      "permissions": [
+        "INTERNET",
+        "VIBRATE"
+      ],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",

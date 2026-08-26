@@ -11,6 +11,6 @@
     "@moveinrange/shared-types": "0.1.0"
   },
   "devDependencies": {
-    "typescript": "~5.8.3"
+    "typescript": "~6.0.3"
   }
 }

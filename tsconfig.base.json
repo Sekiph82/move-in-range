@@ -10,6 +10,7 @@
     "resolveJsonModule": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "paths": {
       "@moveinrange/shared-types": ["packages/shared-types/src/index.ts"],
       "@moveinrange/health-rules": ["packages/health-rules/src/index.ts"],
