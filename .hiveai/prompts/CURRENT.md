@@ -4,16 +4,16 @@ Authoritative repository branch:
 `https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation`
 
 Active prompt:
-`P-20260826-006-FINAL-CONSOLIDATION-READINESS`
+`P-20260827-007-PR13-HUMAN-MERGE-HANDOFF`
 
 Active prompt URL:
-`https://github.com/Sekiph82/move-in-range/blob/codex/main-consolidation/.hiveai/prompts/P-20260826-006-FINAL-CONSOLIDATION-READINESS.md`
+`https://github.com/Sekiph82/move-in-range/blob/codex/main-consolidation/.hiveai/prompts/P-20260827-007-PR13-HUMAN-MERGE-HANDOFF.md`
 
 Prompt history directory:
 `https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation/.hiveai/prompts`
 
 Expected Codex run log:
-`CR-20260826-006-FINAL-CONSOLIDATION-READINESS.md`
+`CR-20260827-007-PR13-HUMAN-MERGE-HANDOFF.md`
 
 Codex run destination:
 `https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation/.hiveai/codex-runs`
@@ -21,6 +21,9 @@ Codex run destination:
 Authoritative ChatGPT post-run audit destination:
 `https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation/.hiveai/audits`
 
-Codex must read the GitHub control plane first, then execute the active prompt in its local checkout, commit/push the matching CR log to `codex/main-consolidation`, and must not author the authoritative ChatGPT audit.
+Target PR:
+`https://github.com/Sekiph82/move-in-range/pull/13`
 
-Scope: perform final consolidation-readiness validation, confirm CI/Security/Docker/migration/native-export gates, verify no regression from framework modernization, and prepare/open one reviewable consolidation PR to `main` only if all automated gates are green. Do not merge `main`.
+Codex must read the GitHub control plane first, then use its local checkout only for execution/inspection. It must commit and push the matching CR log to `codex/main-consolidation` and must not author the authoritative ChatGPT audit.
+
+Scope: prepare the final human merge handoff for PR #13, independently re-read the current PR metadata and exact-head GitHub CI/Security evidence, inspect consolidation boundaries, record residual risks, and classify the PR for explicit human merge approval. Do not merge `main` and do not close/delete historical PRs or branches.
