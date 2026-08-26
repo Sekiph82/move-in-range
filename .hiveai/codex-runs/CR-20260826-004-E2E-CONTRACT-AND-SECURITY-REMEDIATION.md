@@ -153,3 +153,7 @@ run. No authoritative audit, current pointer, dashboard, task ledger, or handoff
 - This CR does not claim consolidation or merge readiness.
 - Next action: the separate ChatGPT audit layer must inspect this CR and current GitHub state, classify
   the local runtime and Python evidence independently, and write the authoritative post-run audit.
+
+## Commit record
+
+- Dependency remediation and this CR were committed as `97459cd8fc5f1db59f4fc551b8c437c3b5ff22cc`.
