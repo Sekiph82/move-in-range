@@ -5,7 +5,7 @@ No Android emulator or physical device was used during this implementation pass.
 ## Before Testing
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 copy .env.example .env
 npm.cmd install
 docker compose up -d postgres redis

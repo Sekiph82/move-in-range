@@ -1,12 +1,45 @@
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
+import { Platform } from "react-native";
+import { getApiHostname, normalizeApiBaseUrl } from "./apiConfig";
+import { ONBOARDING_LOCAL_DRAFT_KEY } from "./features/onboarding/model";
 import { TokenStore } from "./storage/tokenStore";
 
-const configuredBase = process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:8200";
-export const API_BASE_URL = configuredBase.replace(/\/api\/v1\/?$/, "");
+export type ApiErrorKind = "offline" | "timeout" | "unavailable" | "auth" | "invalid_credentials" | "validation";
+
+export class ApiClientError extends Error {
+  readonly kind: ApiErrorKind;
+  readonly statusCode?: number;
+
+  constructor(kind: ApiErrorKind, message: string, statusCode?: number) {
+    super(message);
+    this.name = "ApiClientError";
+    this.kind = kind;
+    this.statusCode = statusCode;
+  }
+}
+
+export const API_TIMEOUTS = {
+  health: 8000,
+  read: 8000,
+  mutation: 12000,
+  planGeneration: 30000,
+  longOperation: 45000
+} as const;
+
+type ApiFetchConfig = {
+  timeoutMs?: number;
+};
+
+const expoConfiguredBase = typeof Constants.expoConfig?.extra?.apiBaseUrl === "string" ? Constants.expoConfig.extra.apiBaseUrl : undefined;
+const configuredBase = process.env.EXPO_PUBLIC_API_BASE_URL || expoConfiguredBase;
+export const API_BASE_URL = normalizeApiBaseUrl(configuredBase);
 const API_V1 = `${API_BASE_URL}/api/v1`;
 const demoEmail = "demo@moveinrange.local";
 const demoPassword = "MoveInRangeLocalDemo!";
 const enableDemoLogin = process.env.EXPO_PUBLIC_ENABLE_DEMO_LOGIN === "true";
+const environmentName = process.env.EXPO_PUBLIC_MOVEINRANGE_ENV ?? process.env.NODE_ENV ?? "development";
 
 const memoryTokens: Record<string, string | null> = { access_token: null, refresh_token: null };
 const webTokenPrefix = "mir_";
@@ -78,7 +111,7 @@ function normalizeApiError(statusCode: number, payload: string) {
   let code = "";
   try {
     const parsed = JSON.parse(payload) as { detail?: { code?: string } | string; code?: string };
-    code = typeof parsed.detail === "object" ? parsed.detail.code ?? "" : parsed.code ?? "";
+    code = typeof parsed.detail === "object" ? parsed.detail.code ?? "" : typeof parsed.detail === "string" ? parsed.detail : parsed.code ?? "";
   } catch {
     code = payload;
   }
@@ -94,7 +127,9 @@ function normalizeApiError(statusCode: number, payload: string) {
     session_expired: "Your session expired. Sign in again to continue.",
     weak_password: "Use at least 10 characters with uppercase, lowercase, and a number."
   };
-  return messages[code] ?? (statusCode >= 500 ? "MoveInRange is temporarily unavailable." : "The request could not be completed.");
+  const message = messages[code] ?? (statusCode >= 500 ? "MoveInRange is temporarily unavailable." : "The request could not be completed.");
+  const kind: ApiErrorKind = code === "invalid_credentials" ? "invalid_credentials" : statusCode === 401 || statusCode === 403 ? "auth" : statusCode >= 500 ? "unavailable" : "validation";
+  return new ApiClientError(kind, message, statusCode);
 }
 
 function requireAuthTokenResponse(payload: unknown): AuthTokenResponse {
@@ -105,18 +140,58 @@ function requireAuthTokenResponse(payload: unknown): AuthTokenResponse {
   return value as AuthTokenResponse;
 }
 
-async function postJson(path: string, body: Record<string, unknown>) {
-  const response = await fetch(`${API_V1}${path}`, {
+async function postJson(path: string, body: Record<string, unknown>, config: ApiFetchConfig = {}) {
+  const response = await fetchWithTimeout(`${API_V1}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
-  }).catch(() => null);
-  if (!response) throw new Error("API unavailable. Check your connection and try again.");
+  }, config.timeoutMs ?? API_TIMEOUTS.mutation);
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(normalizeApiError(response.status, text));
+    throw normalizeApiError(response.status, text);
   }
   return response.json();
+}
+
+async function fetchWithTimeout(input: string, init: RequestInit = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new ApiClientError("timeout", "MoveInRange took too long to respond. Try again.");
+    }
+    throw new ApiClientError("offline", "We couldn't reach MoveInRange. Check your connection and try again.");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function probeApiHealth(timeoutMs = 5000) {
+  const response = await fetchWithTimeout(`${API_V1}/health`, { method: "GET" }, timeoutMs);
+  if (!response.ok) throw new ApiClientError("unavailable", "MoveInRange is temporarily unavailable.", response.status);
+  const payload = await response.json();
+  return { ok: payload?.status === "ok", payload };
+}
+
+export function getApiDiagnostics(connectivityStatus: "unknown" | "ok" | "failed" = "unknown") {
+  return {
+    apiHostname: getApiHostname(API_BASE_URL),
+    environmentName,
+    connectivityStatus,
+    apiBaseUrl: API_BASE_URL
+  };
+}
+
+export function logDevelopmentApiDiagnostics(connectivityStatus: "unknown" | "ok" | "failed" = "unknown") {
+  if (process.env.NODE_ENV === "production") return;
+  const diagnostics = getApiDiagnostics(connectivityStatus);
+  console.info("MoveInRange diagnostics", {
+    apiHostname: diagnostics.apiHostname,
+    environmentName: diagnostics.environmentName,
+    connectivityStatus: diagnostics.connectivityStatus
+  });
 }
 
 async function authTokenRequest(path: string, body: Record<string, unknown>) {
@@ -167,7 +242,7 @@ export async function getSessionSnapshot() {
   const token = await restoreSession();
   if (!token) return { hasSession: false, onboardingComplete: false };
   try {
-    const response = await fetch(`${API_V1}/profile`, { headers: { authorization: `Bearer ${token}` } });
+    const response = await fetchWithTimeout(`${API_V1}/profile`, { headers: { authorization: `Bearer ${token}` } });
     if (response.status === 401 || response.status === 403) {
       await tokenStore.clear();
       return { hasSession: false, onboardingComplete: false, sessionExpired: true };
@@ -183,12 +258,13 @@ export async function getSessionSnapshot() {
 export async function logoutUser() {
   const token = await tokenStore.loadAccessToken();
   if (token) {
-    await fetch(`${API_V1}/auth/logout`, {
+    await fetchWithTimeout(`${API_V1}/auth/logout`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}` }
     }).catch(() => null);
   }
   await tokenStore.clear();
+  await AsyncStorage.removeItem(ONBOARDING_LOCAL_DRAFT_KEY).catch(() => undefined);
 }
 
 export async function ensureLocalSession() {
@@ -198,13 +274,13 @@ export async function ensureLocalSession() {
     throw new Error("Please sign in before continuing.");
   }
   const credentials = { email: demoEmail, password: demoPassword };
-  let response = await fetch(`${API_V1}/auth/login`, {
+  let response = await fetchWithTimeout(`${API_V1}/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(credentials)
   });
   if (response.status === 401) {
-    response = await fetch(`${API_V1}/auth/register`, {
+    response = await fetchWithTimeout(`${API_V1}/auth/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(credentials)
@@ -216,19 +292,21 @@ export async function ensureLocalSession() {
   return payload.access_token as string;
 }
 
-export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(path: string, options: RequestInit = {}, config: ApiFetchConfig = {}): Promise<T> {
   const token = await ensureLocalSession();
-  const response = await fetch(`${API_V1}${path}`, {
+  const method = String(options.method ?? "GET").toUpperCase();
+  const defaultTimeout = method === "GET" || method === "HEAD" ? API_TIMEOUTS.read : API_TIMEOUTS.mutation;
+  const response = await fetchWithTimeout(`${API_V1}${path}`, {
     ...options,
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${token}`,
       ...(options.headers ?? {})
     }
-  });
+  }, config.timeoutMs ?? defaultTimeout);
   if (response.status === 401) {
     await tokenStore.clear();
-    throw new Error("Session expired. Please retry after signing in again.");
+    throw new ApiClientError("auth", "Session expired. Please retry after signing in again.", response.status);
   }
   if (!response.ok) {
     const body = await response.text();
@@ -252,29 +330,8 @@ export const defaultReadiness = {
   stress: 2
 };
 
-export function saveProfile(language: "en" | "tr") {
-  return apiFetch("/profile", {
-    method: "PUT",
-    body: JSON.stringify({
-      preferred_name: "Aylin",
-      country: language === "tr" ? "TR" : "US",
-      timezone: language === "tr" ? "Europe/Istanbul" : "America/New_York",
-      language,
-      conditions: ["type_2_diabetes", "knee_sensitivity"],
-      sensitivities: { knee: { bilateral: true, severity: 3 } },
-      equipment: ["body weight", "chair"],
-      preferred_training_days: ["Mon", "Wed", "Fri"],
-      goals: ["mobility", "consistency"],
-      medical_clearance: "cleared",
-      consent_accepted: true,
-      diabetes: { enabled: true, unit: "mg/dL", exercise_glucose_logging: true },
-      onboarding_complete: true
-    })
-  });
-}
-
 export function saveOnboardingStep(step: string, payload: Record<string, unknown>, completed = true, language: "en" | "tr" = "en") {
-  return apiFetch("/onboarding", { method: "PUT", body: JSON.stringify({ step, payload, completed, language }) });
+  return apiFetch("/onboarding", { method: "PUT", body: JSON.stringify({ step, payload, completed, language }) }, { timeoutMs: API_TIMEOUTS.mutation });
 }
 
 export function recordConsent(consent_type: string, granted: boolean, evidence: Record<string, unknown> = {}) {
@@ -289,36 +346,76 @@ export function saveGoalsTargets(goals: string[], target_focuses: string[], natu
   return apiFetch("/goals-targets", { method: "PUT", body: JSON.stringify({ goals, target_focuses, natural_request }) });
 }
 
-export function submitReadiness() {
-  return apiFetch("/readiness-checks", { method: "POST", body: JSON.stringify(defaultReadiness) });
+export function submitReadiness(payload: Partial<typeof defaultReadiness> = {}) {
+  return apiFetch("/readiness-checks", { method: "POST", body: JSON.stringify({ ...defaultReadiness, ...payload }) }, { timeoutMs: API_TIMEOUTS.mutation });
 }
 
-export function generateDailyPlan(minutes = 15) {
-  return apiFetch("/plans/daily/generate", { method: "POST", body: JSON.stringify({ ...defaultReadiness, available_minutes: minutes }) });
+export function createGenerationRequestId(scope = "daily") {
+  return `${scope}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function generateWeeklyPlan() {
-  return apiFetch("/plans/weekly/generate", { method: "POST", body: JSON.stringify({}) });
+export type GenerationScope = "daily" | "weekly" | "monthly" | "replace-day";
+
+export type PlanGenerationRequest = {
+  scope?: GenerationScope;
+  feeling?: string;
+  focus?: string;
+  secondary_focus?: string | null;
+  available_minutes?: number;
+  desired_session_type?: string;
+  selected_date?: string | null;
+  existing_plan_id?: string | null;
+  idempotency_key?: string;
+};
+
+function readinessFromGeneration(payload: PlanGenerationRequest, fallbackMinutes: number) {
+  const energyByFeeling: Record<string, number> = { excellent: 5, good: 4, okay: 3, low_energy: 2, exhausted: 1 };
+  return {
+    ...defaultReadiness,
+    energy: energyByFeeling[payload.feeling ?? ""] ?? defaultReadiness.energy,
+    available_minutes: payload.available_minutes ?? fallbackMinutes,
+    desired_session_type: payload.desired_session_type ?? defaultReadiness.desired_session_type,
+    generation_context: {
+      scope: payload.scope ?? "daily",
+      feeling: payload.feeling ?? "good",
+      focus: payload.focus ?? "full_body",
+      secondary_focus: payload.secondary_focus ?? null,
+      selected_date: payload.selected_date ?? null,
+      existing_plan_id: payload.existing_plan_id ?? null
+    }
+  };
 }
 
-export function generateMonthlyPlan() {
-  return apiFetch("/plans/monthly/generate", { method: "POST", body: JSON.stringify({}) });
+export function generateDailyPlan(minutes = 15, idempotencyKey = createGenerationRequestId("daily"), context: PlanGenerationRequest = {}) {
+  return apiFetch("/plans/daily/generate", { method: "POST", body: JSON.stringify({ ...readinessFromGeneration(context, minutes), idempotency_key: idempotencyKey }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
+}
+
+export function generateWeeklyPlan(idempotencyKey = createGenerationRequestId("weekly"), context: PlanGenerationRequest = {}) {
+  return apiFetch("/plans/weekly/generate", { method: "POST", body: JSON.stringify({ ...context, idempotency_key: idempotencyKey }) }, { timeoutMs: 40000 });
+}
+
+export function generateMonthlyPlan(idempotencyKey = createGenerationRequestId("monthly"), context: PlanGenerationRequest = {}) {
+  return apiFetch("/plans/monthly/generate", { method: "POST", body: JSON.stringify({ ...context, idempotency_key: idempotencyKey }) }, { timeoutMs: 60000 });
 }
 
 export function generateAdvancedPlan(payload: Record<string, unknown>) {
-  return apiFetch("/plans/advanced/generate", { method: "POST", body: JSON.stringify(payload) });
+  return apiFetch("/plans/advanced/generate", { method: "POST", body: JSON.stringify({ ...payload, idempotency_key: payload.idempotency_key ?? createGenerationRequestId("advanced") }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
 }
 
 export function createQuickSession(payload: Record<string, unknown>) {
-  return apiFetch("/quick-session", { method: "POST", body: JSON.stringify(payload) });
+  return apiFetch("/quick-session", { method: "POST", body: JSON.stringify({ ...payload, idempotency_key: payload.idempotency_key ?? createGenerationRequestId("quick") }) }, { timeoutMs: API_TIMEOUTS.planGeneration });
 }
 
 export function modifyPlan(planId: string, intent: string, request_payload: Record<string, unknown> = {}) {
   return apiFetch(`/plans/${planId}/modify`, { method: "POST", body: JSON.stringify({ intent, request_payload }) });
 }
 
-export function startSession(planId?: string) {
-  return apiFetch<{ session: { id: string } }>("/sessions", { method: "POST", body: JSON.stringify({ plan_id: planId, resume: true }) });
+export function fetchPlanById(planId: string) {
+  return apiFetch(`/plans/${encodeURIComponent(planId)}`);
+}
+
+export function startSession(planId?: string, resume = true) {
+  return apiFetch<{ session: { id: string; plan_id?: string | null; payload?: { plan?: unknown; plan_item_ids?: string[] } }; resumed?: boolean }>("/sessions", { method: "POST", body: JSON.stringify({ plan_id: planId, resume }) });
 }
 
 export function patchSession(sessionId: string, payload: Record<string, unknown>) {
@@ -346,6 +443,13 @@ export function recordExerciseFeedback(sessionId: string) {
   });
 }
 
+export function recordWorkoutFeedback(payload: Record<string, unknown>) {
+  return apiFetch("/exercise-feedback", {
+    method: "POST",
+    body: JSON.stringify({ payload: { ...payload, feedback_type: "post_workout_feedback", idempotency_key: payload.idempotency_key ?? `feedback-${Date.now()}` } })
+  }, { timeoutMs: API_TIMEOUTS.mutation });
+}
+
 export function logGlucose(payload: { value: number; unit: "mg/dL" | "mmol/L"; timing: "pre" | "post" | "delayed"; session_id?: string }) {
   return apiFetch("/glucose", {
     method: "POST",
@@ -357,12 +461,24 @@ export function logDiabetesContext(payload: Record<string, unknown>) {
   return apiFetch("/diabetes/context", { method: "POST", body: JSON.stringify({ payload }) });
 }
 
-export function connectProvider(provider_key: string, mock = true) {
-  return apiFetch("/integrations/connect", { method: "POST", body: JSON.stringify({ provider_key, mock }) });
+export function connectProvider(provider_key: string, mock = false, config: Record<string, unknown> = {}) {
+  return apiFetch("/integrations/connect", { method: "POST", body: JSON.stringify({ provider_key, mock, config }) }, { timeoutMs: 30000 });
+}
+
+export function disconnectProvider(connectionId: number) {
+  return apiFetch(`/integrations/${connectionId}`, { method: "DELETE" });
+}
+
+export function testProviderConnection(provider_key: string, config: Record<string, unknown> = {}) {
+  return apiFetch("/integrations/test-connection", { method: "POST", body: JSON.stringify({ payload: { provider_key, config } }) }, { timeoutMs: 30000 });
 }
 
 export function favoriteExercise(exerciseId: string) {
   return apiFetch(`/exercises/${exerciseId}/favorite`, { method: "POST" });
+}
+
+export function unfavoriteExercise(exerciseId: string) {
+  return apiFetch(`/exercises/${exerciseId}/favorite`, { method: "DELETE" });
 }
 
 export function saveNotificationPreference(category: string, enabled: boolean) {

@@ -10,10 +10,10 @@ Status values: COMPLETE, PARTIAL, DEVELOPMENT_ONLY, UNVALIDATED, BLOCKED_BY_ENVI
 | Admin expired-session handling | PARTIAL | Protected page redirects to `/login?error=session_expired`; server-side refresh route exists but dashboard does not auto-refresh yet. |
 | Admin role-aware navigation | COMPLETE | Dashboard navigation is derived from the authenticated admin role. |
 | Admin forbidden states | COMPLETE | Backend denies forbidden roles; admin app has `/forbidden`. |
-| Access-token revocation | COMPLETE | Redis-backed revocation store is used when available; development-only in-memory fallback is explicit. |
+| Access-token revocation | COMPLETE | PostgreSQL-backed revocation store is the deployment default; Redis is optional when explicitly selected; development-only in-memory fallback is explicit. |
 | Refresh-token revocation | COMPLETE | DB token family records store rotation/revocation state. |
-| Redis availability behavior | COMPLETE | Production rejects missing Redis revocation; development warns and falls back. |
-| Multi-instance compatibility | PARTIAL | Redis revocation is multi-instance safe; local in-memory fallback is not. |
+| Redis availability behavior | COMPLETE | Zero-cost staging does not require Redis; Redis backend still has integration coverage when configured. |
+| Multi-instance compatibility | COMPLETE | PostgreSQL and Redis revocation are multi-instance safe; local in-memory fallback is not accepted in deployment. |
 | Environment-variable naming | COMPLETE | Canonical admin names are `LOCAL_ADMIN_EMAIL` and `LOCAL_ADMIN_PASSWORD`; guard tests reject deprecated duplicates. |
 | Local PostgreSQL validation | BLOCKED_BY_ENVIRONMENT | Docker Desktop was unavailable locally; `scripts/validate-postgres.ps1` was added. |
 | CI PostgreSQL validation | COMPLETE | CI uses PostgreSQL and `TEST_DATABASE_URL` guard tests. |

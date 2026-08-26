@@ -1,3 +1,5 @@
+import json
+
 from app.services.platform import PROGRAM_VARIANTS, schedule_voice_cues
 from test_mvp_hardening import _admin_headers, _client, _create_admin_user, _register
 
@@ -103,6 +105,11 @@ def test_complete_product_platform_user_workflow(tmp_path, monkeypatch):
     archive = download.json()["archive"]
     assert archive["manifest"]["schema"] == "moveinrange.privacy-export.v1"
     assert "diabetes" in archive
+    archive_text = json.dumps(archive).lower()
+    assert "password_hash" not in archive_text
+    assert "refresh_token" not in archive_text
+    assert "reset_token" not in archive_text
+    assert "auth_secret" not in archive_text
     assert download.json()["checksum_sha256"] == export_job.json()["job"]["payload"]["checksum_sha256"]
     listed_exports = client.get("/api/v1/privacy/export-jobs", headers=headers).json()["items"]
     assert listed_exports[0]["download_available"] is True
@@ -139,7 +146,9 @@ def test_admin_complete_platform_surfaces(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     registered, user_headers = _register(client, "admin-visible-user@example.test")
     _create_admin_user("admin-complete@example.test", "super_admin")
+    _create_admin_user("admin-complete-clinical@example.test", "clinical_reviewer")
     admin_headers = _admin_headers(client, "admin-complete@example.test")
+    clinical_headers = _admin_headers(client, "admin-complete-clinical@example.test")
 
     users = client.get("/api/v1/admin/users", headers=admin_headers)
     assert users.status_code == 200
@@ -152,16 +161,22 @@ def test_admin_complete_platform_surfaces(tmp_path, monkeypatch):
     assert policy.status_code == 201, policy.text
     policy_id = policy.json()["policy"]["version"]
     assert client.get(f"/api/v1/admin/policies/{policy_id}", headers=admin_headers).status_code == 200
-    assert client.post(f"/api/v1/admin/policies/{policy_id}/approve", headers=admin_headers, json={"rationale": "Reviewed fixtures"}).json()["policy"]["clinical_review_state"] == "approved"
-    assert client.post(f"/api/v1/admin/policies/{policy_id}/publish", headers=admin_headers, json={"rationale": "Ready for local validation"}).json()["policy"]["status"] == "published"
-    assert client.post(f"/api/v1/admin/policies/{policy_id}/rollback", headers=admin_headers, json={"rationale": "Stacked PR validation rollback"}).json()["policy"]["status"] == "rolled_back"
+    approved = client.post(f"/api/v1/admin/policies/{policy_id}/approve", headers=clinical_headers, json={"rationale": "Reviewed fixtures"})
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["policy"]["clinical_review_state"] == "approved"
+    published = client.post(f"/api/v1/admin/policies/{policy_id}/publish", headers=admin_headers, json={"rationale": "Ready for local validation"})
+    assert published.status_code == 200, published.text
+    assert published.json()["policy"]["status"] == "published"
+    rolled_back = client.post(f"/api/v1/admin/policies/{policy_id}/rollback", headers=admin_headers, json={"rationale": "Stacked PR validation rollback"})
+    assert rolled_back.status_code == 200, rolled_back.text
+    assert rolled_back.json()["policy"]["status"] == "rolled_back"
 
     exercises = client.get("/api/v1/admin/exercises", headers=admin_headers)
     assert exercises.status_code == 200
     if exercises.json()["items"]:
         exercise_id = exercises.json()["items"][0]["id"]
         assert client.get(f"/api/v1/admin/exercises/{exercise_id}", headers=admin_headers).status_code == 200
-        patched = client.patch(f"/api/v1/admin/exercises/{exercise_id}", headers=admin_headers, json={"payload": {"safety_tags": ["chair_supported"], "publish_state": "reviewed"}})
+        patched = client.patch(f"/api/v1/admin/exercises/{exercise_id}/safety", headers=admin_headers, json={"safety_tags": ["chair_supported"], "review_reason": "complete platform safety review"})
         assert patched.status_code == 200, patched.text
 
     assert client.get("/api/v1/admin/system", headers=admin_headers).status_code == 200
@@ -171,6 +186,8 @@ def test_admin_complete_platform_surfaces(tmp_path, monkeypatch):
     assert processed.status_code == 200, processed.text
     assert processed.json()["job"]["status"] == "completed"
     assert processed.json()["job"]["payload"]["deleted_counts"]["diabetes"] == 1
+    assert processed.json()["job"]["payload"]["deleted_counts"]["sessions_revoked"] >= 1
+    assert client.post("/api/v1/auth/refresh", json={"refresh_token": registered["refresh_token"]}).status_code == 401
     assert client.get("/api/v1/admin/privacy-jobs", headers=admin_headers).status_code == 200
     assert client.get("/api/v1/admin/import-jobs", headers=admin_headers).status_code == 200
     assert client.get("/api/v1/admin/notifications", headers=admin_headers).status_code == 200

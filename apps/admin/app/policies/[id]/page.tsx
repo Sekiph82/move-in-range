@@ -23,11 +23,10 @@ export default async function PolicyDetailPage({ params, searchParams }: { param
         <input type="hidden" name="csrf" value={csrf} />
         <input type="hidden" name="operation" value="policy_draft_update" />
         <input type="hidden" name="policy_id" value={policy.version ?? id} />
-        <label>Status<select name="status" defaultValue={policy.status ?? "draft"}><option value="draft">Draft</option><option value="submitted">Submitted</option><option value="published">Published</option></select></label>
-        <label>Clinical review<select name="clinical_review_state" defaultValue={policy.clinical_review_state ?? "draft"}><option value="draft">Draft</option><option value="submitted">Submitted for review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label>
+        <label>Draft change reason<input name="change_reason" defaultValue="Closed beta draft rules update" /></label>
         <button type="submit">Save policy edit</button>
       </form>
-      {["approve", "reject", "publish", "rollback"].map((action) => (
+      {["submit", "approve", "reject", "publish", "rollback"].map((action) => (
         <form key={action} className="form-grid" action="/api/admin-session/mutate" method="post">
           <h3>{action}</h3>
           <input type="hidden" name="csrf" value={csrf} />

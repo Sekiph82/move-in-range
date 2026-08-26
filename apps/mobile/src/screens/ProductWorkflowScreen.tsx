@@ -1,11 +1,12 @@
 import { AchievementsScreen } from "../features/achievements/AchievementsScreen";
-import { AuthScreen } from "../features/auth/AuthScreen";
 import { CalendarScreen } from "../features/calendar/CalendarScreen";
 import { DiabetesScreen } from "../features/diabetes/DiabetesScreen";
 import { ExerciseDetailScreen, ExerciseLibraryScreen } from "../features/exercises/ExerciseScreens";
 import { IntegrationsScreen } from "../features/integrations/IntegrationsScreen";
 import { NotificationsScreen } from "../features/notifications/NotificationsScreen";
 import { OnboardingScreen } from "../features/onboarding/OnboardingScreen";
+import { GeneralInformationScreen, MovementProfileScreen } from "../features/profile/ProfileEditorScreens";
+import { PlanGenerationWizardScreen } from "../features/plans/PlanGenerationWizardScreen";
 import { DailyPlanScreen, MonthlyPlanScreen, QuickSessionScreen, WeeklyPlanScreen } from "../features/plans/PlanScreens";
 import { PrivacyScreen } from "../features/privacy/PrivacyScreen";
 import { ReadinessScreen } from "../features/readiness/ReadinessScreen";
@@ -13,6 +14,7 @@ import { CaregiversScreen, ProfessionalsScreen } from "../features/sharing/Shari
 import { RouteScaffold } from "../features/shared/ui";
 import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { WorkoutEventScreen, WorkoutScreen } from "../features/workout/WorkoutScreens";
+import { WorkoutPreviewScreen } from "../features/workout/WorkoutPreviewScreen";
 import type { RouteMeta, WorkflowKind } from "../features/shared/types";
 
 type Props = {
@@ -21,8 +23,11 @@ type Props = {
 };
 
 const routeMeta: Record<WorkflowKind, RouteMeta> = {
-  auth: { title: "Sign in", subtitle: "Create or restore your secure MoveInRange account." },
-  onboarding: { title: "Onboarding", subtitle: "Twenty-two focused steps capture context before planning." },
+  onboarding: { title: "Onboarding", subtitle: "A short card setup captures only the essentials before planning." },
+  "onboarding-edit": { title: "Movement profile", subtitle: "Update goals, limitations, equipment, and training preferences." },
+  "general-info": { title: "General information", subtitle: "Review saved basics first, then edit only approved fields." },
+  "generate-plan": { title: "Plan generation", subtitle: "Choose today's condition, focus, duration, and style before building a saved plan." },
+  "workout-preview": { title: "Workout preview", subtitle: "Review the saved plan before readiness and guided movement." },
   readiness: { title: "Readiness", subtitle: "A daily safety check gates movement intensity." },
   "quick-session": { title: "Quick session", subtitle: "Create a short plan from available time and constraints." },
   "daily-plan": { title: "Daily plan", subtitle: "Generate, inspect, modify, and start today's plan." },
@@ -47,8 +52,11 @@ const routeMeta: Record<WorkflowKind, RouteMeta> = {
 
 function WorkflowBody({ kind, id }: Props) {
   switch (kind) {
-    case "auth": return <AuthScreen />;
     case "onboarding": return <OnboardingScreen />;
+    case "onboarding-edit": return <MovementProfileScreen />;
+    case "general-info": return <GeneralInformationScreen />;
+    case "generate-plan": return <PlanGenerationWizardScreen />;
+    case "workout-preview": return <WorkoutPreviewScreen />;
     case "readiness": return <ReadinessScreen />;
     case "quick-session": return <QuickSessionScreen />;
     case "daily-plan": return <DailyPlanScreen />;
@@ -74,6 +82,7 @@ function WorkflowBody({ kind, id }: Props) {
 }
 
 export function ProductWorkflowScreen({ kind, id }: Props) {
+  if (kind === "workout") return <WorkflowBody kind={kind} id={id} />;
   const route = routeMeta[kind];
   return (
     <RouteScaffold title={route.title} subtitle={route.subtitle}>

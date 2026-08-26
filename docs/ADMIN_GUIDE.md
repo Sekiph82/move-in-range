@@ -5,7 +5,7 @@ Admin roles: super_admin, clinical_reviewer, exercise_reviewer, content_editor, 
 Run the admin app locally on `http://localhost:3200`:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 npm.cmd run admin
 ```
 

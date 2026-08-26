@@ -16,7 +16,7 @@ export const roleNavigation: Record<AdminIdentity["role"], string[]> = {
   super_admin: ["Dashboard", "Users", "Exercises", "Policies", "Simulator", "Privacy Jobs", "Import Jobs", "Notifications", "Integrations", "System", "Audit"],
   clinical_reviewer: ["Dashboard", "Policies", "Simulator"],
   exercise_reviewer: ["Exercise Review"],
-  content_editor: ["Dashboard", "Import Jobs"],
+  content_editor: ["Dashboard", "Exercises", "Import Jobs"],
   support: ["Dashboard", "Users", "Privacy Jobs", "Notifications", "Audit"],
   analyst: ["Dashboard", "Integrations", "System"]
 };

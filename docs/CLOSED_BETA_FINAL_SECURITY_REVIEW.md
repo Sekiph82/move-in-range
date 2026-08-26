@@ -37,7 +37,6 @@ Date: 2026-07-19
 - Dev reset preview: rejected in production by settings validation.
 - Default secrets: rejected by existing production settings validation.
 - Insecure admin cookies: production must set secure cookies.
-- In-memory revocation: production must use Redis.
+- In-memory revocation: deployment must use durable PostgreSQL revocation unless Redis is explicitly selected for a non-zero-cost environment.
 - Mailpit: local-only service; not present in production deployment config.
 - Localhost public URLs: production configuration must provide real public app/API origins.
-

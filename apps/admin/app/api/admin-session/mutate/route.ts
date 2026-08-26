@@ -7,7 +7,7 @@ type RequiredRole = AdminIdentity["role"];
 
 type Operation = {
   method: Method;
-  requiredRole: RequiredRole;
+  allowedRoles: readonly RequiredRole[];
   fields: readonly string[];
   required?: readonly string[];
   enums?: Record<string, readonly string[]>;
@@ -18,9 +18,6 @@ type Operation = {
 
 const adminRoles = ["super_admin", "clinical_reviewer", "exercise_reviewer", "content_editor", "support", "analyst"] as const;
 const userAssignableRoles = ["user", ...adminRoles] as const;
-const policyStatuses = ["draft", "submitted", "published", "rolled_back"] as const;
-const clinicalReviewStates = ["draft", "submitted", "approved", "rejected"] as const;
-const publishStates = ["published", "unpublished"] as const;
 const privacyKinds = ["export", "deletion"] as const;
 const privacyActions = ["process", "retry", "fail", "cancel", "approve"] as const;
 
@@ -38,10 +35,17 @@ function payload(fields: Record<string, string>, names: readonly string[]) {
   return Object.fromEntries(names.filter((name) => fields[name]?.trim()).map((name) => [name, fields[name].trim()]));
 }
 
+function listPayload(fields: Record<string, string>, name: string) {
+  return (fields[name] ?? "")
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 const operations = {
   e2e_seed: {
     method: "POST",
-    requiredRole: "super_admin",
+    allowedRoles: ["super_admin"],
     fields: [],
     path: () => "/admin/e2e-seed",
     redirectTo: () => "/dashboard",
@@ -49,7 +53,7 @@ const operations = {
   },
   user_disable: {
     method: "PATCH",
-    requiredRole: "support",
+    allowedRoles: ["support", "super_admin"],
     fields: ["user_id", "reason"],
     required: ["user_id", "reason"],
     path: (fields) => `/admin/users/${segment(fields.user_id, "user_id")}`,
@@ -58,7 +62,7 @@ const operations = {
   },
   user_enable: {
     method: "PATCH",
-    requiredRole: "support",
+    allowedRoles: ["support", "super_admin"],
     fields: ["user_id", "reason"],
     required: ["user_id", "reason"],
     path: (fields) => `/admin/users/${segment(fields.user_id, "user_id")}`,
@@ -67,7 +71,7 @@ const operations = {
   },
   user_role_update: {
     method: "PATCH",
-    requiredRole: "support",
+    allowedRoles: ["super_admin"],
     fields: ["user_id", "role", "reason"],
     required: ["user_id", "role", "reason"],
     enums: { role: userAssignableRoles },
@@ -75,45 +79,77 @@ const operations = {
     redirectTo: (fields) => `/users/${segment(fields.user_id, "user_id")}`,
     body: (fields) => ({ payload: { action: "update_role", role: fields.role, reason: fields.reason.trim() } })
   },
-  exercise_content_update: {
+  exercise_translation_update: {
     method: "PATCH",
-    requiredRole: "exercise_reviewer",
-    fields: ["exercise_id", "turkish_title", "turkish_instructions", "body_part", "equipment", "safety_tags", "restricted_regions", "substitution_id", "publish_state"],
-    required: ["exercise_id"],
-    enums: { publish_state: publishStates },
-    path: (fields) => `/admin/exercises/${segment(fields.exercise_id, "exercise_id")}`,
+    allowedRoles: ["content_editor", "super_admin"],
+    fields: ["exercise_id", "locale", "title", "instruction_steps", "form_cues", "common_mistakes", "breathing_cues", "change_reason"],
+    required: ["exercise_id", "locale", "title", "instruction_steps", "change_reason"],
+    enums: { locale: ["tr"] },
+    path: (fields) => `/admin/exercises/${segment(fields.exercise_id, "exercise_id")}/translation`,
     redirectTo: (fields) => `/exercises/${segment(fields.exercise_id, "exercise_id")}`,
     body: (fields) => ({
-      payload: payload(fields, ["turkish_title", "turkish_instructions", "body_part", "equipment", "safety_tags", "restricted_regions", "substitution_id", "publish_state"])
+      locale: fields.locale.trim(),
+      title: fields.title.trim(),
+      instruction_steps: listPayload(fields, "instruction_steps"),
+      form_cues: listPayload(fields, "form_cues"),
+      common_mistakes: listPayload(fields, "common_mistakes"),
+      breathing_cues: listPayload(fields, "breathing_cues"),
+      change_reason: fields.change_reason.trim()
     })
   },
-  policy_draft_create: {
-    method: "POST",
-    requiredRole: "clinical_reviewer",
-    fields: ["version", "clinical_review_state"],
-    required: ["version", "clinical_review_state"],
-    enums: { clinical_review_state: clinicalReviewStates },
-    path: () => "/admin/policies",
-    redirectTo: () => "/policies",
-    body: (fields) => ({ version: fields.version.trim(), clinical_review_state: fields.clinical_review_state, rules: { source: "admin_ui" } })
-  },
-  policy_draft_update: {
+  exercise_metadata_update: {
     method: "PATCH",
-    requiredRole: "clinical_reviewer",
-    fields: ["policy_id", "status", "clinical_review_state"],
-    required: ["policy_id", "status", "clinical_review_state"],
-    enums: { status: policyStatuses, clinical_review_state: clinicalReviewStates },
-    path: (fields) => `/admin/policies/${segment(fields.policy_id, "policy_id")}`,
-    redirectTo: (fields) => `/policies/${segment(fields.policy_id, "policy_id")}`,
-    body: (fields) => ({ payload: { status: fields.status, clinical_review_state: fields.clinical_review_state } })
+    allowedRoles: ["content_editor", "super_admin"],
+    fields: ["exercise_id", "category", "equipment", "position", "difficulty", "change_reason"],
+    required: ["exercise_id", "change_reason"],
+    path: (fields) => `/admin/exercises/${segment(fields.exercise_id, "exercise_id")}/metadata`,
+    redirectTo: (fields) => `/exercises/${segment(fields.exercise_id, "exercise_id")}`,
+    body: (fields) => ({ ...payload(fields, ["category", "equipment", "position", "difficulty"]), change_reason: fields.change_reason.trim() })
   },
+  exercise_safety_update: {
+    method: "PATCH",
+    allowedRoles: ["exercise_reviewer", "super_admin"],
+    fields: ["exercise_id", "safety_tags", "restricted_regions", "contraindication_categories", "review_reason"],
+    required: ["exercise_id", "review_reason"],
+    path: (fields) => `/admin/exercises/${segment(fields.exercise_id, "exercise_id")}/safety`,
+    redirectTo: (fields) => `/exercises/${segment(fields.exercise_id, "exercise_id")}`,
+    body: (fields) => ({
+      safety_tags: listPayload(fields, "safety_tags"),
+      restricted_regions: listPayload(fields, "restricted_regions"),
+      contraindication_categories: listPayload(fields, "contraindication_categories"),
+      review_reason: fields.review_reason.trim()
+    })
+  },
+  exercise_substitution_add: exerciseSubstitutionAction("add"),
+  exercise_substitution_remove: exerciseSubstitutionAction("remove"),
+  exercise_publish: exercisePublicationAction("publish"),
+  exercise_unpublish: exercisePublicationAction("unpublish"),
+  policy_submit: policyAction("submit"),
   policy_approve: policyAction("approve"),
   policy_reject: policyAction("reject"),
   policy_publish: policyAction("publish"),
   policy_rollback: policyAction("rollback"),
+  policy_draft_create: {
+    method: "POST",
+    allowedRoles: ["content_editor", "super_admin"],
+    fields: ["version"],
+    required: ["version"],
+    path: () => "/admin/policies",
+    redirectTo: () => "/policies",
+    body: (fields) => ({ version: fields.version.trim(), rules: { source: "admin_ui" } })
+  },
+  policy_draft_update: {
+    method: "PATCH",
+    allowedRoles: ["content_editor", "super_admin"],
+    fields: ["policy_id", "change_reason"],
+    required: ["policy_id", "change_reason"],
+    path: (fields) => `/admin/policies/${segment(fields.policy_id, "policy_id")}`,
+    redirectTo: (fields) => `/policies/${segment(fields.policy_id, "policy_id")}`,
+    body: (fields) => ({ payload: { rules: { source: "admin_ui", change_reason: fields.change_reason.trim() } } })
+  },
   privacy_job_action: {
     method: "POST",
-    requiredRole: "support",
+    allowedRoles: ["support", "super_admin"],
     fields: ["kind", "job_id", "action", "rationale"],
     required: ["kind", "job_id", "action"],
     enums: { kind: privacyKinds, action: privacyActions },
@@ -127,10 +163,35 @@ const operations = {
   integration_retry_sync: integrationAction("retry-sync")
 } satisfies Record<string, Operation>;
 
-function policyAction(action: "approve" | "reject" | "publish" | "rollback"): Operation {
+function exerciseSubstitutionAction(action: "add" | "remove"): Operation {
   return {
     method: "POST",
-    requiredRole: "clinical_reviewer",
+    allowedRoles: ["exercise_reviewer", "super_admin"],
+    fields: ["exercise_id", "substitution_id", "reason"],
+    required: ["exercise_id", "substitution_id", "reason"],
+    path: (fields) => `/admin/exercises/${segment(fields.exercise_id, "exercise_id")}/substitutions${action === "remove" ? "/remove" : ""}`,
+    redirectTo: (fields) => `/exercises/${segment(fields.exercise_id, "exercise_id")}`,
+    body: (fields) => ({ substitution_id: fields.substitution_id.trim(), reason: fields.reason.trim() })
+  };
+}
+
+function exercisePublicationAction(action: "publish" | "unpublish"): Operation {
+  return {
+    method: "POST",
+    allowedRoles: ["exercise_reviewer", "super_admin"],
+    fields: ["exercise_id", "reason"],
+    required: ["exercise_id", "reason"],
+    path: (fields) => `/admin/exercises/${segment(fields.exercise_id, "exercise_id")}/${action}`,
+    redirectTo: (fields) => `/exercises/${segment(fields.exercise_id, "exercise_id")}`,
+    body: (fields) => ({ reason: fields.reason.trim() })
+  };
+}
+
+function policyAction(action: "submit" | "approve" | "reject" | "publish" | "rollback"): Operation {
+  const allowedRoles = action === "submit" ? ["content_editor", "super_admin"] as const : action === "approve" || action === "reject" ? ["clinical_reviewer"] as const : ["super_admin"] as const;
+  return {
+    method: "POST",
+    allowedRoles,
     fields: ["policy_id", "rationale"],
     required: ["policy_id", "rationale"],
     path: (fields) => `/admin/policies/${segment(fields.policy_id, "policy_id")}/${action}`,
@@ -142,7 +203,7 @@ function policyAction(action: "approve" | "reject" | "publish" | "rollback"): Op
 function notificationAction(action: "retry" | "cancel"): Operation {
   return {
     method: "POST",
-    requiredRole: "support",
+    allowedRoles: action === "retry" ? ["analyst", "support", "super_admin"] : ["support", "super_admin"],
     fields: ["job_id"],
     required: ["job_id"],
     path: (fields) => `/admin/notifications/${segment(fields.job_id, "job_id")}/${action}`,
@@ -154,7 +215,7 @@ function notificationAction(action: "retry" | "cancel"): Operation {
 function integrationAction(action: "disable" | "retry-sync"): Operation {
   return {
     method: "POST",
-    requiredRole: "analyst",
+    allowedRoles: action === "retry-sync" ? ["analyst", "super_admin"] : ["super_admin"],
     fields: ["connection_id"],
     required: ["connection_id"],
     path: (fields) => `/admin/integrations/${segment(fields.connection_id, "connection_id")}/${action}`,
@@ -163,8 +224,8 @@ function integrationAction(action: "disable" | "retry-sync"): Operation {
   };
 }
 
-function hasRole(admin: AdminIdentity, requiredRole: RequiredRole) {
-  return admin.role === "super_admin" || admin.role === requiredRole;
+function hasRole(admin: AdminIdentity, allowedRoles: readonly RequiredRole[]) {
+  return allowedRoles.includes(admin.role);
 }
 
 async function loadAdmin(token: string) {
@@ -216,7 +277,7 @@ export async function POST(request: NextRequest) {
 
   const admin = await loadAdmin(token);
   if (!admin) return adminRedirect(request, "/login?error=session_expired");
-  if (!hasRole(admin, operation.requiredRole)) return adminRedirect(request, "/forbidden?error=insufficient_role");
+  if (!hasRole(admin, operation.allowedRoles)) return adminRedirect(request, "/forbidden?error=insufficient_role");
 
   let fields: Record<string, string>;
   let path: string;

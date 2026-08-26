@@ -13,7 +13,7 @@ Core services:
 Canonical local commands:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 npm.cmd run api
 npm.cmd run admin
 npm.cmd run mobile

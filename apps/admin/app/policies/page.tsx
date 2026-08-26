@@ -15,7 +15,6 @@ export default async function PoliciesPage({ searchParams }: { searchParams: Pro
         <input type="hidden" name="csrf" value={csrf} />
         <input type="hidden" name="operation" value="policy_draft_create" />
         <label>Version<input name="version" defaultValue={`closed-beta-${Date.now()}`} /></label>
-        <label>Clinical review<select name="clinical_review_state" defaultValue="draft"><option value="draft">Draft</option><option value="submitted">Submitted</option></select></label>
         <button type="submit">Create draft</button>
       </form>
       <DataTable columns={["id", "version", "status", "clinical_review_state", "rules", "open"]} rows={rows} />

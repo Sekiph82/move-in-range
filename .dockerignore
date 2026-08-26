@@ -1,6 +1,8 @@
 .git
 .github
 .local
+.vercel
+supabase/.temp
 .npm
 .npm-cache
 .pnpm-store
@@ -15,6 +17,7 @@ node_modules
 coverage
 htmlcov
 dist
+**/dist
 build
 *.db
 *.sqlite

@@ -22,7 +22,7 @@ Android emulator users should set `EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:8200
 Run from:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 copy .env.example .env
 npm.cmd install
 docker compose up -d postgres redis
@@ -65,10 +65,10 @@ Relative path:
 npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
 ```
 
-Absolute path:
+Absolute path template:
 
 ```cmd
-npm.cmd run import:exercises -- "C:\Users\sekip\Desktop\MoveInRange-Workspace\exercises-dataset-main\data\exercises.json"
+npm.cmd run import:exercises -- "<dataset-root>\data\exercises.json"
 ```
 
 Verified local import: 1,324 exercises, 0 failed rows, 10 instruction locales. Third-party media is not committed; metadata and attribution are retained.
@@ -150,7 +150,7 @@ Invoke-RestMethod http://localhost:8200/api/v1/ready
 
 ## Release Candidate Notes
 
-- Access-token revocation uses Redis when available and refuses in-memory fallback in production.
+- Access-token revocation uses PostgreSQL by default for staging/production, Redis only when explicitly selected, and refuses in-memory fallback in deployment.
 - Refresh tokens are tracked by DB-backed token family records; replay revokes the family.
 - SQLite remains a local fallback only. PostgreSQL is the authoritative CI path.
 - Real Android/emulator validation must use the URL guidance below; Metro startup alone is not a device pass.

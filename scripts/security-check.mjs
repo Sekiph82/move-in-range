@@ -1,10 +1,11 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 const secretPatterns = [/BEGIN PRIVATE KEY/, /AKIA[0-9A-Z]{16}/, /SUPABASE_SERVICE_ROLE_KEY\s*=/, /CLERK_SECRET_KEY\s*=/, /OPENAI_API_KEY\s*=/];
+const ignoredDirs = new Set([".git", "node_modules", ".next", "dist", ".npm-cache", ".local", ".pytest-tmp", ".pytest_cache", ".ruff_cache", ".expo", ".expo-web-export", "android"]);
 const files = [];
 function walk(dir) {
   for (const entry of readdirSync(dir)) {
-    if ([".git", "node_modules", ".next", "dist", ".npm-cache"].includes(entry)) continue;
+    if (ignoredDirs.has(entry)) continue;
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) walk(path);
     else files.push(path);

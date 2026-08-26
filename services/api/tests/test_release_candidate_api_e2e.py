@@ -82,6 +82,21 @@ def test_release_candidate_api_e2e_workflow(tmp_path, monkeypatch):
     detail = client.get(f"/api/v1/exercises/{exercise_id}?language=tr", headers=headers)
     assert detail.status_code == 200
     assert "tr" in detail.json()["locales"]
+    assert client.post(f"/api/v1/exercises/{exercise_id}/favorite", headers=headers).status_code == 200
+    favorites = client.get("/api/v1/exercises/favorites", headers=headers)
+    assert favorites.status_code == 200
+    assert favorites.json()["items"][0]["id"] == exercise_id
+    recent = client.get("/api/v1/exercises/recent", headers=headers)
+    assert recent.status_code == 200
+    assert recent.json()["items"][0]["id"] == exercise_id
+    other_auth = client.post("/api/v1/auth/register", json={"email": "rc-other@example.test", "password": "MoveInRange1", "preferred_name": "Other"})
+    other_headers = {"Authorization": f"Bearer {other_auth.json()['access_token']}"}
+    assert client.get("/api/v1/exercises/favorites", headers=other_headers).json()["items"] == []
+    assert client.get("/api/v1/exercises/recent", headers=other_headers).json()["items"] == []
+    unfavorite = client.delete(f"/api/v1/exercises/{exercise_id}/favorite", headers=headers)
+    assert unfavorite.status_code == 200
+    assert unfavorite.json()["favorited"] is False
+    assert client.get("/api/v1/exercises/favorites", headers=headers).json()["items"] == []
 
     session = client.post("/api/v1/sessions", headers=headers, json={"plan_id": plan["id"], "resume": False})
     assert session.status_code == 201

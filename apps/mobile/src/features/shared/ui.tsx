@@ -1,7 +1,9 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { Link, router } from "expo-router";
+import { Link, router, usePathname } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../../theme";
+import { TABS_ROUTE } from "../auth/sessionGate";
 
 export function ActionButton({ label, onPress, disabled, tone = "primary" }: { label: string; onPress: () => void; disabled?: boolean; tone?: "primary" | "safety" }) {
   const theme = useTheme();
@@ -128,7 +130,7 @@ export function RouteHeader({ title, subtitle }: { title: string; subtitle: stri
   const theme = useTheme();
   return (
     <View style={{ gap: 6 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace("/(tabs)")}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace(TABS_ROUTE)}>
         <Text style={{ color: theme.primary, fontWeight: "700" }}>Back</Text>
       </Pressable>
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>{title}</Text>
@@ -139,16 +141,37 @@ export function RouteHeader({ title, subtitle }: { title: string; subtitle: stri
 
 export function RouteScaffold({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.background }}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 10, paddingBottom: Math.max(28, insets.bottom + 24), gap: 16 }}
+    >
       <RouteHeader title={title} subtitle={subtitle} />
       {children}
-      <Panel title="Next actions">
-        <SecondaryLink href="/readiness" label="Readiness" />
-        <SecondaryLink href="/daily-plan" label="Daily plan" />
-        <SecondaryLink href="/exercises" label="Exercise library" />
-        <SecondaryLink href="/privacy" label="Privacy" />
-      </Panel>
+    </ScrollView>
+  );
+}
+
+export function TabScreenScroll({ children, testID }: { children: ReactNode; testID?: string }) {
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const ref = useRef<ScrollView>(null);
+  const pathname = usePathname();
+  useEffect(() => {
+    ref.current?.scrollTo({ y: 0, animated: false });
+  }, [pathname]);
+  return (
+    <ScrollView
+      ref={ref}
+      testID={testID}
+      style={{ flex: 1, backgroundColor: theme.background }}
+      contentInsetAdjustmentBehavior="never"
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 8, paddingBottom: Math.max(96, insets.bottom + 88), gap: 16 }}
+    >
+      {children}
     </ScrollView>
   );
 }

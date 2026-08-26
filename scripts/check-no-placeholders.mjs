@@ -3,10 +3,18 @@ import { join } from "node:path";
 
 const forbidden = [/TODO: unsafe/i, /recommend\s+.*insulin/i, /calculate\s+.*insulin/i, /guarantee prevention of hypoglycemia/i];
 const roots = ["packages", "apps", "services", "docs", "scripts"];
+const ignoredDirectories = new Set(["node_modules", ".next", "dist", "__pycache__", ".pytest_cache", ".ruff_cache", ".local"]);
 const files = [];
 function walk(dir) {
-  for (const entry of readdirSync(dir)) {
-    if (["node_modules", ".next", "dist", "__pycache__"].includes(entry)) continue;
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch (error) {
+    if (error?.code === "EACCES" || error?.code === "EPERM") return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (ignoredDirectories.has(entry)) continue;
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) walk(path);
     else files.push(path);

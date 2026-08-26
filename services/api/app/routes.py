@@ -1,11 +1,14 @@
 import hashlib
 import json
+import logging
 import secrets
+from time import perf_counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from .auth import create_token, decode_token, hash_password, password_needs_upgrade, token_hash, verify_password
 from .email import get_email_sender
@@ -52,13 +55,15 @@ from .db.models import (
     ReadinessCheck,
     SessionEvent,
     SessionRecord,
+    SessionRevocation,
     SystemIncident,
     User,
     WearableSample,
 )
 from .db.session import get_db
-from .revocation import RedisTokenRevocationStore, get_token_revocation_store
-from .security import require_admin_role, require_user
+from .rate_limit import RateLimitExceeded, get_rate_limiter
+from .revocation import InMemoryTokenRevocationStore, PostgresTokenRevocationStore, RedisTokenRevocationStore, get_token_revocation_store
+from .security import require_admin_role, require_admin_roles, require_user
 from .settings import get_settings
 from .services.safety import EMERGENCY_MESSAGE, evaluate_safety
 from .services.platform import (
@@ -81,7 +86,7 @@ from .services.platform import (
 )
 
 router = APIRouter()
-_rate_limits: dict[str, list[datetime]] = {}
+logger = logging.getLogger("moveinrange.api")
 ADMIN_ROLES = {"super_admin", "clinical_reviewer", "exercise_reviewer", "content_editor", "support", "analyst"}
 
 CONDITIONS = [
@@ -154,6 +159,44 @@ class PolicyActionPayload(BaseModel):
     rationale: str = Field(default="Admin console action", max_length=500)
 
 
+class StrictPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class ExerciseTranslationUpdatePayload(StrictPayload):
+    locale: str
+    title: str
+    instruction_steps: list[str] = Field(min_length=1)
+    form_cues: list[str] = Field(default_factory=list)
+    common_mistakes: list[str] = Field(default_factory=list)
+    breathing_cues: list[str] = Field(default_factory=list)
+    change_reason: str
+
+
+class ExerciseMetadataUpdatePayload(StrictPayload):
+    category: str | None = None
+    equipment: str | None = None
+    position: str | None = None
+    difficulty: str | None = None
+    change_reason: str
+
+
+class ExerciseSafetyUpdatePayload(StrictPayload):
+    safety_tags: list[str] = Field(default_factory=list)
+    restricted_regions: list[str] = Field(default_factory=list)
+    contraindication_categories: list[str] = Field(default_factory=list)
+    review_reason: str
+
+
+class ExerciseSubstitutionPayload(StrictPayload):
+    substitution_id: str
+    reason: str
+
+
+class ExercisePublicationPayload(StrictPayload):
+    reason: str
+
+
 class ProfilePayload(BaseModel):
     preferred_name: str = "Local mover"
     age: int | None = None
@@ -185,6 +228,7 @@ class ProfilePayload(BaseModel):
 
 
 class ReadinessPayload(BaseModel):
+    idempotency_key: str | None = None
     energy: int = Field(ge=1, le=5)
     sleep_quality: int = Field(default=3, ge=1, le=5)
     pain: int = Field(ge=0, le=10)
@@ -199,6 +243,7 @@ class ReadinessPayload(BaseModel):
     stress: int = Field(default=2, ge=1, le=5)
     resting_heart_rate: int | None = None
     diabetes: dict[str, Any] | None = None
+    generation_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionStartPayload(BaseModel):
@@ -286,6 +331,7 @@ class ProviderConnectPayload(BaseModel):
     provider_key: str
     scopes: list[str] = Field(default_factory=list)
     mock: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class NotificationPreferencePayload(BaseModel):
@@ -305,19 +351,32 @@ class RelationshipPayload(BaseModel):
 @router.get("/health")
 def health():
     settings = get_settings()
-    return {"status": "ok", "service": "moveinrange-api", "version": settings.service_version, "environment": settings.environment, "api_base_url": "http://localhost:8200"}
+    return {"status": "ok", "service": "moveinrange-api", "version": settings.service_version, "environment": settings.deployment_environment, "api_base_url": settings.api_base_url}
 
 
 @router.get("/ready")
 def ready(db: Session = Depends(get_db)):
     db.execute(text("select 1"))
     store = get_token_revocation_store()
+    limiter = get_rate_limiter()
+    exercise_count = db.query(Exercise.id).count()
+    try:
+        migration = db.execute(text("select version_num from alembic_version")).scalar_one_or_none()
+    except SQLAlchemyError:
+        migration = None
+    settings = get_settings()
     return {
         "status": "ready",
+        "postgresql": "connected" if "postgresql" in settings.database_url else "not_current_backend",
         "database": "ok",
-        "revocation_store": "redis" if isinstance(store, RedisTokenRevocationStore) else "development_in_memory",
+        "session_revocation": _revocation_store_name(store),
+        "revocation_store": _revocation_store_name(store),
+        "rate_limiter": limiter.backend,
+        "email": "resend_configured" if settings.email_sender == "resend" and settings.resend_api_key and settings.resend_from_email else f"{settings.email_sender}_configured",
+        "migration_head": migration,
+        "dataset": {"exercise_count": exercise_count, "available": exercise_count >= 1324},
         "service": "moveinrange-api",
-        "version": get_settings().service_version,
+        "version": settings.service_version,
     }
 
 
@@ -413,7 +472,8 @@ def forgot_password(payload: PasswordResetRequestPayload, request: Request, db: 
                 updated_at=datetime.now(UTC),
             )
         )
-        reset_link = f"{get_settings().product_web_base_url.rstrip('/')}/auth/reset-password?token={token}"
+        reset_base = _password_reset_page_base()
+        reset_link = f"{reset_base}#token={token}"
         sender = get_email_sender()
         result = sender.send_password_reset(user.email or email, reset_link)
         db.add(
@@ -425,7 +485,7 @@ def forgot_password(payload: PasswordResetRequestPayload, request: Request, db: 
                 status=result.status,
                 provider_message_id=result.provider_message_id,
                 error_code=result.error_code,
-                redacted_payload={"expires_minutes": 30, "link_host": get_settings().product_web_base_url.rstrip("/")},
+                redacted_payload={"expires_minutes": 30, "reset_page": reset_base},
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -559,6 +619,25 @@ def update_goals(payload: dict[str, list[str]], user: User = Depends(require_use
     return _patch_profile_list(user, db, "goals", payload.get("goals", []))
 
 
+@router.put("/profile/general")
+def update_general_information(payload: ProductPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    profile = _profile_for(user.id, db)
+    data = payload.payload
+    health = dict(profile.health_payload or {})
+    if isinstance(data.get("preferred_name"), str) and data["preferred_name"].strip():
+        profile.preferred_name = data["preferred_name"].strip()
+        health["preferred_name"] = profile.preferred_name
+    for key in ["gender", "date_of_birth", "height_cm", "weight_kg", "height", "weight", "units"]:
+        if key in data:
+            health[key] = data[key]
+    if isinstance(data.get("conditions"), list):
+        health["conditions"] = [str(item) for item in data["conditions"] if str(item).strip()]
+    profile.health_payload = health
+    db.add(AuditLog(actor_id=user.id, action="profile.general.update", target_type="profile", target_id=str(profile.id), redacted_payload={"fields": sorted(data.keys())}))
+    db.commit()
+    return _profile_payload(user, profile)
+
+
 @router.get("/onboarding")
 def get_onboarding(user: User = Depends(require_user), db: Session = Depends(get_db)):
     progress = db.query(OnboardingProgress).filter(OnboardingProgress.user_id == user.id).one_or_none()
@@ -594,8 +673,24 @@ def save_onboarding(payload: OnboardingPayload, user: User = Depends(require_use
     profile = _profile_for(user.id, db)
     health = dict(profile.health_payload or {})
     health["onboarding_draft"] = draft
+    if progress.status == "complete":
+        controlled_keys = {
+            "goals",
+            "activity_level",
+            "conditions",
+            "movement_limitations",
+            "limitation_body_areas",
+            "equipment",
+            "preferred_training_days",
+            "preferred_days_per_week",
+            "preferred_minutes",
+            "consent_accepted",
+        }
+        for key in controlled_keys:
+            if key in payload.payload:
+                health[key] = payload.payload[key]
     profile.health_payload = health
-    profile.onboarding_complete = progress.status == "complete"
+    profile.onboarding_complete = profile.onboarding_complete or progress.status == "complete"
     db.add(AuditLog(actor_id=user.id, action="onboarding.save_step", target_type="onboarding", target_id=payload.step, redacted_payload={"completed": payload.completed}))
     db.commit()
     db.refresh(progress)
@@ -701,6 +796,26 @@ def equipment(db: Session = Depends(get_db)):
     return {"items": sorted(set(DEFAULT_EQUIPMENT + values))}
 
 
+@router.get("/categories")
+def categories(db: Session = Depends(get_db)):
+    return {"items": _exercise_taxonomy_items(db, "category")}
+
+
+@router.get("/body-parts")
+def body_parts(db: Session = Depends(get_db)):
+    return {"items": _exercise_taxonomy_items(db, "body_part")}
+
+
+@router.get("/target-muscles")
+def target_muscles(db: Session = Depends(get_db)):
+    return {"items": _exercise_taxonomy_items(db, "target")}
+
+
+@router.get("/exercise-tags")
+def exercise_tags(db: Session = Depends(get_db)):
+    return {"items": _exercise_taxonomy_items(db, "tags")}
+
+
 @router.post("/readiness-checks", status_code=status.HTTP_201_CREATED)
 def create_readiness(payload: ReadinessPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     _rate_limit(f"readiness:{user.id}", get_settings().auth_rate_limit * 3)
@@ -736,32 +851,137 @@ def legacy_readiness(payload: ReadinessPayload, user: User = Depends(require_use
 @router.get("/exercises")
 def exercise_search(
     q: str = "",
+    category: str | None = None,
     body_part: str | None = None,
     equipment: str | None = None,
     target: str | None = None,
+    position: str | None = None,
+    difficulty: str | None = None,
+    impact: str | None = None,
+    bodyweight: bool = False,
+    favorites: bool = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     language: str = "en",
+    user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(Exercise)
     if q:
         like = f"%{q.lower()}%"
-        query = query.filter(or_(func.lower(Exercise.name).like(like), func.lower(Exercise.target).like(like)))
-    if body_part:
-        query = query.filter(Exercise.body_part == body_part.lower())
+        localized = db.query(ExerciseLocalization.exercise_id).filter(
+            func.lower(ExerciseLocalization.instructions).like(like)
+        )
+        query = query.filter(
+            or_(
+                func.lower(Exercise.name).like(like),
+                func.lower(Exercise.target).like(like),
+                func.lower(Exercise.equipment).like(like),
+                func.lower(Exercise.body_part).like(like),
+                Exercise.id.in_(localized),
+            )
+        )
+    selected_body_part = (body_part or category or "").strip().lower()
+    if selected_body_part:
+        query = query.filter(Exercise.body_part == selected_body_part)
     if equipment:
         query = query.filter(Exercise.equipment == equipment.lower())
     if target:
         query = query.filter(Exercise.target == target.lower())
-    total = query.count()
-    items = query.order_by(Exercise.name).offset((page - 1) * page_size).limit(page_size).all()
+    if bodyweight:
+        query = query.filter(Exercise.equipment == "body weight")
+    if favorites:
+        favorite_ids = db.query(FavoriteExercise.exercise_id).filter(FavoriteExercise.user_id == user.id)
+        query = query.filter(Exercise.id.in_(favorite_ids))
+    filtered_items = query.order_by(Exercise.name).all()
+    if position:
+        filtered_items = [item for item in filtered_items if _position_for_exercise(item) == position.lower()]
+    if difficulty:
+        filtered_items = [item for item in filtered_items if _difficulty_for_exercise(item) == difficulty.lower()]
+    if impact:
+        filtered_items = [item for item in filtered_items if _impact_for_exercise(item) == impact.lower()]
+    total = len(filtered_items)
+    items = filtered_items[(page - 1) * page_size : page * page_size]
     return {
-        "items": [_exercise_brief_payload(item) for item in items],
+        "items": _exercise_list_payload(items, db, language, user.id),
         "pagination": {"page": page, "page_size": page_size, "total": total},
-        "filters": {"body_part": body_part, "equipment": equipment, "target": target},
-        "media_policy": "external-license-required",
+        "filters": {"category": category, "body_part": body_part, "equipment": equipment, "target": target, "position": position, "difficulty": difficulty, "impact": impact, "bodyweight": bodyweight, "favorites": favorites},
+        "filter_options": _exercise_filter_options(db),
+        "media_policy": "hosted-https-required",
     }
+
+
+@router.get("/exercises/favorites")
+def favorite_exercises(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    rows = (
+        db.query(FavoriteExercise)
+        .filter(FavoriteExercise.user_id == user.id)
+        .order_by(desc(FavoriteExercise.created_at))
+        .limit(50)
+        .all()
+    )
+    exercises = [db.get(Exercise, row.exercise_id) for row in rows]
+    return {"items": _exercise_list_payload([item for item in exercises if item], db, "en", user.id)}
+
+
+@router.get("/exercises/recent")
+def recent_exercises(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    rows = (
+        db.query(AuditLog)
+        .filter(AuditLog.actor_id == user.id, AuditLog.action == "exercise.view", AuditLog.target_type == "exercise")
+        .order_by(desc(AuditLog.created_at))
+        .limit(100)
+        .all()
+    )
+    seen: set[str] = set()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        if not row.target_id or row.target_id in seen:
+            continue
+        exercise = db.get(Exercise, row.target_id)
+        if exercise:
+            items.append(exercise)
+            seen.add(row.target_id)
+        if len(items) >= 20:
+            break
+    return {"items": _exercise_list_payload(items, db, "en", user.id)}
+
+
+@router.get("/exercises/search")
+def exercise_search_alias(
+    q: str = "",
+    category: str | None = None,
+    body_part: str | None = None,
+    equipment: str | None = None,
+    target: str | None = None,
+    position: str | None = None,
+    difficulty: str | None = None,
+    impact: str | None = None,
+    bodyweight: bool = False,
+    favorites: bool = False,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    language: str = "en",
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    return exercise_search(
+        q=q,
+        category=category,
+        body_part=body_part,
+        equipment=equipment,
+        target=target,
+        position=position,
+        difficulty=difficulty,
+        impact=impact,
+        bodyweight=bodyweight,
+        favorites=favorites,
+        page=page,
+        page_size=page_size,
+        language=language,
+        user=user,
+        db=db,
+    )
 
 
 @router.get("/exercises/{exercise_id}")
@@ -769,7 +989,7 @@ def exercise_detail(exercise_id: str, language: str = "en", user: User = Depends
     exercise = _get_exercise(exercise_id, db)
     _record_recent(user.id, exercise.id, db)
     db.commit()
-    return _exercise_payload(exercise, db, language)
+    return _exercise_payload(exercise, db, language, user=user)
 
 
 @router.get("/exercises/{exercise_id}/media-resolution")
@@ -828,24 +1048,82 @@ def favorite(exercise_id: str, user: User = Depends(require_user), db: Session =
     return {"favorited": True, "exercise_id": exercise.id}
 
 
+@router.delete("/exercises/{exercise_id}/favorite")
+def unfavorite(exercise_id: str, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    db.query(FavoriteExercise).filter(FavoriteExercise.user_id == user.id, FavoriteExercise.exercise_id == exercise.id).delete(synchronize_session=False)
+    db.commit()
+    return {"favorited": False, "exercise_id": exercise.id}
+
+
 @router.post("/plans/daily/generate", status_code=status.HTTP_201_CREATED)
 def generate_daily(payload: ReadinessPayload | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    started = perf_counter()
+    timings: dict[str, int] = {}
+
+    def mark(label: str, since: float) -> float:
+        now = perf_counter()
+        timings[label] = int((now - since) * 1000)
+        return now
+
     _rate_limit(f"daily-plan:{user.id}", get_settings().auth_rate_limit * 2)
+    checkpoint = mark("rate_limit", started)
     readiness = payload or _latest_or_default_readiness(user.id, db)
+    idempotency_key = readiness.idempotency_key.strip() if readiness.idempotency_key else None
+    if idempotency_key:
+        existing = _latest_plan_by_generation_key(user.id, "daily", idempotency_key, db)
+        if existing:
+            timings["total"] = int((perf_counter() - started) * 1000)
+            logger.info("daily_plan_generation", extra={"user_id_hash": token_hash(user.id)[:12], "idempotent": True, "timings_ms": timings})
+            return {"blocked": False, "plan": existing.payload, "idempotent": True, "timings_ms": timings}
+    checkpoint = mark("readiness_load", checkpoint)
     decision = evaluate_safety(readiness.model_dump())
+    checkpoint = mark("safety", checkpoint)
     if decision["action"] == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
         return {"blocked": True, "safety_decision": {**decision, "timestamp": datetime.now(UTC).isoformat()}, "plan": None}
-    plan_payload = _daily_plan_payload(user.id, readiness.model_dump(), decision, db)
+    allowed_equipment = _allowed_equipment_for_user(user.id, db)
+    checkpoint = mark("profile", checkpoint)
+    exercise_pool = _plan_exercise_pool(user.id, readiness.model_dump(), decision, db, allowed_equipment)
+    checkpoint = mark("exercise_pool", checkpoint)
+    media_by_exercise_id, localizations_by_exercise_id = _preload_plan_assets(exercise_pool, db)
+    plan_payload = _daily_plan_payload(
+        user.id,
+        readiness.model_dump(),
+        decision,
+        db,
+        plan_date=datetime.now(UTC).date().isoformat(),
+        session_type="daily",
+        exercise_pool=exercise_pool,
+        allowed_equipment=allowed_equipment,
+        media_by_exercise_id=media_by_exercise_id,
+        localizations_by_exercise_id=localizations_by_exercise_id,
+    )
+    plan_payload["generation_request_id"] = idempotency_key
+    plan_payload["plan_version"] = plan_payload.get("plan_version") or f"v{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+    plan_payload["timings_ms"] = timings
+    checkpoint = mark("selection_enrichment", checkpoint)
     plan = Plan(id=plan_payload["id"], user_id=user.id, plan_type="daily", payload=plan_payload, safety_action=decision["action"])
     db.add(plan)
     db.commit()
-    return {"blocked": False, "plan": plan_payload}
+    mark("persistence", checkpoint)
+    timings["total"] = int((perf_counter() - started) * 1000)
+    plan_payload["timings_ms"] = timings
+    logger.info("daily_plan_generation", extra={"user_id_hash": token_hash(user.id)[:12], "idempotent": False, "exercise_pool_count": len(exercise_pool), "timings_ms": timings})
+    return {"blocked": False, "plan": plan_payload, "idempotent": False, "timings_ms": timings}
 
 
 @router.get("/plans/daily/today")
 def today_plan(user: User = Depends(require_user), db: Session = Depends(get_db)):
     plan = _latest_plan(user.id, "daily", db)
     return {"plan": plan.payload if plan else None}
+
+
+@router.get("/plans/{plan_id}")
+def get_plan(plan_id: str, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    plan = db.get(Plan, plan_id)
+    if not plan or plan.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "plan_not_found"})
+    return {"plan": plan.payload, "plan_type": plan.plan_type, "status": plan.status}
 
 
 @router.post("/plans/daily")
@@ -861,7 +1139,7 @@ def list_program_variants():
 @router.post("/plans/advanced/generate", status_code=status.HTTP_201_CREATED)
 def generate_advanced_plan(payload: ProgramRequestPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     _rate_limit(f"advanced-plan:{user.id}", get_settings().auth_rate_limit * 2)
-    candidates = [_exercise_brief_payload(item) for item in db.query(Exercise).order_by(Exercise.name).limit(80).all()]
+    candidates = [_exercise_brief_payload(item, db) for item in db.query(Exercise).order_by(Exercise.name).limit(80).all()]
     plan_payload = build_program_payload(user.id, payload.model_dump(), candidates)
     if plan_payload["safety_decision"]["action"] == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
         return {"blocked": True, "safety_decision": plan_payload["safety_decision"], "plan": None}
@@ -911,7 +1189,7 @@ def modify_plan(plan_id: str, payload: PlanModificationPayload, user: User = Dep
 def create_quick_session(payload: ProgramRequestPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     request_payload = payload.model_dump()
     request_payload["variant"] = request_payload.get("variant") or None
-    candidates = [_exercise_brief_payload(item) for item in db.query(Exercise).order_by(Exercise.name).limit(60).all()]
+    candidates = [_exercise_brief_payload(item, db) for item in db.query(Exercise).order_by(Exercise.name).limit(60).all()]
     plan_payload = build_program_payload(user.id, request_payload, candidates)
     plan_payload["source"] = "what_can_i_do_today"
     plan = Plan(id=plan_payload["id"], user_id=user.id, plan_type="quick_session", payload=plan_payload, safety_action=plan_payload["safety_decision"]["action"])
@@ -923,37 +1201,93 @@ def create_quick_session(payload: ProgramRequestPayload, user: User = Depends(re
 
 
 @router.post("/plans/weekly/generate", status_code=status.HTTP_201_CREATED)
-def generate_weekly(user: User = Depends(require_user), db: Session = Depends(get_db)):
+def generate_weekly(payload: dict[str, Any] | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    idempotency_key = str((payload or {}).get("idempotency_key") or "").strip() or None
+    if idempotency_key:
+        existing = _latest_plan_by_generation_key(user.id, "weekly", idempotency_key, db)
+        if existing:
+            return {"plan": existing.payload, "idempotent": True}
     readiness = _latest_or_default_readiness(user.id, db)
     decision = evaluate_safety(readiness.model_dump())
-    daily = _daily_plan_payload(user.id, readiness.model_dump(), decision, db)
     profile = _profile_for(user.id, db)
     preferred_days = (profile.health_payload or {}).get("preferred_training_days", ["Mon", "Wed", "Fri"])
     days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    week_start = datetime.now(UTC).date() - timedelta(days=datetime.now(UTC).weekday())
     previous_was_movement = False
     schedule = []
-    for day in days:
+    used_signatures: set[str] = set()
+    recent_primary_ids: set[str] = set()
+    focus_cycle = ["mobility", "upper_body", "balance", "conditioning", "lower_body", "core", "recovery"]
+    allowed_equipment = _allowed_equipment_for_user(user.id, db)
+    exercise_pool = _plan_exercise_pool(user.id, readiness.model_dump(), decision, db, allowed_equipment)
+    media_by_exercise_id, localizations_by_exercise_id = _preload_plan_assets(exercise_pool, db)
+    for index, day in enumerate(days):
         planned_movement = day in preferred_days and not previous_was_movement and decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"
         status_value = "planned" if planned_movement else "recovery"
+        day_payload = None
+        if planned_movement:
+            plan_date = (week_start + timedelta(days=index)).isoformat()
+            day_payload = _daily_plan_payload(
+                user.id,
+                readiness.model_dump(),
+                decision,
+                db,
+                plan_date=plan_date,
+                session_type=focus_cycle[index],
+                day_index=index,
+                week_index=0,
+                avoid_signatures=used_signatures,
+                avoid_primary_ids=recent_primary_ids,
+                exercise_pool=exercise_pool,
+                allowed_equipment=allowed_equipment,
+                media_by_exercise_id=media_by_exercise_id,
+                localizations_by_exercise_id=localizations_by_exercise_id,
+            )
+            signature = _plan_items_signature(day_payload["items"], focus_cycle[index])
+            used_signatures.add(signature)
+            if day_payload["items"]:
+                recent_primary_ids = {day_payload["items"][0]["exercise_id"]}
+            day_payload["parent_week_id"] = None
+            day_payload["plan_version"] = day_payload.get("plan_version") or f"v{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+            db.add(Plan(id=day_payload["id"], user_id=user.id, plan_type="daily", payload=day_payload, safety_action=decision["action"]))
         schedule.append(
             {
+                "id": (day_payload or {}).get("session_id") or f"rest_{(week_start + timedelta(days=index)).isoformat()}",
+                "daily_plan_id": (day_payload or {}).get("id"),
+                "plan_version": (day_payload or {}).get("plan_version"),
                 "day": day,
+                "date": (week_start + timedelta(days=index)).isoformat(),
+                "day_index": index,
+                "focus": focus_cycle[index],
                 "session_type": "movement" if planned_movement else "recovery",
-                "planned_duration": daily["total_minutes"] if planned_movement else 0,
-                "intensity": "low" if decision["action"] != "READY" or not planned_movement else daily["intensity"],
+                "session_id": (day_payload or {}).get("session_id"),
+                "planned_duration": day_payload["total_minutes"] if day_payload else 0,
+                "duration_minutes": day_payload["total_minutes"] if day_payload else 0,
+                "intensity": "low" if decision["action"] != "READY" or not planned_movement else day_payload["intensity"],
                 "status": status_value,
                 "safety_modified": decision["action"] != "READY",
+                "items": day_payload["items"] if day_payload else [],
+                "media_summary": day_payload["media_summary"] if day_payload else {"playable": 0, "fallback": 0},
+                "actions": ["open", "start", "make_easier", "move_session"] if planned_movement else ["swap_rest_day"],
             }
         )
         previous_was_movement = planned_movement
     payload = {
         "id": "week_" + secrets.token_hex(8),
         "days": schedule,
+        "week_start": week_start.isoformat(),
+        "total_planned_minutes": sum(day["duration_minutes"] for day in schedule),
         "explanation": "Weekly plan spaces movement days with recovery days and keeps intensity conservative after safety modifications.",
+        "generation_request_id": idempotency_key,
     }
-    db.add(Plan(id=payload["id"], user_id=user.id, plan_type="weekly", payload=payload, safety_action=daily["safety_decision"]["action"]))
+    for day in schedule:
+        if day.get("daily_plan_id"):
+            child = db.get(Plan, day["daily_plan_id"])
+            if child:
+                child.payload = {**child.payload, "parent_week_id": payload["id"]}
+    db.add(Plan(id=payload["id"], user_id=user.id, plan_type="weekly", payload=payload, safety_action=decision["action"]))
     db.commit()
-    return {"plan": payload}
+    return {"plan": payload, "idempotent": False}
 
 
 @router.get("/plans/weekly/current")
@@ -963,7 +1297,12 @@ def current_weekly(user: User = Depends(require_user), db: Session = Depends(get
 
 
 @router.post("/plans/monthly/generate", status_code=status.HTTP_201_CREATED)
-def generate_monthly(user: User = Depends(require_user), db: Session = Depends(get_db)):
+def generate_monthly(payload: dict[str, Any] | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    idempotency_key = str((payload or {}).get("idempotency_key") or "").strip() or None
+    if idempotency_key:
+        existing = _latest_plan_by_generation_key(user.id, "monthly", idempotency_key, db)
+        if existing:
+            return {"plan": existing.payload, "idempotent": True}
     readiness = _latest_or_default_readiness(user.id, db)
     readiness_payload = readiness.model_dump()
     decision = evaluate_safety(readiness_payload)
@@ -976,22 +1315,109 @@ def generate_monthly(user: User = Depends(require_user), db: Session = Depends(g
         hold_reason = "low-readiness or clinician-restriction hold"
     phases = [
         (1, "Adaptation", "Establish routine and comfortable movement range."),
-        (2, "Duration progression", "Add modest duration only if readiness and pain history remain stable."),
-        (3, "Modest intensity or volume progression", "Progress one variable at a time; no simultaneous aggressive increase."),
-        (4, "Recovery and performance review", "Consolidate, review symptoms, and avoid automatic load increase."),
+        (2, "Consistency", "Repeat the weekly rhythm with different movement choices before progressing load."),
+        (3, "Gentle progression", "Progress one variable at a time; no simultaneous aggressive increase."),
+        (4, "Recovery and reassessment", "Consolidate, review symptoms, and avoid automatic load increase."),
     ]
+    profile = _profile_for(user.id, db)
+    preferred_days = (profile.health_payload or {}).get("preferred_training_days", ["Mon", "Wed", "Fri"])
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    focus_cycle = ["mobility", "upper_body", "balance", "conditioning", "lower_body", "core", "recovery"]
+    start_date = datetime.now(UTC).date()
+    used_week_signatures: set[str] = set()
+    recent_primary_ids: set[str] = set()
+    allowed_equipment = _allowed_equipment_for_user(user.id, db)
+    exercise_pool = _plan_exercise_pool(user.id, readiness_payload, decision, db, allowed_equipment)
+    media_by_exercise_id, localizations_by_exercise_id = _preload_plan_assets(exercise_pool, db)
+    weeks: list[dict[str, Any]] = []
+    for week, phase, reason in phases:
+        week_hold = hold_reason is not None and week > 1
+        planned_indexes = {days.index(day) for day in preferred_days if day in days}
+        if week == 4 and not week_hold:
+            planned_indexes = set(sorted(planned_indexes)[: max(1, min(2, len(planned_indexes)))])
+        week_days = []
+        week_signatures = []
+        for index, day in enumerate(days):
+            plan_date = (start_date + timedelta(days=((week - 1) * 7) + index)).isoformat()
+            planned_movement = index in planned_indexes and not week_hold and decision["action"] != "BLOCK_AND_SHOW_SAFETY_MESSAGE"
+            day_payload = None
+            if planned_movement:
+                day_payload = _daily_plan_payload(
+                    user.id,
+                    readiness_payload,
+                    decision,
+                    db,
+                    plan_date=plan_date,
+                    session_type=focus_cycle[(index + week - 1) % len(focus_cycle)],
+                    day_index=index,
+                    week_index=week - 1,
+                    avoid_signatures=used_week_signatures,
+                    avoid_primary_ids=recent_primary_ids,
+                    exercise_pool=exercise_pool,
+                    allowed_equipment=allowed_equipment,
+                    media_by_exercise_id=media_by_exercise_id,
+                    localizations_by_exercise_id=localizations_by_exercise_id,
+                )
+                signature = _plan_items_signature(day_payload["items"], day_payload["session_type"])
+                used_week_signatures.add(signature)
+                week_signatures.append(signature)
+                if day_payload["items"]:
+                    recent_primary_ids = {day_payload["items"][0]["exercise_id"]}
+                day_payload["parent_month_week"] = week
+                day_payload["plan_version"] = day_payload.get("plan_version") or f"v{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+                db.add(Plan(id=day_payload["id"], user_id=user.id, plan_type="daily", payload=day_payload, safety_action=decision["action"]))
+            week_days.append(
+                {
+                    "id": (day_payload or {}).get("session_id") or f"rest_{plan_date}",
+                    "daily_plan_id": (day_payload or {}).get("id"),
+                    "plan_version": (day_payload or {}).get("plan_version"),
+                    "day": day,
+                    "date": plan_date,
+                    "day_index": index,
+                    "status": "planned" if planned_movement else "recovery",
+                    "focus": focus_cycle[(index + week - 1) % len(focus_cycle)],
+                    "session_type": "movement" if planned_movement else "recovery",
+                    "session_id": (day_payload or {}).get("session_id"),
+                    "planned_duration": day_payload["total_minutes"] if day_payload else 0,
+                    "duration_minutes": day_payload["total_minutes"] if day_payload else 0,
+                    "items": day_payload["items"] if day_payload else [],
+                    "media_summary": day_payload["media_summary"] if day_payload else {"playable": 0, "fallback": 0},
+                    "actions": ["open", "start", "make_easier", "move_session"] if planned_movement else ["swap_rest_day"],
+                }
+            )
+        weeks.append(
+            {
+                "week": week,
+                "phase": phase,
+                "progression_reason": hold_reason or reason,
+                "hold": week_hold,
+                "status": "hold" if week_hold else "planned",
+                "planned_sessions": sum(1 for day in week_days if day["status"] == "planned"),
+                "recovery_days": sum(1 for day in week_days if day["status"] != "planned"),
+                "focus": sorted({day["focus"] for day in week_days if day["status"] == "planned"}) or ["recovery", "reassessment"],
+                "days": week_days,
+                "total_planned_minutes": sum(day["duration_minutes"] for day in week_days),
+                "signature_count": len(set(week_signatures)),
+            }
+        )
     payload = {
         "id": "month_" + secrets.token_hex(8),
-        "program_start_date": datetime.now(UTC).date().isoformat(),
-        "weeks": [
-            {"week": week, "phase": phase, "progression_reason": hold_reason or reason, "hold": hold_reason is not None and week > 1}
-            for week, phase, reason in phases
-        ],
+        "program_start_date": start_date.isoformat(),
+        "weeks": weeks,
+        "timeline": ["Adaptation", "Consistency", "Gentle progression", "Recovery and reassessment"],
+        "actions": ["open_week", "open_day", "pause", "extend", "reduce_intensity", "change_frequency", "regenerate_future_days"],
         "blocking_rules": ["pain increase", "concerning symptoms", "low readiness", "poor adherence", "clinician restriction", "safety block"],
+        "generation_request_id": idempotency_key,
     }
+    for week in weeks:
+        for day in week["days"]:
+            if day.get("daily_plan_id"):
+                child = db.get(Plan, day["daily_plan_id"])
+                if child:
+                    child.payload = {**child.payload, "parent_month_id": payload["id"], "parent_month_week": week["week"]}
     db.add(Plan(id=payload["id"], user_id=user.id, plan_type="monthly", payload=payload, safety_action=decision["action"]))
     db.commit()
-    return {"plan": payload}
+    return {"plan": payload, "idempotent": False}
 
 
 @router.get("/plans/monthly/current")
@@ -1048,13 +1474,17 @@ def start_session(payload: SessionStartPayload, user: User = Depends(require_use
     if latest and latest.decision.get("action") == "BLOCK_AND_SHOW_SAFETY_MESSAGE":
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "readiness_blocks_workout", "safety_message": latest.decision.get("explanation")})
     if payload.resume:
-        existing = db.query(SessionRecord).filter(SessionRecord.user_id == user.id, SessionRecord.status == "in_progress").order_by(desc(SessionRecord.created_at)).first()
+        existing_query = db.query(SessionRecord).filter(SessionRecord.user_id == user.id, SessionRecord.status == "in_progress")
+        if payload.plan_id:
+            existing_query = existing_query.filter(SessionRecord.plan_id == payload.plan_id)
+        existing = existing_query.order_by(desc(SessionRecord.created_at)).first()
         if existing:
             return {"session": _session_payload(existing), "resumed": True}
     plan = db.get(Plan, payload.plan_id) if payload.plan_id else _latest_plan(user.id, "daily", db)
     if plan and plan.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "plan_not_found"})
-    session = SessionRecord(id="ses_" + secrets.token_hex(12), user_id=user.id, plan_id=plan.id if plan else None, payload={"plan": plan.payload if plan else None})
+    plan_item_ids = [item.get("plan_item_id") or item.get("id") for item in (plan.payload.get("items", []) if plan else []) if item.get("plan_item_id") or item.get("id")]
+    session = SessionRecord(id="ses_" + secrets.token_hex(12), user_id=user.id, plan_id=plan.id if plan else None, payload={"plan": plan.payload if plan else None, "plan_item_ids": plan_item_ids, "plan_version": (plan.payload or {}).get("plan_version") if plan else None})
     db.add(session)
     db.commit()
     return {"session": _session_payload(session), "resumed": False}
@@ -1210,6 +1640,23 @@ def providers():
     return {"items": [{"key": key, **value} for key, value in PROVIDER_REGISTRY.items()]}
 
 
+@router.post("/integrations/test-connection")
+def test_integration_connection(payload: ProductPayload, user: User = Depends(require_user)):
+    provider_key = str(payload.payload.get("provider_key", ""))
+    config = payload.payload.get("config") or {}
+    if provider_key not in PROVIDER_REGISTRY:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "provider_not_found"})
+    if provider_key == "nightscout":
+        server_url = str(config.get("server_url", "")).strip()
+        if not server_url.startswith("https://"):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "nightscout_https_required"})
+        return {"ok": True, "status": "configuration_valid", "provider_key": provider_key}
+    provider = PROVIDER_REGISTRY[provider_key]
+    if provider["status"] != "mock_ready":
+        return {"ok": False, "status": provider["status"], "provider_key": provider_key}
+    return {"ok": True, "status": "available", "provider_key": provider_key}
+
+
 @router.post("/integrations/connect", status_code=status.HTTP_201_CREATED)
 def connect_provider(payload: ProviderConnectPayload, user: User = Depends(require_user), db: Session = Depends(get_db)):
     if payload.provider_key not in PROVIDER_REGISTRY:
@@ -1222,7 +1669,7 @@ def connect_provider(payload: ProviderConnectPayload, user: User = Depends(requi
         status="mock_connected" if provider["status"] == "mock_ready" and payload.mock else provider["status"],
         scopes=payload.scopes or provider["scopes"],
         token_reference=None if payload.mock else "external_secret_store_required",
-        provenance={"mock": payload.mock, "blocked_reason": None if provider["status"] == "mock_ready" else provider["status"]},
+        provenance={"mock": payload.mock, "blocked_reason": None if provider["status"] == "mock_ready" else provider["status"], "configuration_present": bool(payload.config)},
     )
     db.add(connection)
     db.add(AuditLog(actor_id=user.id, action="provider.connect", target_type="provider", target_id=payload.provider_key, redacted_payload={"mock": payload.mock, "status": connection.status}))
@@ -1524,7 +1971,7 @@ def camera_analyze(payload: ProductPayload, user: User = Depends(require_user), 
 
 
 @router.get("/admin/policies")
-def policies(admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def policies(admin=Depends(require_admin_roles("clinical_reviewer", "content_editor", "super_admin", required_label="policy_access")), db: Session = Depends(get_db)):
     items = db.query(PolicyVersion).order_by(desc(PolicyVersion.created_at)).limit(50).all()
     if not items:
         items = [PolicyVersion(version="draft-2026-07-18", status="draft", rules={"source": "seed"}, clinical_review_state="draft")]
@@ -1532,11 +1979,13 @@ def policies(admin=Depends(require_admin_role("clinical_reviewer")), db: Session
 
 
 @router.post("/admin/policies", status_code=status.HTTP_201_CREATED)
-def create_policy(payload: PolicyCreatePayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def create_policy(payload: PolicyCreatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="policy_draft_create")), db: Session = Depends(get_db)):
+    if payload.clinical_review_state != "draft":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "policy_draft_create_cannot_set_review_state"})
     existing = db.query(PolicyVersion).filter(PolicyVersion.version == payload.version).one_or_none()
     if existing:
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "policy_version_exists"})
-    policy = PolicyVersion(version=payload.version, status="draft", rules=payload.rules, clinical_review_state=payload.clinical_review_state)
+    policy = PolicyVersion(version=payload.version, status="draft", rules=payload.rules, clinical_review_state=payload.clinical_review_state, creator_id=admin.id)
     db.add(policy)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.create", target_type="policy", target_id=policy.version, redacted_payload={"status": policy.status}))
     db.commit()
@@ -1544,41 +1993,60 @@ def create_policy(payload: PolicyCreatePayload, admin=Depends(require_admin_role
 
 
 @router.get("/admin/policies/{policy_id}")
-def policy_detail(policy_id: str, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def policy_detail(policy_id: str, admin=Depends(require_admin_roles("clinical_reviewer", "content_editor", "super_admin", required_label="policy_access")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
     approvals = db.query(PolicyApproval).filter(PolicyApproval.policy_version_id == policy.id).order_by(desc(PolicyApproval.created_at)).all()
     return {"policy": _policy_payload(policy, include_rules=True), "approvals": [_policy_approval_payload(item) for item in approvals]}
 
 
 @router.patch("/admin/policies/{policy_id}")
-def update_policy(policy_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def update_policy(policy_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="policy_draft_update")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
+    unknown = set(payload.payload) - {"rules"}
+    if unknown:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "policy_draft_update_forbidden_fields", "fields": sorted(unknown)})
     if "rules" in payload.payload and isinstance(payload.payload["rules"], dict):
         policy.rules = payload.payload["rules"]
-    if "clinical_review_state" in payload.payload:
-        policy.clinical_review_state = str(payload.payload["clinical_review_state"])
-    if "status" in payload.payload:
-        policy.status = str(payload.payload["status"])
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.update", target_type="policy", target_id=policy.version, redacted_payload={"fields": sorted(payload.payload.keys())}))
     db.commit()
     return {"policy": _policy_payload(policy, include_rules=True)}
 
 
+@router.post("/admin/policies/{policy_id}/submit")
+def submit_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="policy_submit")), db: Session = Depends(get_db)):
+    policy = _admin_policy_lookup(policy_id, db)
+    rationale = payload.rationale.strip()
+    if not rationale:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "rationale_required"})
+    policy.status = "submitted"
+    policy.clinical_review_state = "submitted"
+    policy.submitter_id = admin.id
+    policy.submitted_at = datetime.now(UTC)
+    db.add(AuditLog(actor_id=admin.id, action="admin.policy.submit", target_type="policy", target_id=policy.version, redacted_payload={"fields": ["status", "clinical_review_state"]}))
+    db.commit()
+    return {"policy": _policy_payload(policy, include_rules=True)}
+
+
 @router.post("/admin/policies/{policy_id}/approve")
-def approve_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
-    return _policy_action(policy_id, "approved", payload.rationale, admin.id, db)
+def approve_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("clinical_reviewer", required_label="policy_approve")), db: Session = Depends(get_db)):
+    return _policy_action(policy_id, "approved", payload.rationale, admin, db)
 
 
 @router.post("/admin/policies/{policy_id}/reject")
-def reject_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
-    return _policy_action(policy_id, "rejected", payload.rationale, admin.id, db)
+def reject_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("clinical_reviewer", required_label="policy_reject")), db: Session = Depends(get_db)):
+    return _policy_action(policy_id, "rejected", payload.rationale, admin, db)
 
 
 @router.post("/admin/policies/{policy_id}/publish")
-def publish_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def publish_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("super_admin", required_label="policy_publish")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
+    if policy.clinical_review_state != "approved" or not policy.approver_id:
+        db.add(AuditLog(actor_id=admin.id, action="admin.policy.publish.denied", target_type="policy", target_id=policy.version, redacted_payload={"reason": "missing_clinical_approval"}))
+        db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "policy_requires_clinical_approval"})
     policy.status = "published"
-    policy.clinical_review_state = "approved"
+    policy.publisher_id = admin.id
+    policy.published_at = datetime.now(UTC)
     approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=admin.id, decision="published", rationale=payload.rationale)
     db.add(approval)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.publish", target_type="policy", target_id=policy.version, redacted_payload={"decision": "published"}))
@@ -1587,9 +2055,11 @@ def publish_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(r
 
 
 @router.post("/admin/policies/{policy_id}/rollback")
-def rollback_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_role("clinical_reviewer")), db: Session = Depends(get_db)):
+def rollback_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(require_admin_roles("super_admin", required_label="policy_rollback")), db: Session = Depends(get_db)):
     policy = _admin_policy_lookup(policy_id, db)
     policy.status = "rolled_back"
+    policy.rollback_actor_id = admin.id
+    policy.rolled_back_at = datetime.now(UTC)
     approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=admin.id, decision="rolled_back", rationale=payload.rationale)
     db.add(approval)
     db.add(AuditLog(actor_id=admin.id, action="admin.policy.rollback", target_type="policy", target_id=policy.version, redacted_payload={"decision": "rolled_back"}))
@@ -1598,52 +2068,174 @@ def rollback_policy(policy_id: str, payload: PolicyActionPayload, admin=Depends(
 
 
 @router.get("/admin/exercises")
-def admin_exercises(admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
-    return exercise_search(page=1, page_size=25, db=db)
+def admin_exercises(admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_access")), db: Session = Depends(get_db)):
+    items = db.query(Exercise).order_by(Exercise.name).limit(25).all()
+    total = db.query(Exercise).count()
+    return {
+        "items": _exercise_list_payload(items, db, "en"),
+        "pagination": {"page": 1, "page_size": 25, "total": total},
+        "filter_options": _exercise_filter_options(db),
+        "media_policy": "hosted-https-required",
+    }
 
 
 @router.get("/admin/exercises/{exercise_id}")
-def admin_exercise_detail(exercise_id: str, admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
+def admin_exercise_detail(exercise_id: str, admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_access")), db: Session = Depends(get_db)):
     exercise = _get_exercise(exercise_id, db)
     approvals = db.query(MediaApproval).filter(MediaApproval.exercise_id == exercise.id).order_by(desc(MediaApproval.created_at)).all()
     tags = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).order_by(desc(ExerciseTag.created_at)).all()
-    return {"exercise": _exercise_payload(exercise, db, "en"), "turkish": _exercise_payload(exercise, db, "tr"), "media_approvals": [_media_approval_payload(item) for item in approvals], "tags": [_exercise_tag_payload(item) for item in tags], "revision_history": [tag.created_at.isoformat() for tag in tags if tag.created_at]}
+    metadata = exercise.source_metadata or {}
+    return {
+        "exercise": _exercise_payload(exercise, db, "en"),
+        "turkish": _exercise_payload(exercise, db, "tr"),
+        "metadata": metadata,
+        "substitution_ids": list(metadata.get("substitution_ids") or []),
+        "publication_preconditions": _exercise_publication_preconditions(exercise, db),
+        "media_approvals": [_media_approval_payload(item) for item in approvals],
+        "tags": [_exercise_tag_payload(item) for item in tags],
+        "revision_history": [tag.created_at.isoformat() for tag in tags if tag.created_at],
+    }
 
 
-@router.patch("/admin/exercises/{exercise_id}")
-def update_admin_exercise(exercise_id: str, payload: AdminUpdatePayload, admin=Depends(require_admin_role("exercise_reviewer")), db: Session = Depends(get_db)):
+@router.patch("/admin/exercises/{exercise_id}/translation")
+def update_admin_exercise_translation(exercise_id: str, payload: ExerciseTranslationUpdatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="exercise_translation_update")), db: Session = Depends(get_db)):
     exercise = _get_exercise(exercise_id, db)
+    if payload.locale != "tr":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_exercise_locale"})
+    title = _required_text(payload.title, "title_required")
+    reason = _required_text(payload.change_reason, "change_reason_required")
+    steps = _required_text_list(payload.instruction_steps, "instruction_steps_required")
+    localized = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id, ExerciseLocalization.locale == "tr").one_or_none()
+    if not localized:
+        localized = ExerciseLocalization(exercise_id=exercise.id, locale="tr", instructions="", instruction_steps=[])
+        db.add(localized)
     metadata = {**(exercise.source_metadata or {})}
-    if "safety_tags" in payload.payload:
-        tag = ExerciseTag(exercise_id=exercise.id, classifier_version="manual-admin", tags={"safety_tags": payload.payload["safety_tags"]}, provenance="admin", confidence=100, manual_review_status="approved")
-        db.add(tag)
-    for field in ["name", "body_part", "equipment", "target"]:
-        if field in payload.payload and str(payload.payload[field]).strip():
-            setattr(exercise, field, str(payload.payload[field]).strip().lower() if field != "name" else str(payload.payload[field]).strip())
-    if "turkish_title" in payload.payload or "turkish_instructions" in payload.payload:
-        localized = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id, ExerciseLocalization.locale == "tr").one_or_none()
-        if not localized:
-            localized = ExerciseLocalization(exercise_id=exercise.id, locale="tr", instructions="", instruction_steps=[])
-            db.add(localized)
-        if str(payload.payload.get("turkish_title", "")).strip():
-            metadata["tr_title"] = str(payload.payload["turkish_title"]).strip()
-        if str(payload.payload.get("turkish_instructions", "")).strip():
-            localized.instructions = str(payload.payload["turkish_instructions"]).strip()
-            localized.instruction_steps = [line.strip() for line in localized.instructions.splitlines() if line.strip()]
-    if "substitution_id" in payload.payload and str(payload.payload["substitution_id"]).strip():
-        substitutions = list(metadata.get("substitution_ids") or [])
-        substitution_id = str(payload.payload["substitution_id"]).strip()
-        if substitution_id not in substitutions:
-            substitutions.append(substitution_id)
-        metadata["substitution_ids"] = substitutions[:20]
-    if "restricted_regions" in payload.payload:
-        metadata["restricted_regions"] = payload.payload["restricted_regions"]
-    if "review_status" in payload.payload:
-        metadata["review_status"] = payload.payload["review_status"]
-    if "publish_state" in payload.payload:
-        metadata["publish_state"] = payload.payload["publish_state"]
+    metadata["tr_title"] = title
+    metadata["tr_form_cues"] = _clean_text_list(payload.form_cues)
+    metadata["tr_common_mistakes"] = _clean_text_list(payload.common_mistakes)
+    metadata["tr_breathing_cues"] = _clean_text_list(payload.breathing_cues)
+    metadata["translation_updated_by"] = admin.id
+    metadata["translation_updated_at"] = datetime.now(UTC).isoformat()
     exercise.source_metadata = metadata
-    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.update", target_type="exercise", target_id=exercise.id, redacted_payload={"fields": sorted(payload.payload.keys())}))
+    localized.instructions = "\n".join(steps)
+    localized.instruction_steps = steps
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.translation_update", target_type="exercise", target_id=exercise.id, redacted_payload={"locale": payload.locale, "reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.patch("/admin/exercises/{exercise_id}/metadata")
+def update_admin_exercise_metadata(exercise_id: str, payload: ExerciseMetadataUpdatePayload, admin=Depends(require_admin_roles("content_editor", "super_admin", required_label="exercise_metadata_update")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.change_reason, "change_reason_required")
+    metadata_updates = {
+        "category": payload.category,
+        "position": payload.position,
+        "difficulty": payload.difficulty,
+    }
+    equipment = payload.equipment.strip().lower() if payload.equipment and payload.equipment.strip() else None
+    cleaned = {key: str(value).strip().lower() for key, value in metadata_updates.items() if value and str(value).strip()}
+    if not cleaned and not equipment:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "metadata_field_required"})
+    metadata = {**(exercise.source_metadata or {})}
+    metadata.update(cleaned)
+    if equipment:
+        exercise.equipment = equipment
+    metadata["metadata_updated_by"] = admin.id
+    metadata["metadata_updated_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.metadata_update", target_type="exercise", target_id=exercise.id, redacted_payload={"fields": sorted([*cleaned.keys(), *(["equipment"] if equipment else [])]), "reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.patch("/admin/exercises/{exercise_id}/safety")
+def update_admin_exercise_safety(exercise_id: str, payload: ExerciseSafetyUpdatePayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_safety_update")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.review_reason, "review_reason_required")
+    safety_tags = _clean_text_list(payload.safety_tags)
+    restricted_regions = _clean_text_list(payload.restricted_regions)
+    contraindications = _clean_text_list(payload.contraindication_categories)
+    if not safety_tags and not restricted_regions and not contraindications:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "safety_field_required"})
+    metadata = {**(exercise.source_metadata or {})}
+    metadata["safety_tags"] = safety_tags
+    metadata["restricted_regions"] = restricted_regions
+    metadata["contraindication_categories"] = contraindications
+    metadata["review_status"] = "approved"
+    metadata["safety_reviewed_by"] = admin.id
+    metadata["safety_reviewed_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(ExerciseTag(exercise_id=exercise.id, classifier_version="manual-admin", tags={"safety_tags": safety_tags, "restricted_regions": restricted_regions, "contraindication_categories": contraindications}, provenance="admin", confidence=100, manual_review_status="approved"))
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.safety_update", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.post("/admin/exercises/{exercise_id}/substitutions")
+def add_admin_exercise_substitution(exercise_id: str, payload: ExerciseSubstitutionPayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_substitution_add")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    substitution = _get_exercise(payload.substitution_id, db)
+    reason = _required_text(payload.reason, "reason_required")
+    if substitution.id == exercise.id:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "self_substitution_rejected"})
+    metadata = {**(exercise.source_metadata or {})}
+    substitutions = list(metadata.get("substitution_ids") or [])
+    if substitution.id in substitutions:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "duplicate_substitution"})
+    substitutions.append(substitution.id)
+    metadata["substitution_ids"] = substitutions[:20]
+    metadata["substitution_updated_by"] = admin.id
+    metadata["substitution_updated_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.substitution_add", target_type="exercise", target_id=exercise.id, redacted_payload={"substitution_id": substitution.id, "reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.post("/admin/exercises/{exercise_id}/substitutions/remove")
+def remove_admin_exercise_substitution(exercise_id: str, payload: ExerciseSubstitutionPayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_substitution_remove")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.reason, "reason_required")
+    substitution_id = _required_text(payload.substitution_id, "substitution_id_required")
+    metadata = {**(exercise.source_metadata or {})}
+    substitutions = [item for item in list(metadata.get("substitution_ids") or []) if item != substitution_id]
+    metadata["substitution_ids"] = substitutions
+    metadata["substitution_updated_by"] = admin.id
+    metadata["substitution_updated_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.substitution_remove", target_type="exercise", target_id=exercise.id, redacted_payload={"substitution_id": substitution_id, "reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.post("/admin/exercises/{exercise_id}/publish")
+def publish_admin_exercise(exercise_id: str, payload: ExercisePublicationPayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_publish")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.reason, "reason_required")
+    preconditions = _exercise_publication_preconditions(exercise, db)
+    if not preconditions["eligible"]:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "exercise_publication_preconditions_failed", "preconditions": preconditions})
+    metadata = {**(exercise.source_metadata or {})}
+    metadata["publish_state"] = "published"
+    metadata["published_by"] = admin.id
+    metadata["published_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.publish", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": reason}))
+    db.commit()
+    return admin_exercise_detail(exercise_id, admin, db)
+
+
+@router.post("/admin/exercises/{exercise_id}/unpublish")
+def unpublish_admin_exercise(exercise_id: str, payload: ExercisePublicationPayload, admin=Depends(require_admin_roles("exercise_reviewer", "super_admin", required_label="exercise_unpublish")), db: Session = Depends(get_db)):
+    exercise = _get_exercise(exercise_id, db)
+    reason = _required_text(payload.reason, "reason_required")
+    metadata = {**(exercise.source_metadata or {})}
+    metadata["publish_state"] = "unpublished"
+    metadata["unpublished_by"] = admin.id
+    metadata["unpublished_at"] = datetime.now(UTC).isoformat()
+    exercise.source_metadata = metadata
+    db.add(AuditLog(actor_id=admin.id, action="admin.exercise.unpublish", target_type="exercise", target_id=exercise.id, redacted_payload={"reason": reason}))
     db.commit()
     return admin_exercise_detail(exercise_id, admin, db)
 
@@ -1695,6 +2287,10 @@ def update_admin_user(user_id: str, payload: AdminUpdatePayload, admin=Depends(r
     elif action == "enable":
         user.deleted_at = None
     elif action == "update_role":
+        if admin.role != "super_admin":
+            db.add(AuditLog(actor_id=admin.id, action="admin.user.update_role.denied", target_type="user", target_id=user.id, redacted_payload={"reason": "super_admin_required"}))
+            db.commit()
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "super_admin_required"})
         next_role = str(payload.payload.get("role", "user"))
         if next_role not in ADMIN_ROLES | {"user"}:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_role"})
@@ -1709,11 +2305,14 @@ def update_admin_user(user_id: str, payload: AdminUpdatePayload, admin=Depends(r
 @router.get("/admin/system")
 def admin_system(admin=Depends(require_admin_role("analyst")), db: Session = Depends(get_db)):
     store = get_token_revocation_store()
+    limiter = get_rate_limiter()
     return {
         "api": health(),
         "ready": ready(db),
         "postgresql": "configured" if "postgresql" in get_settings().database_url else "not_current_backend",
-        "redis": "configured" if isinstance(store, RedisTokenRevocationStore) else "development_fallback",
+        "redis": "configured_optional" if isinstance(store, RedisTokenRevocationStore) else "not_required",
+        "revocation": _revocation_store_name(store),
+        "rate_limiter": limiter.backend,
         "import_jobs": {"latest": "see audit logs"},
         "provider_status": [{"key": key, "status": value["status"]} for key, value in PROVIDER_REGISTRY.items()],
         "incidents": [_system_incident_payload(item) for item in db.query(SystemIncident).order_by(desc(SystemIncident.created_at)).limit(10).all()],
@@ -1761,18 +2360,31 @@ def admin_privacy_job_action(kind: str, job_id: int, action: str, payload: Admin
 @router.get("/admin/import-jobs")
 def admin_import_jobs(admin=Depends(require_admin_role("content_editor")), db: Session = Depends(get_db)):
     exercise_count = db.query(Exercise).count()
+    media_status = _exercise_media_admin_status(db)
     latest = db.query(AuditLog).filter(AuditLog.action.like("%import%")).order_by(desc(AuditLog.created_at)).limit(10).all()
-    return {"items": [{"kind": "exercise_import", "status": "ready", "records_available": exercise_count}], "audit": [{"event": item.action, "redacted": True} for item in latest]}
+    return {
+        "items": [
+            {"kind": "exercise_import", "status": "ready", "records_available": exercise_count},
+            {"kind": "exercise_media", "status": media_status["status"], "records_available": media_status["hosted_https_rows"]},
+        ],
+        "media": media_status,
+        "audit": [{"event": item.action, "redacted": True} for item in latest],
+    }
+
+
+@router.get("/admin/exercise-media")
+def admin_exercise_media(admin=Depends(require_admin_roles("exercise_reviewer", "content_editor", "super_admin", required_label="exercise_media_access")), db: Session = Depends(get_db)):
+    return _exercise_media_admin_status(db)
 
 
 @router.get("/admin/notifications")
-def admin_notifications(admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+def admin_notifications(admin=Depends(require_admin_roles("analyst", "support", "super_admin", required_label="notification_access")), db: Session = Depends(get_db)):
     jobs = db.query(NotificationJob).order_by(desc(NotificationJob.created_at)).limit(50).all()
     return {"items": [_notification_job_payload(item) for item in jobs], "provider": "mock_or_local"}
 
 
 @router.post("/admin/notifications/{job_id}/{action}")
-def admin_notification_action(job_id: int, action: str, admin=Depends(require_admin_role("support")), db: Session = Depends(get_db)):
+def admin_notification_action(job_id: int, action: str, admin=Depends(require_admin_roles("analyst", "support", "super_admin", required_label="notification_action")), db: Session = Depends(get_db)):
     job = db.get(NotificationJob, job_id)
     if not job:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "notification_job_not_found"})
@@ -1780,6 +2392,10 @@ def admin_notification_action(job_id: int, action: str, admin=Depends(require_ad
         job.status = "scheduled"
         job.retry_count += 1
     elif action == "cancel":
+        if admin.role not in {"support", "super_admin"}:
+            db.add(AuditLog(actor_id=admin.id, action="admin.notification.cancel.denied", target_type="notification_job", target_id=str(job.id), redacted_payload={"reason": "support_or_super_admin_required"}))
+            db.commit()
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "support_or_super_admin_required"})
         job.status = "cancelled"
     else:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_notification_action"})
@@ -1800,11 +2416,15 @@ def admin_integrations(admin=Depends(require_admin_role("analyst")), db: Session
 
 
 @router.post("/admin/integrations/{connection_id}/{action}")
-def admin_integration_action(connection_id: int, action: str, admin=Depends(require_admin_role("analyst")), db: Session = Depends(get_db)):
+def admin_integration_action(connection_id: int, action: str, admin=Depends(require_admin_roles("analyst", "super_admin", required_label="integration_action")), db: Session = Depends(get_db)):
     connection = db.get(ProviderConnection, connection_id)
     if not connection:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code": "integration_connection_not_found"})
-    if action == "disable":
+    if action in {"disable", "revoke"}:
+        if admin.role != "super_admin":
+            db.add(AuditLog(actor_id=admin.id, action=f"admin.integration.{action}.denied", target_type="provider_connection", target_id=str(connection.id), redacted_payload={"reason": "super_admin_required"}))
+            db.commit()
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "super_admin_required"})
         connection.status = "disabled"
         connection.token_reference = None
     elif action == "retry-sync":
@@ -1825,10 +2445,62 @@ def admin_e2e_seed(admin=Depends(require_admin_role("super_admin")), db: Session
         user = User(id="usr_closed_beta_e2e", email="closed-beta-e2e@example.test", password_hash=hash_password("MoveInRange1"), auth_provider="local", role="user")
         db.add(user)
         db.flush()
-    exercise = db.query(Exercise).order_by(Exercise.id).first()
-    if exercise:
-        media = MediaApproval(exercise_id=exercise.id, media_type="silhouette", license_state="internal", source="closed_beta_seed", status="pending", metadata_payload={})
-        db.add(media)
+    for email, role in {
+        "closed-beta-clinical@example.test": "clinical_reviewer",
+        "closed-beta-exercise@example.test": "exercise_reviewer",
+        "closed-beta-content@example.test": "content_editor",
+        "closed-beta-support@example.test": "support",
+        "closed-beta-analyst@example.test": "analyst",
+    }.items():
+        if not db.query(User).filter(User.email == email).one_or_none():
+            db.add(User(id="adm_" + hashlib.sha256(email.encode()).hexdigest()[:16], email=email, password_hash=hash_password("MoveInRangeAdmin1"), auth_provider="local", role=role))
+    exercise = db.get(Exercise, "exercise-closed-beta-admin-e2e")
+    if not exercise:
+        exercise = Exercise(
+            id="exercise-closed-beta-admin-e2e",
+            source_id="closed-beta-admin-e2e",
+            slug="closed-beta-admin-e2e",
+            name="000 Closed beta admin exercise",
+            body_part="legs",
+            equipment="chair",
+            target="mobility",
+            secondary_muscles=[],
+            source_metadata={"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"},
+        )
+        db.add(exercise)
+    else:
+        exercise.name = "000 Closed beta admin exercise"
+        exercise.body_part = "legs"
+        exercise.equipment = "chair"
+        exercise.target = "mobility"
+        exercise.secondary_muscles = []
+        exercise.source_metadata = {"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"}
+    substitution = db.get(Exercise, "exercise-closed-beta-admin-substitution")
+    if not substitution:
+        substitution = Exercise(
+            id="exercise-closed-beta-admin-substitution",
+            source_id="closed-beta-admin-substitution",
+            slug="closed-beta-admin-substitution",
+            name="001 Closed beta substitution exercise",
+            body_part="legs",
+            equipment="chair",
+            target="mobility",
+            secondary_muscles=[],
+            source_metadata={"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"},
+        )
+        db.add(substitution)
+    else:
+        substitution.name = "001 Closed beta substitution exercise"
+        substitution.body_part = "legs"
+        substitution.equipment = "chair"
+        substitution.target = "mobility"
+        substitution.secondary_muscles = []
+        substitution.source_metadata = {"category": "mobility", "position": "seated", "difficulty": "easy", "publish_state": "unpublished"}
+    for seeded in [exercise, substitution]:
+        if not db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == seeded.id, ExerciseLocalization.locale == "en").one_or_none():
+            db.add(ExerciseLocalization(exercise_id=seeded.id, locale="en", instructions="Move with control.", instruction_steps=["Move with control."]))
+    media = MediaApproval(exercise_id=exercise.id, media_type="silhouette", license_state="internal", source="closed_beta_seed", status="pending", metadata_payload={})
+    db.add(media)
     policy_version = "closed-beta-e2e-policy"
     if not db.query(PolicyVersion).filter(PolicyVersion.version == policy_version).one_or_none():
         db.add(PolicyVersion(version=policy_version, status="draft", rules={"closed_beta": True}, clinical_review_state="draft"))
@@ -1839,7 +2511,7 @@ def admin_e2e_seed(admin=Depends(require_admin_role("super_admin")), db: Session
     db.add_all([export, deletion, notification, connection])
     db.add(AuditLog(actor_id=admin.id, action="admin.e2e.seed", target_type="closed_beta", target_id=user.id, redacted_payload={"seed": True}))
     db.commit()
-    return {"user_id": user.id, "policy_version": policy_version, "privacy_export_id": export.id, "deletion_id": deletion.id, "notification_id": notification.id, "connection_id": connection.id, "exercise_id": exercise.id if exercise else None}
+    return {"user_id": user.id, "policy_version": policy_version, "privacy_export_id": export.id, "deletion_id": deletion.id, "notification_id": notification.id, "connection_id": connection.id, "exercise_id": exercise.id, "substitution_id": substitution.id}
 
 
 @router.get("/admin/audit")
@@ -1869,6 +2541,14 @@ def _show_reset_preview() -> bool:
     return settings.environment.lower() != "production" and settings.enable_development_reset_preview
 
 
+def _password_reset_page_base() -> str:
+    settings = get_settings()
+    configured = (settings.password_reset_url_base or settings.product_web_base_url).rstrip("/")
+    if configured.endswith("/auth/reset-password"):
+        return configured
+    return f"{configured}/auth/reset-password"
+
+
 def _validate_password_strength(password: str) -> None:
     if len(password) < 10 or not any(ch.islower() for ch in password) or not any(ch.isupper() for ch in password) or not any(ch.isdigit() for ch in password):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "weak_password"})
@@ -1877,8 +2557,12 @@ def _validate_password_strength(password: str) -> None:
 def _password_reset_record(token: str, db: Session) -> PasswordResetToken:
     record = db.query(PasswordResetToken).filter(PasswordResetToken.token_hash == token_hash(token)).one_or_none()
     now = datetime.now(UTC)
-    if not record or record.used_at is not None or _as_utc(record.expires_at) < now:
+    if not record:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "invalid_reset_token"})
+    if record.used_at is not None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "used_reset_token"})
+    if _as_utc(record.expires_at) < now:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "expired_reset_token"})
     return record
 
 
@@ -1941,13 +2625,18 @@ def _revoke_refresh_family(family_id: str, db: Session) -> None:
     records = db.query(AuthRefreshToken).filter(AuthRefreshToken.family_id == family_id).all()
     for record in records:
         record.revoked_at = record.revoked_at or now
-    get_token_revocation_store().revoke_refresh_family(family_id, get_settings().refresh_token_days * 24 * 60 * 60)
+    user_id = records[0].user_id if records else None
+    store = get_token_revocation_store()
+    if isinstance(store, PostgresTokenRevocationStore):
+        _record_postgres_revocation(db, "refresh_family", family_id, get_settings().refresh_token_days * 24 * 60 * 60, session_id=None, user_id=user_id, token_family_id=family_id, reason="refresh_family_revoked", actor_type="system", actor_id=user_id)
+    else:
+        store.revoke_refresh_family(family_id, get_settings().refresh_token_days * 24 * 60 * 60, user_id=user_id, reason="refresh_family_revoked", actor_type="system", actor_id=user_id)
 
 
 def _revoke_user_refresh_tokens(user_id: str, db: Session) -> None:
     records = db.query(AuthRefreshToken).filter(AuthRefreshToken.user_id == user_id, AuthRefreshToken.revoked_at.is_(None)).all()
-    for record in records:
-        _revoke_refresh_family(record.family_id, db)
+    for family_id in {record.family_id for record in records}:
+        _revoke_refresh_family(family_id, db)
 
 
 def _revoke_authorization_header(authorization: str | None) -> None:
@@ -1956,7 +2645,48 @@ def _revoke_authorization_header(authorization: str | None) -> None:
     token = authorization.removeprefix("Bearer ").strip()
     decoded = decode_token(token, "access")
     ttl = max(1, int(decoded.get("exp", 0)) - int(datetime.now(UTC).timestamp()))
-    get_token_revocation_store().revoke_access_token(decoded["jti"], ttl)
+    get_token_revocation_store().revoke_access_token(decoded["jti"], ttl, user_id=decoded.get("sub"), reason="logout", actor_type="user", actor_id=decoded.get("sub"))
+
+
+def _record_postgres_revocation(
+    db: Session,
+    token_type: str,
+    identifier: str,
+    ttl_seconds: int,
+    *,
+    session_id: str | None,
+    user_id: str | None,
+    token_family_id: str | None,
+    reason: str,
+    actor_type: str,
+    actor_id: str | None,
+) -> None:
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(seconds=max(1, ttl_seconds))
+    identifier_hash = token_hash(identifier)
+    existing = db.query(SessionRevocation).filter(SessionRevocation.token_type == token_type, SessionRevocation.token_identifier_hash == identifier_hash).one_or_none()
+    if existing:
+        existing.expires_at = max(_as_utc(existing.expires_at), expires_at)
+        existing.reason = reason
+        existing.actor_type = actor_type
+        existing.actor_id = actor_id
+        existing.metadata_redacted = {"token_material_stored": False}
+    else:
+        db.add(
+            SessionRevocation(
+                session_id=session_id,
+                user_id=user_id,
+                token_family_id=token_family_id,
+                token_type=token_type,
+                token_identifier_hash=identifier_hash,
+                revoked_at=now,
+                expires_at=expires_at,
+                reason=reason,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                metadata_redacted={"token_material_stored": False},
+            )
+        )
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -1964,14 +2694,20 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _rate_limit(key: str, limit: int) -> None:
-    settings = get_settings()
-    now = datetime.now(UTC)
-    window_start = now - timedelta(seconds=settings.rate_limit_window_seconds)
-    hits = [hit for hit in _rate_limits.get(key, []) if hit >= window_start]
-    if len(hits) >= limit:
+    try:
+        get_rate_limiter().check(key, limit)
+    except RateLimitExceeded:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail={"code": "rate_limited"})
-    hits.append(now)
-    _rate_limits[key] = hits
+
+
+def _revocation_store_name(store: object) -> str:
+    if isinstance(store, PostgresTokenRevocationStore):
+        return "postgres"
+    if isinstance(store, RedisTokenRevocationStore):
+        return "redis"
+    if isinstance(store, InMemoryTokenRevocationStore):
+        return "development_in_memory"
+    return "unknown"
 
 
 def _user_payload(user: User) -> dict[str, Any]:
@@ -1991,6 +2727,15 @@ def _policy_payload(record: PolicyVersion, include_rules: bool = False) -> dict[
         "version": record.version,
         "status": record.status,
         "clinical_review_state": record.clinical_review_state,
+        "creator_id": record.creator_id,
+        "submitter_id": record.submitter_id,
+        "approver_id": record.approver_id,
+        "publisher_id": record.publisher_id,
+        "rollback_actor_id": record.rollback_actor_id,
+        "submitted_at": record.submitted_at.isoformat() if record.submitted_at else None,
+        "approved_at": record.approved_at.isoformat() if record.approved_at else None,
+        "published_at": record.published_at.isoformat() if record.published_at else None,
+        "rolled_back_at": record.rolled_back_at.isoformat() if record.rolled_back_at else None,
         "created_at": record.created_at.isoformat() if record.created_at else None,
     }
     if include_rules:
@@ -2014,14 +2759,25 @@ def _policy_approval_payload(record: PolicyApproval) -> dict[str, Any]:
     return {"id": record.id, "reviewer_id": record.reviewer_id, "decision": record.decision, "rationale": record.rationale, "created_at": record.created_at.isoformat() if record.created_at else None}
 
 
-def _policy_action(policy_id: str, decision: str, rationale: str, reviewer_id: str, db: Session) -> dict[str, Any]:
+def _policy_action(policy_id: str, decision: str, rationale: str, admin: User, db: Session) -> dict[str, Any]:
     policy = _admin_policy_lookup(policy_id, db)
+    if admin.role != "clinical_reviewer":
+        db.add(AuditLog(actor_id=admin.id, action=f"admin.policy.{decision}.denied", target_type="policy", target_id=policy.version, redacted_payload={"reason": "clinical_reviewer_required"}))
+        db.commit()
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "clinical_reviewer_required"})
+    if policy.creator_id == admin.id:
+        db.add(AuditLog(actor_id=admin.id, action=f"admin.policy.{decision}.denied", target_type="policy", target_id=policy.version, redacted_payload={"reason": "self_approval_blocked"}))
+        db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"code": "self_approval_blocked"})
     policy.clinical_review_state = decision
+    if decision == "approved":
+        policy.approver_id = admin.id
+        policy.approved_at = datetime.now(UTC)
     if decision == "rejected":
         policy.status = "changes_requested"
-    approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=reviewer_id, decision=decision, rationale=rationale)
+    approval = PolicyApproval(policy_version_id=policy.id, reviewer_id=admin.id, decision=decision, rationale=rationale)
     db.add(approval)
-    db.add(AuditLog(actor_id=reviewer_id, action=f"admin.policy.{decision}", target_type="policy", target_id=policy.version, redacted_payload={"decision": decision}))
+    db.add(AuditLog(actor_id=admin.id, action=f"admin.policy.{decision}", target_type="policy", target_id=policy.version, redacted_payload={"decision": decision}))
     db.commit()
     return {"policy": _policy_payload(policy, include_rules=True), "approval": _policy_approval_payload(approval)}
 
@@ -2134,6 +2890,9 @@ def _process_deletion_job(job: DeletionJob, db: Session) -> dict[str, int]:
             health.pop(key, None)
         profile.health_payload = health
         counts["profile_health_fields"] = 1
+    active_sessions = db.query(AuthRefreshToken).filter(AuthRefreshToken.user_id == user_id, AuthRefreshToken.revoked_at.is_(None)).count()
+    _revoke_user_refresh_tokens(user_id, db)
+    counts["sessions_revoked"] = active_sessions
     return counts
 
 
@@ -2325,10 +3084,196 @@ def _get_exercise(exercise_id: str, db: Session) -> Exercise:
     return exercise
 
 
-def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: bool = False) -> dict[str, Any]:
+def _required_text(value: str | None, code: str) -> str:
+    text_value = str(value or "").strip()
+    if not text_value:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": code})
+    return text_value
+
+
+def _clean_text_list(values: list[str]) -> list[str]:
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
+def _required_text_list(values: list[str], code: str) -> list[str]:
+    cleaned = _clean_text_list(values)
+    if not cleaned:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": code})
+    return cleaned
+
+
+def _exercise_publication_preconditions(exercise: Exercise, db: Session) -> dict[str, Any]:
+    metadata = exercise.source_metadata or {}
+    localized = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id, ExerciseLocalization.locale == "tr").one_or_none()
+    safety_review_complete = metadata.get("review_status") == "approved" and bool(metadata.get("safety_reviewed_by"))
+    localized_content_complete = bool(str(metadata.get("tr_title") or "").strip()) and bool(localized and _clean_text_list(localized.instruction_steps or []))
+    return {
+        "eligible": safety_review_complete and localized_content_complete,
+        "safety_review_complete": safety_review_complete,
+        "localized_content_complete": localized_content_complete,
+    }
+
+
+def _exercise_filter_options(db: Session) -> dict[str, list[str]]:
+    exercises = db.query(Exercise).all()
+    return {
+        "body_part": sorted({item.body_part for item in exercises if item.body_part}),
+        "category": sorted({str((item.source_metadata or {}).get("category") or item.body_part).strip().lower() for item in exercises if item.body_part or (item.source_metadata or {}).get("category")}),
+        "equipment": sorted({item.equipment for item in exercises if item.equipment}),
+        "target": sorted({item.target for item in exercises if item.target}),
+        "position": sorted({_position_for_exercise(item) for item in exercises}),
+        "difficulty": sorted({_difficulty_for_exercise(item) for item in exercises}),
+        "impact": sorted({_impact_for_exercise(item) for item in exercises}),
+        "movement_type": sorted({_section_for_exercise(item) for item in exercises}),
+        "tags": _exercise_taxonomy_items(db, "tags"),
+    }
+
+
+def _exercise_taxonomy_items(db: Session, kind: str) -> list[str]:
+    exercises = db.query(Exercise).all()
+    if kind == "body_part":
+        return sorted({item.body_part for item in exercises if item.body_part})
+    if kind == "category":
+        return sorted({str((item.source_metadata or {}).get("category") or item.body_part).strip().lower() for item in exercises if item.body_part or (item.source_metadata or {}).get("category")})
+    if kind == "equipment":
+        return sorted({item.equipment for item in exercises if item.equipment})
+    if kind == "target":
+        return sorted({item.target for item in exercises if item.target})
+    if kind == "movement_type":
+        return sorted({_section_for_exercise(item) for item in exercises})
+    if kind == "tags":
+        values: set[str] = set()
+        for tag in db.query(ExerciseTag).all():
+            payload = tag.tags or {}
+            for value in payload.values():
+                if isinstance(value, str):
+                    values.add(value.strip().lower())
+                elif isinstance(value, list):
+                    values.update(str(item).strip().lower() for item in value if str(item).strip())
+        return sorted(values)
+    return []
+
+
+def _exercise_media_admin_status(db: Session) -> dict[str, Any]:
+    media_rows = db.query(ExerciseMedia).count()
+    hosted_https_rows = (
+        db.query(ExerciseMedia)
+        .filter(ExerciseMedia.image_path.like("https://%"), ExerciseMedia.gif_path.like("https://%"))
+        .count()
+    )
+    playable_rows = (
+        db.query(ExerciseMedia)
+        .filter(ExerciseMedia.license_status.in_(["available", "approved"]))
+        .filter(or_(ExerciseMedia.image_path.like("https://%"), ExerciseMedia.gif_path.like("https://%")))
+        .count()
+    )
+    missing_media_rows = (
+        db.query(ExerciseMedia)
+        .filter(or_(ExerciseMedia.image_path == "", ExerciseMedia.gif_path == "", ExerciseMedia.image_path.is_(None), ExerciseMedia.gif_path.is_(None)))
+        .count()
+    )
+    local_path_rows = (
+        db.query(ExerciseMedia)
+        .filter(or_(ExerciseMedia.image_path.like("file:%"), ExerciseMedia.gif_path.like("file:%"), ExerciseMedia.image_path.like("C:%"), ExerciseMedia.gif_path.like("C:%")))
+        .count()
+    )
+    storage_objects: dict[str, Any] = {"available": False}
+    try:
+        row = db.execute(
+            text(
+                """
+                select
+                  count(*) filter (where bucket_id='exercise-media' and name like 'v1/images/%') as image_objects,
+                  count(*) filter (where bucket_id='exercise-media' and name like 'v1/videos/%') as gif_objects,
+                  count(*) filter (where bucket_id='exercise-media') as total_objects,
+                  coalesce(sum((metadata->>'size')::bigint) filter (where bucket_id='exercise-media'), 0) as total_bytes
+                from storage.objects
+                """
+            )
+        ).mappings().one()
+        storage_objects = {"available": True, **dict(row)}
+    except SQLAlchemyError:
+        storage_objects = {"available": False}
+    return {
+        "status": "ready" if media_rows and hosted_https_rows == media_rows and playable_rows == media_rows and local_path_rows == 0 else "attention_required",
+        "media_rows": media_rows,
+        "hosted_https_rows": hosted_https_rows,
+        "playable_rows": playable_rows,
+        "missing_media_rows": missing_media_rows,
+        "local_path_rows": local_path_rows,
+        "bucket": "exercise-media",
+        "object_prefix": "v1",
+        "storage_objects": storage_objects,
+    }
+
+
+def _exercise_list_payload(items: list[Exercise], db: Session, language: str, user_id: str | None = None) -> list[dict[str, Any]]:
+    exercise_ids = [item.id for item in items]
+    if not exercise_ids:
+        return []
+    media_by_exercise = {
+        media.exercise_id: media
+        for media in db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id.in_(exercise_ids)).all()
+    }
+    localizations_by_exercise: dict[str, list[ExerciseLocalization]] = {exercise_id: [] for exercise_id in exercise_ids}
+    for localization in db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id.in_(exercise_ids)).all():
+        localizations_by_exercise.setdefault(localization.exercise_id, []).append(localization)
+    favorite_ids: set[str] = set()
+    if user_id:
+        favorite_ids = {
+            row[0]
+            for row in db.query(FavoriteExercise.exercise_id)
+            .filter(FavoriteExercise.user_id == user_id, FavoriteExercise.exercise_id.in_(exercise_ids))
+            .all()
+        }
+    return [
+        _exercise_brief_payload(
+            item,
+            language=language,
+            media=media_by_exercise.get(item.id),
+            localizations=localizations_by_exercise.get(item.id, []),
+            favorited=item.id in favorite_ids,
+        )
+        for item in items
+    ]
+
+
+def _related_exercises(exercise: Exercise, db: Session, language: str, user_id: str | None = None) -> list[dict[str, Any]]:
+    candidates = (
+        db.query(Exercise)
+        .filter(Exercise.id != exercise.id)
+        .filter(or_(Exercise.target == exercise.target, Exercise.body_part == exercise.body_part))
+        .limit(80)
+        .all()
+    )
+
+    def score(candidate: Exercise) -> tuple[int, str]:
+        value = 0
+        if candidate.target == exercise.target:
+            value += 40
+        if candidate.body_part == exercise.body_part:
+            value += 25
+        if candidate.equipment == exercise.equipment:
+            value += 15
+        if _position_for_exercise(candidate) == _position_for_exercise(exercise):
+            value += 10
+        if _difficulty_for_exercise(candidate) == _difficulty_for_exercise(exercise):
+            value += 5
+        if _impact_for_exercise(candidate) == _impact_for_exercise(exercise):
+            value += 5
+        return (-value, candidate.name)
+
+    ranked = sorted(candidates, key=score)[:8]
+    return _exercise_list_payload(ranked, db, language, user_id)
+
+
+def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: bool = False, user: User | None = None) -> dict[str, Any]:
     localizations = db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id).all()
     media = db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id == exercise.id).one_or_none()
     tag = db.query(ExerciseTag).filter(ExerciseTag.exercise_id == exercise.id).order_by(desc(ExerciseTag.created_at)).first()
+    favorited = False
+    if user:
+        favorited = db.query(FavoriteExercise).filter(FavoriteExercise.user_id == user.id, FavoriteExercise.exercise_id == exercise.id).one_or_none() is not None
     instructions = {loc.locale: loc.instructions for loc in localizations}
     steps = {loc.locale: loc.instruction_steps for loc in localizations}
     selected_locale = language if language in instructions else "en"
@@ -2346,28 +3291,194 @@ def _exercise_payload(exercise: Exercise, db: Session, language: str, brief: boo
         "locales": sorted(instructions),
         "derived_tags": tag.tags if tag else {},
         "safety_notes": ["Use a comfortable range and stop for concerning symptoms or increasing pain."],
+        "favorited": favorited,
+        "recent_state": {"viewed": bool(user)},
+        "media": _exercise_media_payload(media),
     }
     if not brief:
-        payload["media"] = {
-            "image": media.image_path if media else "",
-            "gif": media.gif_path if media else "",
-            "media_id": media.media_id if media else "",
-            "attribution": media.attribution if media else "",
-            "license_status": media.license_status if media else "external_terms_required",
-        }
+        payload["related_exercises"] = _related_exercises(exercise, db, language, user.id if user else None)
+        payload["safe_alternatives_label"] = "Related movements"
     return payload
 
 
-def _exercise_brief_payload(exercise: Exercise) -> dict[str, Any]:
+def _exercise_media_payload(media: ExerciseMedia | None) -> dict[str, Any]:
+    license_status = media.license_status if media else "missing"
+    image = media.image_path if media else ""
+    gif = media.gif_path if media else ""
+    image_url = image if image.startswith("https://") else ""
+    gif_url = gif if gif.startswith("https://") else ""
+    approved = license_status in {"approved", "available"} and bool(image_url or gif_url)
+    playable_type = "gif" if approved and gif else "image" if approved and image else "internal_fallback"
+    status_value = "available" if approved else "review_required" if media else "missing"
+    return {
+        "thumbnail_url": image_url,
+        "gif_url": gif_url,
+        "media_type": "gif" if gif_url else "image" if image_url else "fallback",
+        "status": status_value,
+        "width": 180 if approved else 0,
+        "height": 180 if approved else 0,
+        "version": "v1",
+        "image": image_url,
+        "gif": gif_url,
+        "raw_image_path_present": bool(image),
+        "raw_gif_path_present": bool(gif),
+        "mp4": "",
+        "thumbnail": image_url,
+        "media_id": media.media_id if media else "",
+        "attribution": media.attribution if media else "",
+        "license_status": license_status,
+        "playable": approved and bool(gif_url or image_url),
+        "playable_type": playable_type,
+        "fallback_type": "internal_motion" if not approved else None,
+        "validation_state": "approved" if approved else "requires_review",
+    }
+
+
+def _section_for_exercise(exercise: Exercise) -> str:
+    target = f"{exercise.body_part} {exercise.target}".lower()
+    if any(value in target for value in ["cardio", "cardiovascular"]):
+        return "cardio"
+    if any(value in target for value in ["calves", "forearms", "biceps", "triceps", "pectorals", "lats", "quads", "glutes", "hamstrings"]):
+        return "strength"
+    if any(value in target for value in ["abs", "waist", "spine", "back"]):
+        return "mobility"
+    return "mobility"
+
+
+def _position_for_exercise(exercise: Exercise) -> str:
+    text = f"{exercise.name} {exercise.slug}".lower()
+    if any(value in text for value in ["seated", "chair"]):
+        return "seated"
+    if any(value in text for value in ["lying", "floor", "prone", "supine"]):
+        return "floor"
+    if any(value in text for value in ["kneeling"]):
+        return "kneeling"
+    if any(value in text for value in ["wall", "supported"]):
+        return "supported"
+    return "standing"
+
+
+def _difficulty_for_exercise(exercise: Exercise) -> str:
+    equipment = exercise.equipment.lower()
+    text = f"{exercise.name} {exercise.target}".lower()
+    if any(value in equipment for value in ["barbell", "sled", "smith", "machine"]) or any(value in text for value in ["jump", "lever", "clean"]):
+        return "advanced"
+    if any(value in equipment for value in ["dumbbell", "kettlebell", "band", "cable"]):
+        return "moderate"
+    return "gentle"
+
+
+def _impact_for_exercise(exercise: Exercise) -> str:
+    text = f"{exercise.name} {exercise.slug}".lower()
+    if any(value in text for value in ["jump", "hop", "burpee", "sprint"]):
+        return "high"
+    if any(value in text for value in ["run", "lunge", "squat"]):
+        return "moderate"
+    return "low"
+
+
+def _plan_item_payload(
+    exercise: Exercise,
+    db: Session,
+    language: str,
+    block: str,
+    duration_seconds: int,
+    rest_seconds: int,
+    index: int,
+    approved_substitutions: list[str] | None = None,
+    media_by_exercise_id: dict[str, ExerciseMedia] | None = None,
+    localizations_by_exercise_id: dict[str, list[ExerciseLocalization]] | None = None,
+) -> dict[str, Any]:
+    brief = _exercise_brief_payload(
+        exercise,
+        db,
+        language,
+        media=(media_by_exercise_id or {}).get(exercise.id),
+        localizations=(localizations_by_exercise_id or {}).get(exercise.id),
+    )
+    return {
+        "exercise_id": brief["id"],
+        "source_id": brief["source_id"],
+        "name": brief["name"],
+        "description": brief["instruction"],
+        "section": block,
+        "block": block,
+        "category": brief["category"],
+        "targets": [brief["target"]],
+        "muscles": [brief["target"], *brief["secondary_muscles"]],
+        "equipment": brief["equipment"],
+        "position": brief["position"],
+        "difficulty": brief["difficulty"],
+        "impact": brief["impact"],
+        "unilateral": brief["unilateral"],
+        "side_switch": brief["side_switch"],
+        "preparation_seconds": brief["preparation_seconds"],
+        "duration_seconds": duration_seconds,
+        "work_seconds": duration_seconds,
+        "rest_seconds": rest_seconds,
+        "sets": 1 if block in {"warmup", "cooldown", "recovery"} else brief["sets"],
+        "reps": None if block in {"cardio", "recovery"} else brief["reps"],
+        "tempo": brief["tempo"],
+        "instructions": brief["instruction_steps"],
+        "breathing_cue": brief["breathing_cue"],
+        "mistakes": brief["mistakes"],
+        "safety_notes": brief["safety_notes"],
+        "contraindication_tags": brief["contraindication_tags"],
+        "approved_substitutions": approved_substitutions
+        if approved_substitutions is not None
+        else [item.id for item in db.query(Exercise).filter(Exercise.id != exercise.id, Exercise.equipment == exercise.equipment, Exercise.body_part == exercise.body_part).limit(3).all()],
+        "media": brief["media"],
+        "availability": "playable" if brief["media"]["playable"] else "fallback",
+        "validation_state": brief["media"]["validation_state"],
+        "order": index + 1,
+    }
+
+
+def _exercise_brief_payload(
+    exercise: Exercise,
+    db: Session | None = None,
+    language: str = "en",
+    media: ExerciseMedia | None = None,
+    localizations: list[ExerciseLocalization] | None = None,
+    favorited: bool = False,
+) -> dict[str, Any]:
+    media = media if media is not None else db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id == exercise.id).one_or_none() if db else None
+    localizations = localizations if localizations is not None else db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id == exercise.id).all() if db else []
+    instructions = {loc.locale: loc.instructions for loc in localizations}
+    steps = {loc.locale: loc.instruction_steps for loc in localizations}
+    selected_locale = language if language in instructions else "en"
+    metadata = exercise.source_metadata or {}
+    localized_name = metadata.get("tr_title") if selected_locale == "tr" else None
     return {
         "id": exercise.id,
         "slug": exercise.slug,
-        "name": exercise.name,
+        "source_id": exercise.source_id,
+        "name": localized_name or exercise.name,
         "body_part": exercise.body_part,
         "equipment": exercise.equipment,
         "target": exercise.target,
         "secondary_muscles": exercise.secondary_muscles or [],
-        "media_policy": "detail_endpoint_only",
+        "instruction": instructions.get(selected_locale) or instructions.get("en") or "",
+        "instruction_steps": steps.get(selected_locale) or steps.get("en") or [],
+        "section": metadata.get("section") or _section_for_exercise(exercise),
+        "category": metadata.get("category") or exercise.body_part,
+        "position": metadata.get("position") or _position_for_exercise(exercise),
+        "difficulty": metadata.get("difficulty") or _difficulty_for_exercise(exercise),
+        "impact": metadata.get("impact") or _impact_for_exercise(exercise),
+        "unilateral": bool(metadata.get("unilateral", False)),
+        "side_switch": bool(metadata.get("side_switch", False)),
+        "work_seconds": int(metadata.get("work_seconds") or 35),
+        "rest_seconds": int(metadata.get("rest_seconds") or 20),
+        "preparation_seconds": int(metadata.get("preparation_seconds") or 5),
+        "sets": int(metadata.get("sets") or 1),
+        "reps": metadata.get("reps") or 8,
+        "tempo": metadata.get("tempo") or "controlled",
+        "breathing_cue": metadata.get("breathing_cue") or "Breathe steadily and avoid holding your breath.",
+        "mistakes": metadata.get("mistakes") or ["Moving too fast", "Holding your breath", "Ignoring increasing pain"],
+        "safety_notes": ["Use a comfortable range and stop for concerning symptoms or increasing pain."],
+        "contraindication_tags": metadata.get("contraindication_tags") or [],
+        "media": _exercise_media_payload(media),
+        "favorited": favorited,
     }
 
 
@@ -2382,36 +3493,248 @@ def _latest_or_default_readiness(user_id: str, db: Session) -> ReadinessPayload:
     return ReadinessPayload(energy=3, sleep_quality=3, pain=1, available_minutes=15)
 
 
-def _daily_plan_payload(user_id: str, readiness: dict[str, Any], decision: dict[str, Any], db: Session) -> dict[str, Any]:
+SESSION_BLOCKS: dict[str, list[str]] = {
+    "daily": ["warmup", "mobility", "main", "cooldown"],
+    "mobility": ["warmup", "mobility", "balance", "cooldown"],
+    "upper_body": ["warmup", "upper_body", "main", "cooldown"],
+    "lower_body": ["warmup", "lower_body", "balance", "cooldown"],
+    "balance": ["warmup", "balance", "core", "cooldown"],
+    "conditioning": ["warmup", "cardio", "main", "cooldown"],
+    "core": ["warmup", "core", "mobility", "cooldown"],
+    "recovery": ["warmup", "mobility", "recovery", "cooldown"],
+}
+
+
+def _stable_plan_int(*parts: Any) -> int:
+    source = "|".join(str(part) for part in parts)
+    return int(hashlib.sha256(source.encode("utf-8")).hexdigest()[:16], 16)
+
+
+def _plan_items_signature(items: list[dict[str, Any]], session_type: str) -> str:
+    normalized = [
+        {
+            "exercise_id": item.get("exercise_id"),
+            "order": item.get("order"),
+            "sets": item.get("sets"),
+            "reps": item.get("reps"),
+            "work_seconds": item.get("work_seconds"),
+            "rest_seconds": item.get("rest_seconds"),
+        }
+        for item in items
+    ]
+    return hashlib.sha256(json.dumps({"session_type": session_type, "items": normalized}, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _exercise_focus_score(exercise: Exercise, session_type: str, block: str) -> int:
+    body_part = (exercise.body_part or "").lower()
+    target = (exercise.target or "").lower()
+    equipment = (exercise.equipment or "").lower()
+    metadata = exercise.source_metadata or {}
+    category = str(metadata.get("category") or "").lower()
+    section = str(metadata.get("section") or "").lower()
+    haystack = " ".join([body_part, target, equipment, category, section, exercise.name.lower()])
+    score = 0
+    if block in {"warmup", "cooldown", "recovery", "mobility"} and any(term in haystack for term in ["mobility", "stretch", "warm", "recovery", "body weight", "chair"]):
+        score += 35
+    if block == "cardio" and any(term in haystack for term in ["cardio", "march", "step", "jump", "run", "bike"]):
+        score += 35
+    if block in {"main", "upper_body"} and any(term in haystack for term in ["chest", "back", "shoulder", "arm", "biceps", "triceps"]):
+        score += 30
+    if block in {"main", "lower_body"} and any(term in haystack for term in ["leg", "quad", "glute", "hamstring", "calf", "hip"]):
+        score += 30
+    if block in {"core", "balance"} and any(term in haystack for term in ["core", "abs", "waist", "balance"]):
+        score += 30
+    if session_type in haystack:
+        score += 15
+    if equipment in {"body weight", "chair", "wall"}:
+        score += 8
+    if str(metadata.get("media_status") or "").lower() == "available":
+        score += 8
+    return score
+
+
+def _allowed_equipment_for_user(user_id: str, db: Session) -> set[str]:
+    profile = _profile_for(user_id, db)
+    payload = profile.health_payload or {}
+    equipment = payload.get("equipment") or payload.get("available_equipment") or []
+    if isinstance(equipment, str):
+        equipment = [equipment]
+    normalized = {str(item).strip().lower() for item in equipment if str(item).strip()}
+    return normalized | {"body weight", "bodyweight", "none"}
+
+
+def _plan_exercise_pool(user_id: str, readiness: dict[str, Any], decision: dict[str, Any], db: Session, allowed_equipment: set[str] | None = None) -> list[Exercise]:
+    query = db.query(Exercise)
+    if decision["action"] in {"LOW_INTENSITY_ONLY", "DELAY_AND_RECHECK", "READY_WITH_MODIFICATIONS"} or readiness.get("pain", 0) >= 5:
+        query = query.filter(or_(Exercise.equipment == "body weight", Exercise.equipment == "chair", Exercise.equipment == "wall"))
+    exercises = query.all()
+    allowed = allowed_equipment if allowed_equipment is not None else _allowed_equipment_for_user(user_id, db)
+    if allowed:
+        equipment_filtered = [
+            exercise
+            for exercise in exercises
+            if (exercise.equipment or "").strip().lower() in allowed or (exercise.equipment or "").strip().lower() in {"body weight", "bodyweight", "none"}
+        ]
+        if len(equipment_filtered) >= 4:
+            exercises = equipment_filtered
+    return exercises or _fallback_exercises(db)
+
+
+def _preload_plan_assets(exercises: list[Exercise], db: Session) -> tuple[dict[str, ExerciseMedia], dict[str, list[ExerciseLocalization]]]:
+    exercise_ids = [exercise.id for exercise in exercises]
+    if not exercise_ids:
+        return {}, {}
+    media_by_exercise_id = {
+        media.exercise_id: media
+        for media in db.query(ExerciseMedia).filter(ExerciseMedia.exercise_id.in_(exercise_ids)).all()
+    }
+    localizations_by_exercise_id: dict[str, list[ExerciseLocalization]] = {}
+    for localization in db.query(ExerciseLocalization).filter(ExerciseLocalization.exercise_id.in_(exercise_ids)).all():
+        localizations_by_exercise_id.setdefault(localization.exercise_id, []).append(localization)
+    return media_by_exercise_id, localizations_by_exercise_id
+
+
+def _select_plan_exercises(
+    user_id: str,
+    readiness: dict[str, Any],
+    decision: dict[str, Any],
+    db: Session,
+    *,
+    plan_date: str,
+    session_type: str,
+    day_index: int,
+    week_index: int,
+    explicit_seed: str | None,
+    avoid_primary_ids: set[str] | None,
+    exercise_pool: list[Exercise] | None,
+    allowed_equipment: set[str] | None,
+    attempt: int,
+    count: int,
+) -> list[Exercise]:
+    exercises = exercise_pool or _plan_exercise_pool(user_id, readiness, decision, db, allowed_equipment)
+    seed = explicit_seed or f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{attempt}"
+    blocks = SESSION_BLOCKS.get(session_type, SESSION_BLOCKS["daily"])
+    selected: list[Exercise] = []
+    avoid_primary_ids = avoid_primary_ids or set()
+    for block in blocks[:count]:
+        candidates = [exercise for exercise in exercises if exercise.id not in {item.id for item in selected}]
+        if not candidates:
+            break
+        if not selected and avoid_primary_ids and len(candidates) > 1:
+            candidates = [exercise for exercise in candidates if exercise.id not in avoid_primary_ids] or candidates
+        ranked = sorted(
+            candidates,
+            key=lambda exercise: (
+                -_exercise_focus_score(exercise, session_type, block),
+                _stable_plan_int(seed, block, exercise.id),
+                exercise.id,
+            ),
+        )
+        selected.append(ranked[0])
+    if len(selected) < count:
+        for exercise in sorted(exercises, key=lambda item: (_stable_plan_int(seed, "fill", item.id), item.id)):
+            if exercise.id not in {item.id for item in selected}:
+                selected.append(exercise)
+            if len(selected) >= count:
+                break
+    return selected[:count] or _fallback_exercises(db)[:count]
+
+
+def _daily_plan_payload(
+    user_id: str,
+    readiness: dict[str, Any],
+    decision: dict[str, Any],
+    db: Session,
+    *,
+    plan_date: str | None = None,
+    session_type: str = "daily",
+    day_index: int = 0,
+    week_index: int = 0,
+    explicit_seed: str | None = None,
+    avoid_signatures: set[str] | None = None,
+    avoid_primary_ids: set[str] | None = None,
+    exercise_pool: list[Exercise] | None = None,
+    allowed_equipment: set[str] | None = None,
+    media_by_exercise_id: dict[str, ExerciseMedia] | None = None,
+    localizations_by_exercise_id: dict[str, list[ExerciseLocalization]] | None = None,
+) -> dict[str, Any]:
+    plan_date = plan_date or datetime.now(UTC).date().isoformat()
     minutes = min([5, 10, 15, 20, 30, 45, 60], key=lambda value: abs(value - readiness.get("available_minutes", 15)))
-    query = db.query(Exercise).order_by(Exercise.name)
-    if decision["action"] in {"LOW_INTENSITY_ONLY", "DELAY_AND_RECHECK", "READY_WITH_MODIFICATIONS"}:
-        query = query.filter(or_(Exercise.equipment == "body weight", Exercise.equipment == "chair"))
-    exercises = query.limit(max(4, min(8, round(minutes / 4)))).all()
-    if not exercises:
-        exercises = _fallback_exercises(db)
+    if week_index == 2 and decision["action"] == "READY":
+        minutes = min(60, minutes + 5)
+    elif week_index == 3:
+        minutes = max(5, minutes - 5)
     total_seconds = minutes * 60
     base_items = []
-    blocks = ["warmup", "main", "cardio", "cooldown"]
-    for index, exercise in enumerate(exercises[:4]):
-        base_items.append({
-            "exercise_id": exercise.id,
-            "name": exercise.name,
-            "block": blocks[min(index, len(blocks) - 1)],
-            "duration_seconds": total_seconds // 4,
-            "rest_seconds": 20 if index in {0, 3} else 30,
-            "sets": 1 if index in {0, 3} else 2,
-            "reps": None if index == 2 else 8,
-            "approved_substitutions": [item.id for item in db.query(Exercise).filter(Exercise.id != exercise.id, Exercise.equipment == exercise.equipment).limit(2).all()],
-            "safety_notes": ["Stay conversational and stop for symptoms or increasing pain."],
-        })
+    blocks = SESSION_BLOCKS.get(session_type, SESSION_BLOCKS["daily"])
+    for attempt in range(0, 8):
+        exercises = _select_plan_exercises(
+            user_id,
+            readiness,
+            decision,
+            db,
+            plan_date=plan_date,
+            session_type=session_type,
+            day_index=day_index,
+            week_index=week_index,
+            explicit_seed=explicit_seed,
+            avoid_primary_ids=avoid_primary_ids,
+            exercise_pool=exercise_pool,
+            allowed_equipment=allowed_equipment,
+            attempt=attempt,
+            count=4,
+        )
+        base_items = []
+        for index, exercise in enumerate(exercises[:4]):
+            block = blocks[min(index, len(blocks) - 1)]
+            substitutions = [
+                candidate.id
+                for candidate in exercises
+                if candidate.id != exercise.id and candidate.equipment == exercise.equipment and candidate.body_part == exercise.body_part
+            ][:3]
+            item = _plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index, substitutions, media_by_exercise_id, localizations_by_exercise_id)
+            item["id"] = "item_" + hashlib.sha256(f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{index}:{exercise.id}".encode("utf-8")).hexdigest()[:16]
+            item["plan_item_id"] = item["id"]
+            item["session_date"] = plan_date
+            item["session_type"] = session_type
+            base_items.append(item)
+        if not avoid_signatures or _plan_items_signature(base_items, session_type) not in avoid_signatures:
+            break
+    if not base_items:
+        exercises = _fallback_exercises(db)
+        for index, exercise in enumerate(exercises[:4]):
+            block = blocks[min(index, len(blocks) - 1)]
+            item = _plan_item_payload(exercise, db, "en", block, total_seconds // 4, 20 if index in {0, 3} else 30, index)
+            item["id"] = "item_" + hashlib.sha256(f"{user_id}:{plan_date}:{session_type}:{week_index}:{day_index}:{index}:{exercise.id}".encode("utf-8")).hexdigest()[:16]
+            item["plan_item_id"] = item["id"]
+            item["session_date"] = plan_date
+            item["session_type"] = session_type
+            base_items.append(item)
     base_items[-1]["duration_seconds"] += total_seconds - sum(item["duration_seconds"] for item in base_items)
+    base_items[-1]["work_seconds"] = base_items[-1]["duration_seconds"]
+    plan_id = "day_" + secrets.token_hex(8)
+    session_id = "session_" + hashlib.sha256(f"{plan_id}:{plan_date}:{session_type}".encode("utf-8")).hexdigest()[:16]
     return {
-        "id": "day_" + secrets.token_hex(8),
+        "id": plan_id,
         "user_id": user_id,
+        "date": plan_date,
+        "day_index": day_index,
+        "week_index": week_index,
+        "session_id": session_id,
+        "session_type": session_type,
+        "title": f"{session_type.replace('_', ' ').title()} movement",
         "total_minutes": minutes,
+        "total_duration": minutes,
+        "total_seconds": total_seconds,
         "intensity": "low" if decision["action"] != "READY" else "moderate",
         "phase": "adaptation",
+        "sections": sorted({item["section"] for item in base_items}),
+        "movement_count": len(base_items),
+        "media_summary": {
+            "playable": sum(1 for item in base_items if item["media"]["playable"]),
+            "fallback": sum(1 for item in base_items if not item["media"]["playable"]),
+        },
+        "actions": ["start", "make_easier", "shorten", "replace_movement", "regenerate_safely", "view_details", "postpone", "mark_unavailable"],
         "generator_version": "mvp-rule-planner-2026-07-18",
         "policy_version": decision["policy_version"],
         "safety_decision": {**decision, "timestamp": datetime.now(UTC).isoformat()},
@@ -2440,6 +3763,13 @@ def _fallback_exercises(db: Session) -> list[Exercise]:
 
 def _latest_plan(user_id: str, plan_type: str, db: Session) -> Plan | None:
     return db.query(Plan).filter(Plan.user_id == user_id, Plan.plan_type == plan_type).order_by(desc(Plan.created_at)).first()
+
+
+def _latest_plan_by_generation_key(user_id: str, plan_type: str, generation_request_id: str, db: Session) -> Plan | None:
+    if not generation_request_id:
+        return None
+    recent = db.query(Plan).filter(Plan.user_id == user_id, Plan.plan_type == plan_type).order_by(desc(Plan.created_at)).limit(30).all()
+    return next((plan for plan in recent if (plan.payload or {}).get("generation_request_id") == generation_request_id), None)
 
 
 def _get_session(session_id: str, user_id: str, db: Session) -> SessionRecord:

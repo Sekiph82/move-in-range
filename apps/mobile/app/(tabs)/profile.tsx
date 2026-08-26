@@ -1,40 +1,38 @@
-import { useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "expo-router";
-import { apiFetch, recordConsent, saveCapacityProfile, saveGoalsTargets, saveOnboardingStep, saveProfile } from "../../src/api";
+import { Link, router } from "expo-router";
+import { apiFetch, logoutUser } from "../../src/api";
+import { LOGIN_ROUTE } from "../../src/features/auth/sessionGate";
+import { clearExerciseCache } from "../../src/features/exercises/exerciseCache";
+import { TabScreenScroll } from "../../src/features/shared/ui";
+import { useAppLanguage } from "../../src/i18n/LanguageProvider";
 import { useTheme } from "../../src/theme";
 
 export default function ProfileScreen() {
   const theme = useTheme();
   const queryClient = useQueryClient();
-  const [language, setLanguage] = useState<"en" | "tr">("en");
+  const { language, setLanguage, t } = useAppLanguage();
   const profile = useQuery({ queryKey: ["profile"], queryFn: () => apiFetch<any>("/profile") });
   const onboarding = useQuery({ queryKey: ["onboarding"], queryFn: () => apiFetch<any>("/onboarding") });
-  const save = useMutation({ mutationFn: () => saveProfile(language), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["profile"] }) });
-  const completeOnboarding = useMutation({
+  const logout = useMutation({
     mutationFn: async () => {
-      await saveOnboardingStep("identity", { preferred_name: "Aylin", date_of_birth: "1982-04-20", gender: "prefer_not_to_say", timezone: "Europe/Istanbul", language }, true, language);
-      await saveOnboardingStep("health_profile", { conditions: ["type_2_diabetes", "knee_condition"], clinician_prohibited_movements: [] }, true, language);
-      await saveGoalsTargets(["mobility", "strength"], ["back", "core"], "20 minute back and core session");
-      await saveCapacityProfile({ balance_level: "needs_support", floor_rise_capacity: "unable", walking_tolerance_minutes: 8 });
-      await recordConsent("health_data_processing", true, { source: "mobile_onboarding" });
-      return saveOnboardingStep("consent", { wellness_limitations: true, health_data_processing: true }, true, language);
+      await logoutUser();
+      await clearExerciseCache();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["onboarding"] });
-      queryClient.invalidateQueries({ queryKey: ["profile"] });
+      queryClient.clear();
+      router.replace(LOGIN_ROUTE as never);
     }
   });
   const item = profile.data?.profile;
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, gap: 16 }}>
+    <TabScreenScroll testID="profile-tab-scroll">
       <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 28, fontWeight: "700" }}>Profile</Text>
-      <Text style={{ color: theme.muted, fontSize: 16 }}>Health-aware onboarding and local development account.</Text>
+      <Text style={{ color: theme.muted, fontSize: 16 }}>Account, movement profile, settings, privacy, and connected tools.</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
         {[
-          ["/auth", "Auth"],
-          ["/onboarding", "Onboarding"],
+          ["/general-info", "General Information"],
+          ["/onboarding-edit", "Movement profile"],
           ["/settings", "Settings"],
           ["/integrations", "Integrations"],
           ["/notifications", "Notifications"],
@@ -50,7 +48,7 @@ export default function ProfileScreen() {
         ))}
       </View>
       <View style={{ backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: 8, padding: 16, gap: 8 }}>
-        <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>Onboarding</Text>
+        <Text style={{ color: theme.text, fontSize: 18, fontWeight: "700" }}>Movement profile</Text>
         <Text style={{ color: theme.text }}>Name: {item?.preferred_name ?? "Not saved"}</Text>
         <Text style={{ color: theme.text }}>Language: {item?.language ?? item?.locale ?? language}</Text>
         <Text style={{ color: theme.text }}>Conditions: {(item?.conditions ?? []).join(", ") || "None saved"}</Text>
@@ -67,14 +65,11 @@ export default function ProfileScreen() {
           <Text style={{ color: language === "tr" ? theme.surface : theme.text, fontWeight: "700" }}>Turkish</Text>
         </Pressable>
       </View>
-      <Pressable accessibilityLabel="Save onboarding profile" onPress={() => save.mutate()} style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.primary }}>
-        <Text style={{ color: theme.surface, fontWeight: "700" }}>{save.isPending ? "Saving..." : "Save onboarding profile"}</Text>
+      <Pressable accessibilityLabel="Log out" onPress={() => logout.mutate()} style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1 }}>
+        <Text style={{ color: theme.safety, fontWeight: "900" }}>{logout.isPending ? "Signing out..." : "Log out"}</Text>
       </Pressable>
-      <Pressable accessibilityLabel="Complete guided onboarding sample" onPress={() => completeOnboarding.mutate()} style={{ minHeight: 52, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1 }}>
-        <Text style={{ color: theme.primary, fontWeight: "700" }}>{completeOnboarding.isPending ? "Saving steps..." : "Complete guided onboarding sample"}</Text>
-      </Pressable>
-      {save.error ? <Text style={{ color: theme.safety }}>{String(save.error.message)}</Text> : null}
-      {completeOnboarding.error ? <Text style={{ color: theme.safety }}>{String(completeOnboarding.error.message)}</Text> : null}
-    </ScrollView>
+      <Text style={{ color: theme.muted }}>{t("settings.language")}: {language === "tr" ? t("settings.turkish") : t("settings.english")}</Text>
+      {logout.error ? <Text style={{ color: theme.safety }}>{String(logout.error.message)}</Text> : null}
+    </TabScreenScroll>
   );
 }

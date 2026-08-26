@@ -12,7 +12,7 @@ Production readiness artifacts:
 Local validation:
 
 ```powershell
-cd C:\Users\sekip\Desktop\MoveInRange-Workspace\move-in-range
+cd <repo-root>
 docker compose up -d postgres redis
 npm.cmd run db:migrate
 npm.cmd run import:exercises -- ..\exercises-dataset-main\data\exercises.json
