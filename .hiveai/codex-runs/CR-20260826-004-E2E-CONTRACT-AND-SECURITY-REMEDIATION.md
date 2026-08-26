@@ -157,3 +157,84 @@ run. No authoritative audit, current pointer, dashboard, task ledger, or handoff
 ## Commit record
 
 - Dependency remediation and this CR were committed as `97459cd8fc5f1db59f4fc551b8c437c3b5ff22cc`.
+
+## Repeat execution evidence (2026-08-26, second repeat)
+
+This repeat began at clean revision `47999120c810496b70b28ea1bfd45cd5a21eb90a` on
+`codex/main-consolidation`. No product source, dependency manifest, workflow, audit, dashboard,
+task ledger, pointer, or handoff file was changed during this repeat; only this CR section was
+appended after validation.
+
+### Host repeat
+
+- `docker info` initially returned exit `1`; Docker Desktop was started and became ready at server
+  version `29.5.3`.
+- `npm.cmd ci`: passed; 818 packages installed; npm reported `20` vulnerabilities (`9 high`,
+  `11 moderate`).
+- `npm.cmd run format:check`: passed.
+- `npm.cmd run lint`: passed.
+- `npm.cmd run checklist:check`: passed.
+- `npm.cmd run typecheck`: passed for all workspaces.
+- `npm.cmd test`: `75 total`, `65 passed`, `0 failed`, `10 skipped`.
+- The ten host Node skips were legitimate live-service preconditions. The two admin browser tests
+  require `ADMIN_E2E_BASE_URL`; the product API/UI tests require the configured combinations of
+  `PRODUCT_E2E_API_BASE_URL`, `PRODUCT_WEB_BASE_URL`, `API_BASE_URL`, and `MAILPIT_BASE_URL`.
+  Docker ran all ten with `0` skips.
+- `npm.cmd run build`: passed with Next `15.5.24`.
+- `npm.cmd run mobile:web:build`: passed.
+- `npm.cmd run security:check`: passed; no obvious committed secrets found.
+- `npm.cmd audit`: exit `1`; `20 vulnerabilities` (`9 high`, `11 moderate`, `0 critical`).
+- `npm.cmd audit --audit-level=high`: exit `1`; remaining high findings are the Expo/Metro
+  `image-size` chain and `postcss`. The reported remediations require Expo `57.0.16` or Next
+  `16.3.3` major upgrades, so no force upgrade was applied.
+- `npm.cmd ls --all`: passed.
+- `ruff.exe check services/api`: passed.
+- `python -m pytest services/api/tests -q --basetemp=$env:TEMP\\moveinrange-cr004-repeat-pytest`:
+  `34 passed`, `0 failed`, `2 skipped`.
+- The two host Python skips were legitimate service URL preconditions: PostgreSQL integration
+  requires `TEST_DATABASE_URL`, and Redis revocation integration requires `REDIS_URL`. Docker
+  ran both.
+- `npx.cmd expo-doctor`: `18/18 checks passed`.
+- `npx.cmd expo export --platform ios`: passed.
+- `npx.cmd expo export --platform android`: passed.
+- Generated native/web export directories were removed after validation.
+
+### Python security repeat
+
+- `python -m pip install pip-audit`: exit `0`; `pip-audit 2.9.0` already installed.
+- `pip-audit --timeout 15 -r services/api/requirements.txt`: produced no result after a bounded
+  two-minute wait and was stopped with exit `1`. Python dependency security status remains
+  `UNVERIFIED` for this repeat; no Python dependency change was made.
+
+### Docker repeat
+
+- `docker compose config -q`: passed.
+- `docker compose --profile test config -q`: passed.
+- `docker compose --profile test build`: passed; API, admin, product web, migration, and test
+  images built successfully.
+- `docker compose up -d --build`: passed.
+- `docker compose ps`: all six runtime services were healthy: `postgres`, `redis`, `mailpit`,
+  `api`, `admin`, and `product-web`.
+- `http://localhost:8200/api/v1/health`, `http://localhost:8200/api/v1/ready`,
+  `http://localhost:3200/login`, `http://localhost:3210/healthz`, and
+  `http://localhost:8025/api/v1/info` each returned HTTP `200`.
+- `docker compose exec -T api sh -lc 'cd /app/services/api && python -m alembic heads'` returned
+  exactly one head: `20260719_0010`.
+- `docker compose --profile test run --rm tests`: Node `75 passed`, `0 failed`, `0 skipped`;
+  API `36 passed`, `0 failed`, `0 skipped`; PostgreSQL and Redis integration tests ran. Format,
+  lint, checklist, typecheck, migration, exercise import, workspace build, and security checks
+  passed. Aggregate exit was `1` only at the final npm high-advisory gate.
+- `docker compose logs --no-color --tail=100 postgres redis mailpit api admin product-web`: normal
+  startup/readiness output only; no service errors observed.
+- `docker compose --profile test down --remove-orphans`: passed.
+- Docker Desktop was stopped after validation because this repeat started it. Final `docker info`
+  exit was `1`; final Docker Desktop process count was `0`.
+
+### Repeat result
+
+- Docker eliminated all host dependency skips: Node `0` skips and API `0` skips in the container.
+- Remaining failure/blocker is unchanged and explicit: npm audit high gate exit `1` for nine high
+  advisories whose safe fixes require major Expo/Next upgrades.
+- Python audit is unchanged and explicitly `UNVERIFIED` because the advisory index did not respond
+  within the bounded wait.
+- This repeat wrote only this matching P004 CR; it did not write the authoritative audit.
