@@ -1,0 +1,62 @@
+[
+  {
+    "id": "ci-0001",
+    "name": "Chair-supported march",
+    "category": "cardio",
+    "body_part": "cardio",
+    "equipment": "body weight",
+    "instructions": {
+      "en": "Sit tall near the front of a stable chair and march one knee at a time at a comfortable pace.",
+      "tr": "Sabit bir sandalyenin on tarafina dik oturun ve dizlerinizi rahat bir tempoda sirayla kaldirin."
+    },
+    "instruction_steps": {
+      "en": [
+        "Sit tall near the front of a stable chair.",
+        "Place both feet flat on the floor.",
+        "Lift one knee slightly, lower it, then repeat on the other side."
+      ],
+      "tr": [
+        "Sabit bir sandalyenin on tarafina dik oturun.",
+        "Iki ayaginizi da yere duz basin.",
+        "Bir dizinizi hafifce kaldirin, indirin ve diger tarafla tekrarlayin."
+      ]
+    },
+    "target": "cardiovascular system",
+    "secondary_muscles": ["hip flexors"],
+    "media_id": "ci-chair-march",
+    "image": "fixtures/chair-march.png",
+    "gif_url": "fixtures/chair-march.gif",
+    "attribution": "MoveInRange CI fixture; no external media included.",
+    "created_at": "2026-07-18T00:00:00Z"
+  },
+  {
+    "id": "ci-0002",
+    "name": "Wall shoulder glide",
+    "category": "mobility",
+    "body_part": "shoulders",
+    "equipment": "wall",
+    "instructions": {
+      "en": "Stand near a wall and slide the hands upward only within a comfortable, pain-free range.",
+      "tr": "Duvara yakin durun ve ellerinizi yalnizca rahat, agrisiz aralikta yukari kaydirin."
+    },
+    "instruction_steps": {
+      "en": [
+        "Stand facing a wall with relaxed shoulders.",
+        "Place fingertips on the wall at chest height.",
+        "Slide the hands upward only as far as comfortable, then return."
+      ],
+      "tr": [
+        "Omuzlar rahat olacak sekilde duvara donuk durun.",
+        "Parmak uclarinizi gogus hizasinda duvara yerlestirin.",
+        "Ellerinizi rahat oldugu kadar yukari kaydirin ve geri donun."
+      ]
+    },
+    "target": "shoulders",
+    "secondary_muscles": ["upper back"],
+    "media_id": "ci-wall-shoulder-glide",
+    "image": "fixtures/wall-shoulder-glide.png",
+    "gif_url": "fixtures/wall-shoulder-glide.gif",
+    "attribution": "MoveInRange CI fixture; no external media included.",
+    "created_at": "2026-07-18T00:00:00Z"
+  }
+]

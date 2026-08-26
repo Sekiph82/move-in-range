@@ -1,0 +1,127 @@
+export type ExerciseMedia = {
+  thumbnail_url?: string;
+  gif_url?: string;
+  media_type?: string;
+  status?: string;
+  width?: number;
+  height?: number;
+  version?: string;
+  image?: string;
+  gif?: string;
+  mp4?: string;
+  thumbnail?: string;
+  playable?: boolean;
+  playable_type?: string;
+  fallback_type?: string | null;
+  validation_state?: string;
+  license_status?: string;
+  raw_image_path_present?: boolean;
+  raw_gif_path_present?: boolean;
+};
+
+export type PlanExerciseItem = {
+  id?: string;
+  plan_item_id?: string;
+  exercise_id: string;
+  source_id?: string;
+  name: string;
+  body_part?: string;
+  description?: string;
+  section?: string;
+  block?: string;
+  category?: string;
+  target?: string;
+  targets?: string[];
+  muscles?: string[];
+  equipment?: string;
+  position?: string;
+  difficulty?: string;
+  impact?: string;
+  unilateral?: boolean;
+  side_switch?: boolean;
+  preparation_seconds?: number;
+  duration_seconds?: number;
+  work_seconds?: number;
+  rest_seconds?: number;
+  sets?: number;
+  reps?: number | null;
+  tempo?: string;
+  instructions?: string[];
+  instruction_steps?: string[];
+  breathing_cue?: string;
+  mistakes?: string[];
+  safety_notes?: string[];
+  approved_substitutions?: string[];
+  media?: ExerciseMedia;
+  favorited?: boolean;
+  availability?: string;
+  validation_state?: string;
+  order?: number;
+};
+
+export type MovementPlan = {
+  id: string;
+  plan_version?: string;
+  generation_request_id?: string;
+  date?: string;
+  title?: string;
+  session_type?: string;
+  total_minutes?: number;
+  total_duration?: number;
+  total_seconds?: number;
+  intensity?: string;
+  phase?: string;
+  sections?: string[];
+  movement_count?: number;
+  media_summary?: { playable?: number; fallback?: number };
+  items?: PlanExerciseItem[];
+  safety_decision?: { action?: string; explanation?: string };
+  explanation?: string;
+};
+
+export type ProgramDay = {
+  id?: string;
+  day: string;
+  date?: string;
+  day_index?: number;
+  focus?: string;
+  session_type?: string;
+  session_id?: string;
+  daily_plan_id?: string;
+  plan_version?: string;
+  planned_duration?: number;
+  duration_minutes?: number;
+  intensity?: string;
+  status?: string;
+  safety_modified?: boolean;
+  items?: PlanExerciseItem[];
+  media_summary?: { playable?: number; fallback?: number };
+  actions?: string[];
+};
+
+export type MonthWeek = {
+  week: number;
+  phase: string;
+  progression_reason?: string;
+  hold?: boolean;
+  status?: string;
+  planned_sessions?: number;
+  recovery_days?: number;
+  focus?: string[];
+  total_planned_minutes?: number;
+  signature_count?: number;
+  days?: ProgramDay[];
+};
+
+export type WeeklyPlan = {
+  id?: string;
+  days?: ProgramDay[];
+  total_planned_minutes?: number;
+  week_start?: string;
+};
+
+export type MonthlyPlan = {
+  id?: string;
+  weeks?: MonthWeek[];
+  timeline?: string[];
+};

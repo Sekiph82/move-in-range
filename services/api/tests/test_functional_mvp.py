@@ -1,0 +1,429 @@
+import importlib
+from pathlib import Path
+from fastapi.testclient import TestClient
+
+
+def _client(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'mvp.db'}")
+    settings_mod = importlib.import_module("app.settings")
+    importlib.reload(settings_mod)
+    settings_mod.get_settings.cache_clear()
+    session_mod = importlib.import_module("app.db.session")
+    importlib.reload(session_mod)
+    importlib.import_module("app.db.models")
+    importer = importlib.import_module("app.scripts.import_exercises")
+    importlib.reload(importer)
+    session_mod.init_db()
+    importer.import_dataset(Path(__file__).parents[3] / "tests/fixtures/exercises.sample.json")
+    security_mod = importlib.import_module("app.security")
+    importlib.reload(security_mod)
+    routes_mod = importlib.import_module("app.routes")
+    importlib.reload(routes_mod)
+    main_mod = importlib.import_module("app.main")
+    importlib.reload(main_mod)
+    return TestClient(main_mod.app)
+
+
+def _register(client, email):
+    response = client.post("/api/v1/auth/register", json={"email": email, "password": "MoveInRange1"})
+    assert response.status_code == 201, response.text
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _seed_varied_plan_exercises():
+    from app.db.models import Exercise, ExerciseLocalization
+    from app.db.session import SessionLocal
+
+    records = [
+        ("plan-chair-march", "Chair march", "cardio", "body weight", "cardio"),
+        ("plan-wall-glide", "Wall glide", "shoulders", "wall", "mobility"),
+        ("plan-standing-row", "Standing row", "back", "band", "upper body"),
+        ("plan-hip-hinge", "Hip hinge", "hips", "body weight", "lower body"),
+        ("plan-calf-raise", "Calf raise", "legs", "body weight", "lower body"),
+        ("plan-bird-dog", "Bird dog", "core", "body weight", "core"),
+        ("plan-side-step", "Side step", "legs", "body weight", "balance"),
+        ("plan-neck-mobility", "Neck mobility", "neck", "body weight", "mobility"),
+        ("plan-breathing", "Breathing cooldown", "cardio", "body weight", "recovery"),
+        ("plan-supported-squat", "Supported squat", "legs", "chair", "strength"),
+    ]
+    with SessionLocal() as db:
+        for source_id, name, body_part, equipment, target in records:
+            exercise_id = f"exercise-{source_id}"
+            if db.get(Exercise, exercise_id):
+                continue
+            db.add(
+                Exercise(
+                    id=exercise_id,
+                    source_id=source_id,
+                    slug=source_id,
+                    name=name,
+                    body_part=body_part,
+                    equipment=equipment,
+                    target=target,
+                    secondary_muscles=[],
+                    source_metadata={"category": target, "media_status": "available"},
+                )
+            )
+            db.add(
+                ExerciseLocalization(
+                    exercise_id=exercise_id,
+                    locale="en",
+                    instructions="Move with control in a comfortable range.",
+                    instruction_steps=["Set your position.", "Move slowly.", "Stop if symptoms increase."],
+                )
+            )
+        db.commit()
+
+
+def _exercise_signature(day):
+    return tuple(item["exercise_id"] for item in day.get("items", []))
+
+
+def test_daily_generation_is_idempotent_and_timed(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "daily-idempotent@example.test")
+    request = {"energy": 3, "sleep_quality": 3, "pain": 2, "available_minutes": 15, "stress": 2, "idempotency_key": "daily-key-1"}
+    first = client.post("/api/v1/plans/daily/generate", headers=headers, json=request)
+    second = client.post("/api/v1/plans/daily/generate", headers=headers, json=request)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_payload = first.json()
+    second_payload = second.json()
+    assert first_payload["plan"]["id"] == second_payload["plan"]["id"]
+    assert first_payload["plan"]["generation_request_id"] == "daily-key-1"
+    assert second_payload["idempotent"] is True
+    assert "exercise_pool" in first_payload["timings_ms"]
+    assert "total" in first_payload["timings_ms"]
+
+    from app.db.models import Plan
+    from app.db.session import SessionLocal
+
+    with SessionLocal() as db:
+        plans = db.query(Plan).filter(Plan.plan_type == "daily").all()
+        assert len(plans) == 1
+
+
+def test_plan_lookup_and_session_preserve_canonical_item_ids(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "canonical-plan@example.test")
+    request = {"energy": 4, "sleep_quality": 3, "pain": 1, "available_minutes": 15, "stress": 2, "idempotency_key": "canonical-daily-1"}
+    generated = client.post("/api/v1/plans/daily/generate", headers=headers, json=request)
+    assert generated.status_code == 201, generated.text
+    plan = generated.json()["plan"]
+    preview = client.get(f"/api/v1/plans/{plan['id']}", headers=headers)
+    assert preview.status_code == 200, preview.text
+    preview_ids = [item["plan_item_id"] for item in preview.json()["plan"]["items"]]
+    session = client.post("/api/v1/sessions", headers=headers, json={"plan_id": plan["id"], "resume": False})
+    assert session.status_code == 201, session.text
+    payload = session.json()["session"]["payload"]
+    assert payload["plan"]["id"] == plan["id"]
+    assert payload["plan_item_ids"] == preview_ids
+
+
+def test_weekly_generation_is_idempotent_and_links_daily_plans(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "weekly-idempotent@example.test")
+    request = {"idempotency_key": "weekly-key-1"}
+    first = client.post("/api/v1/plans/weekly/generate", headers=headers, json=request)
+    second = client.post("/api/v1/plans/weekly/generate", headers=headers, json=request)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["plan"]["id"] == second.json()["plan"]["id"]
+    planned_days = [day for day in first.json()["plan"]["days"] if day["status"] == "planned"]
+    assert planned_days
+    assert all(day["daily_plan_id"] for day in planned_days)
+    child = client.get(f"/api/v1/plans/{planned_days[0]['daily_plan_id']}", headers=headers)
+    assert child.status_code == 200, child.text
+    assert child.json()["plan"]["id"] == planned_days[0]["daily_plan_id"]
+
+
+def test_general_information_patch_preserves_unowned_profile_fields(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "general-info@example.test")
+    profile = client.put(
+        "/api/v1/profile",
+        headers=headers,
+        json={
+            "preferred_name": "General User",
+            "language": "en",
+            "timezone": "UTC",
+            "conditions": ["legacy-condition"],
+            "equipment": ["chair"],
+            "goals": ["mobility"],
+            "activity_level": "starting",
+            "consent_accepted": True,
+            "onboarding_complete": True,
+        },
+    )
+    assert profile.status_code == 200, profile.text
+    patched = client.put(
+        "/api/v1/profile/general",
+        headers=headers,
+        json={"payload": {"preferred_name": "Updated User", "gender": "Male", "date_of_birth": "1982-04-20", "height_cm": 178, "weight_kg": 94, "conditions": ["legacy-condition", "Type 1 Diabetes"]}},
+    )
+    assert patched.status_code == 200, patched.text
+    data = patched.json()["profile"]
+    assert data["preferred_name"] == "Updated User"
+    assert data["equipment"] == ["chair"]
+    assert data["goals"] == ["mobility"]
+    assert data["conditions"] == ["legacy-condition", "Type 1 Diabetes"]
+    assert data["date_of_birth"] == "1982-04-20"
+
+
+def test_onboarding_completion_merges_only_editor_owned_profile_fields(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "onboarding-edit@example.test")
+    profile = client.put(
+        "/api/v1/profile",
+        headers=headers,
+        json={
+            "preferred_name": "Mover",
+            "country": "US",
+            "timezone": "America/New_York",
+            "language": "en",
+            "conditions": ["legacy_condition"],
+            "sensitivities": {"legacy": True},
+            "equipment": ["body weight"],
+            "goals": ["mobility"],
+            "medical_clearance": "cleared",
+            "consent_accepted": True,
+            "diabetes": {"enabled": False},
+        },
+    )
+    assert profile.status_code == 200
+    response = client.put(
+        "/api/v1/onboarding",
+        headers=headers,
+        json={
+            "step": "review_complete",
+            "completed": True,
+            "language": "en",
+            "payload": {
+                "goals": ["strength"],
+                "activity_level": "regular",
+                "movement_limitations": ["joint"],
+                "limitation_body_areas": ["Shoulder"],
+                "equipment": ["chair"],
+                "preferred_training_days": ["Mon", "Wed", "Fri"],
+                "preferred_days_per_week": "3",
+                "preferred_minutes": 15,
+                "onboarding_complete": True,
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    updated = client.get("/api/v1/profile", headers=headers).json()["profile"]
+    assert updated["onboarding_complete"] is True
+    assert updated["goals"] == ["strength"]
+    assert updated["equipment"] == ["chair"]
+    assert updated["limitation_body_areas"] == ["Shoulder"]
+    assert updated["sensitivities"] == {"legacy": True}
+    assert updated["diabetes"] == {"enabled": False}
+
+
+def test_functional_mvp_workflow(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    headers = _register(client, "mover@example.test")
+
+    profile_response = client.put(
+        "/api/v1/profile",
+        headers=headers,
+        json={
+            "preferred_name": "Aylin",
+            "country": "TR",
+            "timezone": "Europe/Istanbul",
+            "language": "tr",
+            "conditions": ["type_2_diabetes", "knee_sensitivity"],
+            "sensitivities": {"knee": {"bilateral": True, "severity": 3}},
+            "equipment": ["body weight", "chair"],
+            "goals": ["mobility", "glucose-management support"],
+            "medical_clearance": "cleared",
+            "consent_accepted": True,
+            "diabetes": {"enabled": True, "unit": "mg/dL"},
+        },
+    )
+    assert profile_response.status_code == 200
+    assert profile_response.json()["profile"]["onboarding_complete"] is True
+
+    readiness = client.post(
+        "/api/v1/readiness-checks",
+        headers=headers,
+        json={"energy": 3, "sleep_quality": 4, "pain": 2, "available_minutes": 15, "stress": 2},
+    )
+    assert readiness.status_code == 201
+    assert readiness.json()["decision"]["action"] == "READY"
+
+    plan = client.post("/api/v1/plans/daily/generate", headers=headers, json={"energy": 3, "sleep_quality": 4, "pain": 2, "available_minutes": 15, "stress": 2})
+    assert plan.status_code == 201
+    plan_payload = plan.json()["plan"]
+    assert sum(item["duration_seconds"] for item in plan_payload["items"]) == 15 * 60
+    first_item = plan_payload["items"][0]
+    assert first_item["exercise_id"]
+    assert first_item["preparation_seconds"] == 5
+    assert first_item["work_seconds"] == first_item["duration_seconds"]
+    assert first_item["rest_seconds"] > 0
+    assert first_item["media"]["validation_state"] in {"approved", "requires_review"}
+    assert first_item["availability"] in {"playable", "fallback"}
+    assert first_item["position"] in {"standing", "seated", "floor", "kneeling", "supported"}
+    assert first_item["difficulty"] in {"gentle", "moderate", "advanced"}
+    assert first_item["impact"] in {"low", "moderate", "high"}
+    assert first_item["instructions"]
+
+    weekly = client.post("/api/v1/plans/weekly/generate", headers=headers)
+    monthly = client.post("/api/v1/plans/monthly/generate", headers=headers)
+    assert weekly.status_code == 201
+    week_payload = weekly.json()["plan"]
+    assert len(week_payload["days"]) == 7
+    assert week_payload["total_planned_minutes"] >= 0
+    assert all("date" in day and "focus" in day and "actions" in day for day in week_payload["days"])
+    assert monthly.status_code == 201
+    month_payload = monthly.json()["plan"]
+    assert len(month_payload["weeks"]) == 4
+    assert month_payload["timeline"] == ["Adaptation", "Consistency", "Gentle progression", "Recovery and reassessment"]
+    assert all(len(week["days"]) == 7 for week in month_payload["weeks"])
+
+    exercises = client.get("/api/v1/exercises?language=tr", headers=headers)
+    assert exercises.status_code == 200
+    first_list_item = exercises.json()["items"][0]
+    assert first_list_item["media"]["validation_state"] in {"approved", "requires_review"}
+    assert first_list_item["media"]["status"] in {"available", "review_required", "missing"}
+    assert "thumbnail_url" in first_list_item["media"]
+    assert "gif_url" in first_list_item["media"]
+    assert not first_list_item["media"]["thumbnail_url"].startswith("file:")
+    assert not first_list_item["media"]["gif_url"].startswith("file:")
+    assert "filter_options" in exercises.json()
+    assert client.get("/api/v1/categories").status_code == 200
+    assert client.get("/api/v1/body-parts").status_code == 200
+    assert client.get("/api/v1/target-muscles").status_code == 200
+    assert client.get("/api/v1/exercise-tags").status_code == 200
+    assert "raw_gif_path_present" in first_list_item["media"]
+    assert first_list_item["preparation_seconds"] == 5
+    first_exercise = first_list_item["id"]
+    favorite = client.post(f"/api/v1/exercises/{first_exercise}/favorite", headers=headers)
+    assert favorite.status_code == 200
+    favorite_list = client.get("/api/v1/exercises?favorites=true", headers=headers)
+    assert favorite_list.status_code == 200
+    assert favorite_list.json()["items"][0]["favorited"] is True
+    unfavorite = client.delete(f"/api/v1/exercises/{first_exercise}/favorite", headers=headers)
+    assert unfavorite.status_code == 200
+    search = client.get("/api/v1/exercises?q=chair&bodyweight=true", headers=headers)
+    assert search.status_code == 200
+    search_alias = client.get("/api/v1/exercises/search?q=chair&bodyweight=true", headers=headers)
+    assert search_alias.status_code == 200
+    assert search_alias.json()["pagination"]["total"] == search.json()["pagination"]["total"]
+    detail = client.get(f"/api/v1/exercises/{first_exercise}?language=tr", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["instruction_steps"]
+    assert "tr" in detail.json()["locales"]
+    assert detail.json()["media"]["validation_state"] in {"approved", "requires_review"}
+    assert "related_exercises" in detail.json()
+    assert detail.json()["safe_alternatives_label"] == "Related movements"
+
+    admin_headers = _register(client, "exercise-admin@example.test")
+    from app.db.session import SessionLocal
+    from app.db.models import User
+
+    db = SessionLocal()
+    try:
+        admin_user = db.query(User).filter(User.email == "exercise-admin@example.test").one()
+        admin_user.role = "content_editor"
+        db.commit()
+    finally:
+        db.close()
+    admin_status = client.get("/api/v1/admin/import-jobs", headers=admin_headers)
+    assert admin_status.status_code == 200
+    assert "media" in admin_status.json()
+    assert admin_status.json()["media"]["local_path_rows"] == 0
+
+    session = client.post("/api/v1/sessions", headers=headers, json={"plan_id": plan_payload["id"]})
+    assert session.status_code == 201
+    session_id = session.json()["session"]["id"]
+
+    pain = client.post("/api/v1/sessions/{}/pain".format(session_id), headers=headers, json={"location": "knee", "severity": 4, "idempotency_key": "pain-1"})
+    duplicate = client.post("/api/v1/sessions/{}/pain".format(session_id), headers=headers, json={"location": "knee", "severity": 4, "idempotency_key": "pain-1"})
+    assert pain.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+    assert pain.json()["action"] == "offer_approved_substitution"
+
+    complete = client.post("/api/v1/sessions/{}/complete".format(session_id), headers=headers, json={"completed": True, "actual_duration": 14, "perceived_exertion": 3})
+    assert complete.status_code == 200
+    glucose = client.post("/api/v1/glucose", headers=headers, json={"value": 6.0, "unit": "mmol/L", "timing": "post", "session_id": session_id})
+    assert glucose.status_code == 201
+    assert glucose.json()["entry"]["canonical_mg_dl"] == 108
+    assert glucose.json()["no_insulin_recommendation"] is True
+
+    insights = client.get("/api/v1/insights/summary", headers=headers)
+    assert insights.status_code == 200
+    assert insights.json()["sessions_completed"] == 1
+    assert "not an insulin or treatment recommendation" in insights.json()["glucose"]["disclaimer"].lower()
+
+
+def test_date_aware_plan_generation_prevents_week_month_duplication(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_varied_plan_exercises()
+    headers = _register(client, "varied-planner@example.test")
+    profile = client.put(
+        "/api/v1/profile",
+        headers=headers,
+        json={
+            "preferred_name": "Planner",
+            "equipment": ["body weight", "chair", "wall", "band"],
+            "preferred_training_days": ["Mon", "Wed", "Fri"],
+            "consent_accepted": True,
+            "onboarding_complete": True,
+        },
+    )
+    assert profile.status_code == 200
+    assert client.post(
+        "/api/v1/readiness-checks",
+        headers=headers,
+        json={"energy": 4, "sleep_quality": 4, "pain": 1, "available_minutes": 15, "stress": 2},
+    ).status_code == 201
+
+    week = client.post("/api/v1/plans/weekly/generate", headers=headers).json()["plan"]
+    active_days = [day for day in week["days"] if day["status"] == "planned"]
+    assert len(active_days) >= 3
+    signatures = [_exercise_signature(day) for day in active_days]
+    assert len(set(signatures)) > 1
+    assert all(left != right for left, right in zip(signatures, signatures[1:]))
+    assert len({day["date"] for day in week["days"]}) == 7
+    assert len({day["session_id"] for day in active_days}) == len(active_days)
+    plan_item_ids = [item["plan_item_id"] for day in active_days for item in day["items"]]
+    assert len(plan_item_ids) == len(set(plan_item_ids))
+    assert all(item["media"]["thumbnail_url"] is not None for day in active_days for item in day["items"])
+    assert all(not str(item["media"]["thumbnail_url"]).startswith(("file:", "C:")) for day in active_days for item in day["items"])
+
+    month = client.post("/api/v1/plans/monthly/generate", headers=headers).json()["plan"]
+    assert len(month["weeks"]) == 4
+    active_month_days = [day for week in month["weeks"] for day in week["days"] if day["status"] == "planned"]
+    assert active_month_days
+    month_signatures = [_exercise_signature(day) for day in active_month_days]
+    assert len(set(month_signatures)) > 1
+    week_signatures = [
+        tuple(_exercise_signature(day) for day in week["days"] if day["status"] == "planned")
+        for week in month["weeks"]
+    ]
+    assert len(set(week_signatures)) > 1
+    assert all(day["items"] == [] for week in month["weeks"] for day in week["days"] if day["status"] != "planned")
+
+    routes_mod = importlib.import_module("app.routes")
+    safety_mod = importlib.import_module("app.services.safety")
+    session_mod = importlib.import_module("app.db.session")
+    decision = safety_mod.evaluate_safety({"energy": 4, "sleep_quality": 4, "pain": 1, "available_minutes": 15})
+    with session_mod.SessionLocal() as db:
+        first = routes_mod._daily_plan_payload("seed-user", {"available_minutes": 15, "pain": 1}, decision, db, plan_date="2026-07-20", session_type="mobility", explicit_seed="same")
+        second = routes_mod._daily_plan_payload("seed-user", {"available_minutes": 15, "pain": 1}, decision, db, plan_date="2026-07-20", session_type="mobility", explicit_seed="same")
+        different_date = routes_mod._daily_plan_payload("seed-user", {"available_minutes": 15, "pain": 1}, decision, db, plan_date="2026-07-21", session_type="mobility")
+    assert _exercise_signature(first) == _exercise_signature(second)
+    assert _exercise_signature(first) != _exercise_signature(different_date)
+
+
+def test_user_isolation_for_plans_and_sessions(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    user_a = _register(client, "a@example.test")
+    user_b = _register(client, "b@example.test")
+    plan = client.post("/api/v1/plans/daily/generate", headers=user_a, json={"energy": 3, "sleep_quality": 3, "pain": 1, "available_minutes": 10, "stress": 2}).json()["plan"]
+    session = client.post("/api/v1/sessions", headers=user_a, json={"plan_id": plan["id"]}).json()["session"]
+    assert client.patch(f"/api/v1/sessions/{session['id']}", headers=user_b, json={"elapsed_seconds": 20}).status_code == 404
+    assert client.post("/api/v1/sessions", headers=user_b, json={"plan_id": plan["id"], "resume": False}).status_code == 404

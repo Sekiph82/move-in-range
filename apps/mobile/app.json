@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "MoveInRange",
+    "slug": "move-in-range",
+    "scheme": "moveinrange",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-localization",
+      "expo-notifications",
+      "expo-sqlite"
+    ],
+    "ios": {
+      "bundleIdentifier": "com.moveinrange.app",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.moveinrange.app",
+      "permissions": [
+        "INTERNET",
+        "VIBRATE"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
+    },
+    "extra": {
+      "apiBaseUrl": "https://moveinrange-api.vercel.app",
+      "eas": {
+        "projectId": "30719dd8-101e-4acd-8d2a-e5880d60b721"
+      }
+    }
+  }
+}

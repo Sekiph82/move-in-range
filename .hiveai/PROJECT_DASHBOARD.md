@@ -19,24 +19,20 @@ Default branch: `main`
 
 ## Source authorities
 
-Canonical task source: none verified yet
-Handoff source: none verified
-Roadmap source: none verified
-Progress/history source: none verified
-Architecture source: none verified at repository root
-Decision source: none verified
+Canonical task source: `TASKS.md`
+Handoff source: `.hiveai/handoffs/LATEST.md`
+Roadmap source: `TASKS.md`
+Progress/history source: `.hiveai/codex-runs/`
+Architecture source: `docs/`
+Decision source: `.hiveai/decisions/DECISIONS.md`
 Agent instruction source: `AGENTS.md`
 Security source: `SECURITY.md`
 Build/test metadata: `package.json`, `docker-compose.yml`, TypeScript configuration, infrastructure/docs directories
 
 ## Authority notes
 
-No canonical task ledger is currently verified. H!veAI must report `TASK AUTHORITY NOT YET CANONICALIZED` instead of manufacturing backlog from README, infrastructure, or security prose.
-
-`AGENTS.md` is instruction-only and `SECURITY.md` is security context. Neither is task authority.
-
-When verified active work is next established, add a canonical task ledger and update this manifest rather than guessing from repository contents.
+`TASKS.md` is the only canonical task ledger. H!veAI must derive live state from the ledger, Git, watcher evidence, and the sources above. Do not manufacture backlog from README, infrastructure, or security prose.
 
 ## Refresh model
 
-H!veAI should derive live state from Registry/Git/watcher evidence plus the verified sources above. This manifest should remain pointer-only and should not be rewritten as a generated status snapshot.
+H!veAI should derive live state from Registry/Git/watcher evidence plus the verified sources above. This manifest remains pointer-only and should not be rewritten as a generated status snapshot.

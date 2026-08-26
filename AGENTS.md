@@ -10,4 +10,16 @@ Future agents must preserve these boundaries:
 - Do not log exact health values in routine logs or push previews.
 - Maintain English and Turkish localization paths.
 - Keep tests for safety, planning, diabetes context, import idempotency, authorization, offline outbox, and accessibility.
-- Work on feature branches and open draft PRs into main; do not merge automatically.
+- Work on feature branches and open stacked draft PRs into the current integration branch; do not merge automatically.
+- Preserve canonical local service URLs: `API_BASE_URL=http://localhost:8200` and `ADMIN_BASE_URL=http://localhost:3200`.
+- Keep core mobile workflows API-backed: auth, onboarding profile, readiness, plans, exercises, sessions, glucose, insights, and offline-event sync.
+- Do not reintroduce the previous API/admin development port defaults; `tests/config.test.mjs` guards this.
+- Do not restore browser-controlled admin role headers such as `x-admin-role`; backend role checks must use authenticated admin tokens and database roles.
+- Treat PostgreSQL as the authoritative integration path; SQLite is a limited local fallback only.
+- Keep `AUTH_SECRET`, admin credentials, tokens, refresh tokens, exact glucose values, and raw health payloads out of ordinary logs.
+- Keep admin login user-driven through `/login`; do not reintroduce environment-password auto-login into rendered admin pages.
+- Preserve Redis-backed token revocation for production and DB-backed refresh token family replay protection.
+- Keep release-candidate merge order documented in `docs/STACKED_PR_MERGE_PLAN.md`; do not merge stacked PRs out of order.
+- Keep complete-product work stacked on `codex/release-candidate-validation` until earlier PRs merge.
+- Run `npm.cmd run checklist:check` before claiming complete-product readiness; no task may remain `[ ] NOT STARTED` or `[~] IN PROGRESS`.
+- Do not claim real provider, push, HealthKit, Health Connect, wearable, Bluetooth, camera, device, licensed-media, or paid-infrastructure validation unless the actual credential, entitlement, hardware, or deployment validation happened.

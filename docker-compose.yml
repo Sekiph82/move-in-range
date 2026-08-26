@@ -8,11 +8,229 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U moveinrange"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U moveinrange -d postgres"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 20
+    restart: "no"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  db-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: moveinrange
+      PGPASSWORD: moveinrange
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        for db in moveinrange moveinrange_test moveinrange_migration; do
+          if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" | grep -q 1; then
+            createdb "$$db"
+          fi
+        done
+    restart: "no"
+
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: "no"
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/api/v1/info >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    restart: "no"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+psycopg://moveinrange:moveinrange@postgres:5432/moveinrange
+      REDIS_URL: redis://redis:6379/0
+      AUTH_SECRET: docker-local-development-secret
+      LOCAL_ADMIN_EMAIL: admin@moveinrange.local
+      LOCAL_ADMIN_PASSWORD: MoveInRangeAdminLocal!
+      PRODUCT_WEB_BASE_URL: http://product-web:3210
+      EMAIL_SENDER: smtp
+      EMAIL_FROM: no-reply@moveinrange.local
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      ENABLE_DEVELOPMENT_RESET_PREVIEW: "false"
+    command: ["sh", "-c", "cd services/api && python -m alembic upgrade head"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+psycopg://moveinrange:moveinrange@postgres:5432/moveinrange
+      TEST_DATABASE_URL: postgresql+psycopg://moveinrange:moveinrange@postgres:5432/moveinrange_test
+      REDIS_URL: redis://redis:6379/0
+      API_BASE_URL: http://localhost:8200
+      ADMIN_BASE_URL: http://localhost:3200
+      AUTH_PROVIDER: local
+      AUTH_SECRET: docker-local-development-secret
+      TOKEN_ISSUER: moveinrange-api
+      TOKEN_AUDIENCE: moveinrange-mobile
+      LOCAL_ADMIN_EMAIL: admin@moveinrange.local
+      LOCAL_ADMIN_PASSWORD: MoveInRangeAdminLocal!
+      PRODUCT_WEB_BASE_URL: http://product-web:3210
+      EMAIL_SENDER: smtp
+      EMAIL_FROM: no-reply@moveinrange.local
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      ENABLE_DEVELOPMENT_RESET_PREVIEW: "false"
+      CORS_ORIGINS: http://localhost:3200,http://127.0.0.1:3200,http://localhost:8081,http://127.0.0.1:8081,http://localhost:3210,http://127.0.0.1:3210,http://product-web:3210
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8200/api/v1/ready', timeout=5)); raise SystemExit(0 if data.get('status') == 'ready' and data.get('revocation_store') == 'postgres' and data.get('rate_limiter') == 'postgres' else 1)\""]
+      interval: 10s
+      timeout: 6s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://api:8200
+      ADMIN_COOKIE_SECURE: "false"
+    ports:
+      - "3200:3200"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3200/login').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+
+  product-web:
+    build:
+      context: .
+      dockerfile: apps/mobile/Dockerfile.web
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      PRODUCT_WEB_PORT: "3210"
+      EXPO_PUBLIC_API_BASE_URL: http://api:8200
+    ports:
+      - "3210:3210"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3210/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    depends_on:
+      admin:
+        condition: service_healthy
+      product-web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+psycopg://moveinrange:moveinrange@postgres:5432/moveinrange_migration
+      TEST_DATABASE_URL: postgresql+psycopg://moveinrange:moveinrange@postgres:5432/moveinrange_test
+      REDIS_URL: redis://redis:6379/0
+      API_BASE_URL: http://api:8200
+      PRODUCT_E2E_API_BASE_URL: http://api:8200
+      PRODUCT_WEB_BASE_URL: http://product-web:3210
+      MAILPIT_BASE_URL: http://mailpit:8025
+      ADMIN_BASE_URL: http://admin:3200
+      NEXT_PUBLIC_API_BASE_URL: http://api:8200
+      EXPO_PUBLIC_API_BASE_URL: http://api:8200
+      ADMIN_E2E_BASE_URL: http://admin:3200
+      ADMIN_COOKIE_SECURE: "false"
+      AUTH_PROVIDER: local
+      AUTH_SECRET: docker-test-secret
+      LOCAL_ADMIN_EMAIL: admin@moveinrange.local
+      LOCAL_ADMIN_PASSWORD: MoveInRangeAdminLocal!
+      EMAIL_SENDER: smtp
+      EMAIL_FROM: no-reply@moveinrange.local
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      ENABLE_DEVELOPMENT_RESET_PREVIEW: "false"
+      CORS_ORIGINS: http://admin:3200,http://product-web:3210,http://localhost:3200,http://127.0.0.1:3200,http://localhost:3210,http://127.0.0.1:3210
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        npm run format:check
+        npm run lint
+        npm run checklist:check
+        npm run typecheck
+        npm run test
+        cd services/api
+        ruff check .
+        cd ../..
+        npm run db:migrate
+        DATABASE_URL="$$TEST_DATABASE_URL" npm run db:migrate
+        npm run import:exercises -- tests/fixtures/exercises.sample.json
+        python -m pytest services/api/tests
+        npm run build
+        npm run security:check
+        npm audit --audit-level=high
+    restart: "no"
+
+volumes:
+  postgres-data:

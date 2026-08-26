@@ -1,0 +1,113 @@
+import type { Exercise, HealthProfile, ReadinessInput } from "@moveinrange/shared-types";
+
+export const demoProfile: HealthProfile = {
+  userId: "local-demo",
+  preferredName: "Aylin",
+  age: 42,
+  units: "metric",
+  country: "TR",
+  timezone: "Europe/Istanbul",
+  language: "en",
+  conditions: ["type_2_diabetes", "knee_sensitivity"],
+  clinicianRestrictions: [],
+  sensitivities: { knees: 4, wrists: 1, lower_back: 2 },
+  equipment: ["body weight", "chair", "band"],
+  environment: "home",
+  activityLevel: "beginner",
+  preferredTrainingDays: ["Mon", "Wed", "Fri"],
+  dailyAvailableMinutes: 15,
+  goals: ["mobility", "consistency"],
+  medicalClearance: "cleared",
+  consentAccepted: true,
+  diabetes: { enabled: true, diabetesType: "type_2", unit: "mg/dL", fastCarbsAvailable: true, plannedIntensity: "low" }
+};
+
+export const demoReadiness: ReadinessInput = {
+  energy: 3,
+  sleepQuality: 3,
+  pain: 2,
+  newInjury: false,
+  dizziness: false,
+  chestDiscomfort: false,
+  unusualShortnessOfBreath: false,
+  illness: false,
+  recentFall: false,
+  availableMinutes: 15,
+  desiredSessionType: "mixed",
+  stress: 2
+};
+
+export const demoExercises: Exercise[] = [
+  {
+    id: "exercise-chair-march",
+    slug: "chair-march",
+    name: "Chair-supported march",
+    bodyPart: "cardio",
+    equipment: "body weight",
+    target: "cardio",
+    secondaryMuscles: ["hip flexors"],
+    instructions: { en: "Sit tall or stand behind a chair and march slowly.", tr: "Dik oturun veya sandalyenin arkasinda durup yavasca yuruyus yapin." },
+    instructionSteps: { en: ["Set posture", "March slowly", "Stop for symptoms"], tr: ["Duruşu ayarla", "Yavas yuruyus yap", "Belirti olursa dur"] },
+    media: { image: "placeholder", gif: "placeholder", mediaId: "local", attribution: "MoveInRange placeholder" },
+    derivedTags: {
+      movementPattern: "locomotion",
+      impact: "low",
+      balanceDemand: "low",
+      floorTransferRequired: false,
+      standingRequired: false,
+      gripDemand: "low",
+      wristLoading: "none",
+      kneeFlexionDemand: "low",
+      spinalFlexion: false,
+      spinalExtension: false,
+      overheadMovement: false,
+      unilateralLoading: false,
+      cardioDemand: "moderate",
+      complexity: "low",
+      beginnerSuitability: true,
+      chairSupportedCompatible: true,
+      warmupSuitable: true,
+      cooldownSuitable: true,
+      provenance: "rule_classifier",
+      confidence: 0.8,
+      manualReviewStatus: "approved",
+      classifierVersion: "demo"
+    }
+  },
+  {
+    id: "exercise-wall-push",
+    slug: "wall-push",
+    name: "Wall push",
+    bodyPart: "chest",
+    equipment: "body weight",
+    target: "upper body",
+    secondaryMuscles: ["triceps"],
+    instructions: { en: "Place hands on a wall and press gently.", tr: "Ellerinizi duvara koyun ve kontrollu itin." },
+    instructionSteps: { en: ["Hands on wall", "Bend elbows", "Press back"], tr: ["Eller duvarda", "Dirsekleri buk", "Geri it"] },
+    media: { image: "placeholder", gif: "placeholder", mediaId: "local", attribution: "MoveInRange placeholder" },
+    derivedTags: {
+      movementPattern: "push",
+      impact: "low",
+      balanceDemand: "low",
+      floorTransferRequired: false,
+      standingRequired: true,
+      gripDemand: "low",
+      wristLoading: "low",
+      kneeFlexionDemand: "low",
+      spinalFlexion: false,
+      spinalExtension: false,
+      overheadMovement: false,
+      unilateralLoading: false,
+      cardioDemand: "low",
+      complexity: "low",
+      beginnerSuitability: true,
+      chairSupportedCompatible: true,
+      warmupSuitable: true,
+      cooldownSuitable: false,
+      provenance: "rule_classifier",
+      confidence: 0.8,
+      manualReviewStatus: "approved",
+      classifierVersion: "demo"
+    }
+  }
+];
