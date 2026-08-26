@@ -68,13 +68,13 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 
 - milestone: consolidation-merge
 - title: Human review and explicit merge authorization for PR #13, followed by post-merge verification
-- status: READY
+- status: DONE
 - priority: P0
 - dependencies: MR-CONS-001; MR-VAL-001; MR-SEC-001; MR-E2E-001
-- source: PR #13; .hiveai/audits/A-20260826-006-FINAL-CONSOLIDATION-READINESS.md; .hiveai/prompts/P-20260827-007-PR13-HUMAN-MERGE-HANDOFF.md
+- source: PR #13; .hiveai/audits/A-20260827-007-PR13-HUMAN-MERGE-HANDOFF.md; .hiveai/prompts/P-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY.md
 - acceptance criteria: final PR head/base/check state is reconfirmed; human merge handoff is produced; maintainer explicitly authorizes merge; PR #13 is merged without agent auto-merge; post-merge main validation succeeds before historical cleanup begins.
-- evidence: A006 verdict is VERIFIED_READY_FOR_HUMAN_MERGE_REVIEW. PR #13 is currently open, non-draft, mergeable, and exact-head CI/Security are green. P007 prepares the human merge handoff and is explicitly forbidden from merging main.
-- Codex run reference: pending P007
+- evidence: PR #13 was rechecked at exact head 0b4349fd34d01bf72fb37935e2509f40eaa719af with green exact-head CI/Security gates, then merged by normal merge commit d18ce2a06d7dda83f6df7c03fedba119b3e61a88. GitHub main CI/Security and the post-merge host/Docker validation in CR-20260827-008 are green; no historical cleanup was performed.
+- Codex run reference: CR-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY
 
 ## MR-DEV-001
 
@@ -128,7 +128,7 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 
 - milestone: workout-engine-v2
 - title: Implement the first evidence-backed workout history and set-execution slice
-- status: BACKLOG
+- status: READY
 - priority: P2
 - dependencies: MR-VAL-001; clinical and product review of the v2 model
 - source: docs/opengym-integration-audit.md; docs/workout-engine-v2.md; docs/workout-history.md; docs/exercise-model-v2.md
@@ -143,7 +143,7 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - status: BACKLOG
 - priority: P2
 - dependencies: PR #13 merged; post-merge validation green; manual maintainer approval
-- source: consolidation prompt; docs/STACKED_PR_MERGE_PLAN.md; .hiveai/decisions/DECISIONS.md; A-20260826-006-FINAL-CONSOLIDATION-READINESS.md
+- source: consolidation prompt; docs/STACKED_PR_MERGE_PLAN.md; .hiveai/decisions/DECISIONS.md; A-20260827-007-PR13-HUMAN-MERGE-HANDOFF.md; P-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY.md
 - acceptance criteria: each old PR/branch is handled deliberately, no historical evidence is lost, and cleanup actions are recorded before execution.
-- evidence: no old branch or PR should be deleted or closed before PR #13 is merged and post-merge main verification succeeds.
-- Codex run reference: pending post-merge run
+- evidence: PR #13 is merged and post-merge main verification succeeded. Cleanup is now eligible for a separately authorized future task; this run intentionally did not delete branches or close historical PRs.
+- Codex run reference: CR-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY
