@@ -1,6 +1,6 @@
 # MoveInRange Canonical Task Ledger
 
-This is the only canonical task ledger. Do not infer new tasks from README prose or unchecked implementation ideas. A task may become DONE only when implementation, validation, and evidence are all recorded.
+This is the only canonical task ledger. Do not infer new tasks from README prose or unchecked implementation ideas. A task may become DONE only when implementation, independent validation, and evidence are all recorded.
 
 Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 
@@ -11,10 +11,22 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - status: DONE
 - priority: P0
 - dependencies: none
-- source: current consolidation prompt; AGENTS.md; origin/main H!veAI manifest
+- source: consolidation prompt; AGENTS.md; origin/main H!veAI manifest
 - acceptance criteria: TASKS.md, .hiveai/INDEX.md, prompts, audits, handoff, decisions, and codex-runs protocol exist; manifest remains pointer-only; historical runs are append-only.
-- evidence: canonical ledger, pointer manifest, protocol index, current prompt/audit pointers, handoff, decisions, and run-log protocol exist; static and security checks passed.
+- evidence: canonical ledger, pointer manifest, protocol index, current prompt/audit pointers, handoff, decisions, and run-log protocol exist in the repository; control-system existence independently verified by audit A-20260826-002.
 - Codex run reference: CR-20260826-001
+
+## MR-AUDIT-001
+
+- milestone: project-control
+- title: Independently revalidate consolidation, Docker, dependency audit, and test claims
+- status: READY
+- priority: P0
+- dependencies: MR-CTRL-001; MR-CONS-001
+- source: .hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md; .hiveai/audits/A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md
+- acceptance criteria: prior PASS/BLOCKED claims are rerun on the current branch; Docker Desktop is actively started when needed; Compose test profile is executed; npm audit baseline is reconciled; test/build/export/migration claims are independently classified with current evidence; a matching CR/A artifact pair is saved.
+- evidence: repository-level baseline audit exists, but runtime validation remains pending; no PR-triggered workflow run was found for consolidation commit 0decf16.
+- Codex run reference: expected CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-CONS-001
 
@@ -25,7 +37,7 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: MR-CTRL-001
 - source: .hiveai/audits/BRANCH_CONSOLIDATION_AUDIT.md; PRs #1-#11; current origin/main and origin/codex/release-rehearsal
 - acceptance criteria: codex/main-consolidation is based on latest main, contains the full verified release-rehearsal content, preserves the main manifest, has no unresolved conflicts, and is pushed without merging into main.
-- evidence: merge commit 1acca94 created from origin/main and origin/codex/release-rehearsal with no conflicts; consolidated result is documented in .hiveai/audits/MAIN_CONSOLIDATION_RESULT.md.
+- evidence: repository history and consolidation artifacts show main plus release-rehearsal content with the H!veAI manifest retained; runtime merge-readiness still depends on MR-AUDIT-001.
 - Codex run reference: CR-20260826-001
 
 ## MR-VAL-001
@@ -34,11 +46,11 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - title: Validate the consolidated repository and migration lineage
 - status: REVIEW
 - priority: P0
-- dependencies: MR-CONS-001
-- source: current consolidation prompt; docs/RELEASE_REHEARSAL_CHECKLIST.md; docs/STACKED_PR_MERGE_PLAN.md
-- acceptance criteria: applicable format, lint, checklist, typecheck, Node, build, mobile web, ruff, pytest, security, Docker/test profile, Expo, export, migration, and deployment checks are run and evidence is recorded with exact blockers.
-- evidence: format, lint, checklist, typecheck, Node tests, builds, mobile web export, ruff, pytest, security check, Expo Doctor, iOS export, Android export, and migration checks passed; Docker and high audit gates are blocked by environment/advisories.
-- Codex run reference: CR-20260826-001
+- dependencies: MR-CONS-001; MR-AUDIT-001
+- source: active independent-audit prompt; docs/RELEASE_REHEARSAL_CHECKLIST.md; docs/STACKED_PR_MERGE_PLAN.md
+- acceptance criteria: applicable format, lint, checklist, typecheck, Node, build, mobile web, ruff, pytest, security, Docker/test profile, Expo, export, migration, and deployment checks are rerun and current evidence is recorded with exact blockers.
+- evidence: historical CR-20260826-001 claims are not authoritative current proof; A-20260826-002 marks runtime/build/test/Docker/npm-audit results UNVERIFIED pending fresh execution.
+- Codex run reference: CR-20260826-001; successor expected CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-DEV-001
 
@@ -49,20 +61,20 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: reachable API deployment; Android emulator or device; iPhone or Expo Go
 - source: docs/MANUAL_DEVICE_TEST_CHECKLIST.md; docs/ANDROID_BETA_BUILD_HANDOFF.md; docs/IOS_BETA_OPTIONS.md; docs/product/IMPLEMENTATION_STATUS.md
 - acceptance criteria: login, onboarding resume, readiness, plan generation, workout recovery, pain/symptom stop, offline outbox, media fallback, voice/haptics, privacy, and invitation flows pass on the relevant native runtimes and are evidenced.
-- evidence: web/API automation passed; no Android SDK/emulator/device or iPhone run evidence is available.
+- evidence: no complete current native-device acceptance evidence is recorded in the canonical audit layer.
 - Codex run reference: CR-20260826-001
 
 ## MR-SEC-001
 
 - milestone: dependency-modernization
 - title: Resolve remaining high and moderate dependency advisories with regression coverage
-- status: BLOCKED
+- status: REVIEW
 - priority: P1
-- dependencies: compatible Next/Expo upgrade plan; native regression environment
-- source: docs/RELEASE_SECURITY_REVIEW.md; docs/CLOSED_BETA_FINAL_SECURITY_REVIEW.md; npm audit attempt recorded in handoff
-- acceptance criteria: dependency updates are applied without force-breaking the Expo/Next graph, npm audit high gate passes, and affected web/native/build checks pass.
-- evidence: current audit baseline reports 2 high and 13 moderate advisories; plain npm audit fix reaches ERESOLVE and legacy-peer dry-run leaves high advisories.
-- Codex run reference: CR-20260826-001
+- dependencies: MR-AUDIT-001; compatible Next/Expo upgrade plan; native regression environment
+- source: docs/RELEASE_SECURITY_REVIEW.md; docs/CLOSED_BETA_FINAL_SECURITY_REVIEW.md; active independent-audit prompt
+- acceptance criteria: establish one authoritative current npm audit baseline; then apply compatible dependency updates without force-breaking the Expo/Next graph, make the high audit gate pass, and rerun affected web/native/build checks.
+- evidence: historical vulnerability counts conflict across CR-20260826-001 and TASKS evidence; A-20260826-002 declares the current baseline UNVERIFIED until npm audit is rerun.
+- Codex run reference: CR-20260826-001; successor expected CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
 
 ## MR-DEPLOY-001
 
@@ -73,7 +85,7 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: Vercel API URL; EAS preview environment; provider credentials and entitlements where applicable
 - source: docs/ZERO_COST_BETA_DEPLOYMENT.md; docs/VERCEL_DEPLOYMENT.md; docs/ANDROID_BETA_BUILD_HANDOFF.md; AGENTS.md
 - acceptance criteria: a rebuilt installable artifact uses a reachable non-local API and real deployment/provider validation is recorded without claiming unavailable credentials or hardware.
-- evidence: root-cause Android artifact exists; fully working phone beta and real provider validation remain external.
+- evidence: deployment/provider validation remains external and is not established by the current independent audit.
 - Codex run reference: CR-20260826-001
 
 ## MR-OG-001
@@ -85,7 +97,7 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: none
 - source: docs/opengym-integration-audit.md; docs/workout-engine-v2.md; docs/progression-engine.md; docs/workout-history.md; docs/exercise-model-v2.md; docs/muscle-workload.md
 - acceptance criteria: reference architecture, license boundaries, MoveInRange gaps, canonical models, progression, history, workload, API/mobile/database milestones, and first sprint are documented without copying openGym code or media.
-- evidence: six audit/design documents are present on the consolidated branch; audit explicitly states no source, migration, or product behavior was integrated.
+- evidence: six audit/design documents are present on the consolidated branch; audit is design-only and does not claim source integration.
 - Codex run reference: CR-20260826-001
 
 ## MR-OG-002
@@ -107,7 +119,7 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - status: BACKLOG
 - priority: P2
 - dependencies: consolidation PR merged; post-merge validation green; manual maintainer approval
-- source: current consolidation prompt; docs/STACKED_PR_MERGE_PLAN.md; .hiveai/decisions/DECISIONS.md
+- source: consolidation prompt; docs/STACKED_PR_MERGE_PLAN.md; .hiveai/decisions/DECISIONS.md
 - acceptance criteria: each old PR/branch is handled deliberately, no historical evidence is lost, and cleanup actions are recorded before execution.
-- evidence: no old branch or PR was deleted or closed in this run.
+- evidence: no old branch or PR should be deleted or closed before consolidation is independently verified and merged.
 - Codex run reference: CR-20260826-001
