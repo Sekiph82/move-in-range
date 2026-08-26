@@ -10,7 +10,7 @@ Pushed control-system commit: `0decf16`
 
 ## Branches and PRs Inspected
 
-Inspected `origin/main` and all 11 `origin/codex/*` branches. Inspected GitHub PRs #1 through #12. PRs #1-#11 remain open draft stacked PRs; PR #12 (`hiveai/project-dashboard-v1 -> main`) is merged. No PR was closed or retargeted.
+Inspected `origin/main`, all 11 `origin/codex/*` branches, and `origin/hiveai/project-dashboard-v1`; 13 remote branches are present in total. Inspected GitHub PRs #1 through #12. PRs #1-#11 remain open draft stacked PRs; PR #12 (`hiveai/project-dashboard-v1 -> main`) is merged. No PR was closed or retargeted.
 
 ## Ancestry and Unique Content
 

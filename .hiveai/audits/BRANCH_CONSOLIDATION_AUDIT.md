@@ -6,7 +6,7 @@ Repository: `Sekiph82/move-in-range`
 
 ## Scope and Sources
 
-Inspected all local and `origin` refs for `main` and `codex/*`, all open PRs returned by GitHub, `AGENTS.md`, the main H!veAI manifest, release and beta audit/checklist documents, and the current release-rehearsal tree. The current repository exposes 12 relevant branches/ref pairs: `main` plus 11 `codex/*` branches. GitHub exposes 11 open stacked PRs and one already-merged H!veAI dashboard PR (#12).
+Inspected all local and `origin` refs for `main`, `codex/*`, and the merged H!veAI branch, all open PRs returned by GitHub, `AGENTS.md`, the main H!veAI manifest, release and beta audit/checklist documents, and the current release-rehearsal tree. GitHub currently exposes 13 remote branches: `main`, 11 `codex/*` branches including the pushed consolidation branch, and `hiveai/project-dashboard-v1`. The consolidation graph has 12 relevant branches (`main` plus 11 stacked `codex/*` feature branches); the H!veAI branch is a merged PR source and is not part of the feature stack. GitHub exposes 11 open stacked PRs and one already-merged H!veAI dashboard PR (#12).
 
 ## Branch Inventory
 
@@ -64,7 +64,7 @@ The 11 groups sum to 52 commits in release-rehearsal. No branch is an independen
 
 ## PR Inventory
 
-PRs #1 through #11 are open draft PRs in the exact stacked order above. PR #12, `hiveai/project-dashboard-v1 -> main`, is merged. PR #11 remains `codex/release-rehearsal -> codex/closed-beta-finalization` and is still open; it was not retargeted or closed.
+PRs #1 through #11 are open draft PRs in the exact stacked order above. PR #12, `hiveai/project-dashboard-v1 -> main`, is merged; its source branch remains visible as `origin/hiveai/project-dashboard-v1`. PR #11 remains `codex/release-rehearsal -> codex/closed-beta-finalization` and is still open; it was not retargeted or closed.
 
 ## Conflicts and Containment
 
