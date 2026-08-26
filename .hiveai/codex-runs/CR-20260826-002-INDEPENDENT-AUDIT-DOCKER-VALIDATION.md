@@ -147,3 +147,55 @@ The requested validation and evidence work is complete, but consolidation is not
 ## Cleanup and repository safety
 
 The Compose project was cleaned with `docker compose --profile test down --remove-orphans` after evidence capture. Because Docker Desktop was started by this run, its supported shutdown command was checked and Docker Desktop was stopped after validation. Historical stacked PRs and branches were left untouched.
+
+## Append-only rerun supplement - 2026-08-26
+
+This supplement records a later fresh execution of the same active prompt. The matching prompt remains `P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`; no authoritative audit, task ledger, handoff, pointer, or source file was changed during this rerun. Starting revision was `de739f9a051338d1c0790f061d5ec8ddba0415f3` and the working tree was clean.
+
+### Docker rerun
+
+- Initial `docker info`: exit `1`; Linux engine pipe unavailable.
+- Started `C:\Program Files\Docker\Docker\Docker Desktop.exe`.
+- Docker engine became ready within the five-minute window; server version `29.5.3`.
+- `docker compose config -q`: exit `0`.
+- `docker compose --profile test config -q`: exit `0`.
+- `docker compose --profile test build`: exit `0`.
+- `docker compose up -d --build`: exit `0`.
+- `docker compose ps`: Postgres, Redis, Mailpit, API, admin, and product web were `healthy`; `db-init` and `migrate` exited successfully.
+- Health endpoints returned HTTP `200`: API health, API readiness, admin login, product web health, and Mailpit info.
+- `docker compose logs --no-color --tail=100 api admin product-web postgres redis mailpit`: no startup errors; API logs remained free of request query access-log entries.
+- `docker compose --profile test run --rm tests`: `75 tests`, `70 passed`, `5 failed`, `0 skipped`, exit `1`.
+- `docker compose --profile test run --rm tests sh -c "cd services/api && ruff check . && python -m alembic heads"`: exit `0`; `All checks passed!`, one head `20260719_0010`.
+- Test-container PostgreSQL migration: exit `0`.
+- Initial incorrect probe `python scripts/import_exercises.py ...`: exit `1`, path does not exist in the test image. This was not counted as a passing import.
+- Correct `npm run import:exercises -- tests/fixtures/exercises.sample.json`: exit `0`; `2 imported`, `0 failed rows`, `2 locales`, no hosted media committed.
+- Docker API pytest: `36 passed`, `0 skipped`, exit `0`.
+- Docker admin build: exit `0`.
+- Docker security scan: exit `0`; scanned `400 files`, no obvious committed secrets.
+- Docker `npm audit` and `npm audit --audit-level=high`: each exit `1`; `24 vulnerabilities (10 moderate, 14 high)`. Affected paths include brace-expansion, image-size via Metro/Expo, js-yaml, nanoid, next, postcss, sharp, and uuid's moderate chain. No force upgrade was run.
+
+The five Docker Node failures were unchanged and remain product-test contract mismatches: one static readiness route expectation, two `Step 1 of 22` expectations while the current UI renders `Step 1 of 7`, one obsolete `Complete readiness check` label, and one workout session-response wait that does not follow the current readiness-gated start flow. They are not Docker skips.
+
+### Host rerun
+
+- `npm.cmd run format:check`: exit `0`.
+- `npm.cmd run lint`: exit `0`; checked `313 files`.
+- `npm.cmd run checklist:check`: exit `0`.
+- `npm.cmd run typecheck`: exit `0`.
+- `npm.cmd test`: `75 tests`, `65 passed`, `0 failed`, `10 skipped`, exit `0`. Skips were the documented missing host E2E URL preconditions.
+- `npm.cmd run build`: exit `0`.
+- `npm.cmd run mobile:web:build`: exit `0`.
+- `npm.cmd run security:check`: exit `0`; scanned `5033 files`.
+- `ruff.exe check services/api`: exit `0`.
+- `python -m pytest services/api/tests -q --basetemp=$TEMP\\moveinrange-cr-20260826-003-host`: `34 passed`, `2 skipped`, `63 warnings`, exit `0`. Skips were absent host `TEST_DATABASE_URL` and `REDIS_URL` preconditions.
+- `python -m alembic heads` from `services/api`: exit `0`; one head `20260719_0010`.
+- Clean temporary SQLite `npm.cmd run db:migrate`: exit `0`.
+- Repo-root `npx.cmd expo-doctor`: exit `1` due root-context version mismatches for `@types/react-dom` and `typescript`, and repo-root iOS/Android exports failed because the root Expo entrypoint resolves a missing `App`.
+- Correct app-root `apps/mobile` `npx.cmd expo-doctor`: exit `0`; `18/18 checks passed`.
+- Correct app-root iOS export: exit `0`.
+- Correct app-root Android export: exit `0`.
+- Host `npm.cmd audit` and `npm.cmd audit --audit-level=high`: each exit `1`; `24 vulnerabilities (10 moderate, 14 high)`.
+
+### Rerun disposition
+
+The fresh rerun confirms the prior infrastructure result and reproduces the five Docker product E2E failures and current dependency baseline. Docker-backed PostgreSQL/Redis tests ran with zero skips. No source or authoritative audit changes were made in this supplement. Compose containers were removed with `docker compose --profile test down --remove-orphans`; Docker Desktop was stopped because this rerun started it. The matching CR remains `VERIFIED_WITH_BLOCKERS` and consolidation is not ready for a main merge.
