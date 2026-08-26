@@ -1,11 +1,16 @@
 # Active Prompt Pointer
 
-Active run: `CR-20260826-001`
+Active prompt: `P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
 
-Source: user-provided consolidation prompt received 2026-08-26.
+Source:
+`.hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
 
-Scope: establish the permanent H!veAI/Codex control system, audit all MoveInRange branches and open PRs, build `codex/main-consolidation` from the latest `main`, integrate the verified `codex/release-rehearsal` content, validate the consolidated repository, and open one consolidation PR without merging it.
+Expected Codex run log:
+`.hiveai/codex-runs/CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
 
-Hard constraints: preserve `AGENTS.md`; do not blindly merge or delete branches; do not merge into `main`; do not create another feature PR; preserve the main H!veAI manifest; do not claim unavailable device, provider, licensing, or deployment validation; keep `TASKS.md` as the sole canonical ledger.
+Expected independent audit:
+`.hiveai/audits/A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md`
 
-This pointer is a summary of the active prompt, not a replacement for historical user prompts.
+Scope: independently revalidate prior Codex claims, start Docker Desktop when required instead of accepting a stopped engine as a blocker, run the full repository/Docker/security validation, reconcile evidence, and update the canonical task ledger.
+
+Historical PASS/BLOCKED statements are not current proof. The active prompt requires fresh execution evidence before task status may advance.
