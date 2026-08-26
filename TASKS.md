@@ -23,22 +23,22 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - status: REVIEW
 - priority: P0
 - dependencies: MR-CTRL-001; MR-CONS-001
-- source: .hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md; .hiveai/audits/A-20260826-003-CHATGPT-POSTRUN-AUDIT.md
+- source: .hiveai/prompts/P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION.md; .hiveai/audits/A-20260826-004-CHATGPT-POSTRUN-AUDIT.md
 - acceptance criteria: prior PASS/BLOCKED claims are rerun on the current branch; Docker Desktop is actively started when needed; Compose test profile is executed; npm audit baseline is reconciled; test/build/export/migration claims are independently classified with current evidence; Codex execution evidence is separately reviewed by the ChatGPT audit layer.
-- evidence: CR-20260826-002 records fresh local/Docker execution claims. ChatGPT audit A-20260826-003 independently verified branch/file/control-system facts and stale E2E contracts, but local Docker/test/npm-audit results are not independently reproducible through the GitHub connector and therefore remain execution evidence rather than separately reproduced proof.
-- Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
+- evidence: GitHub-side post-run audits now independently corroborate branch/source facts, a green core CI workflow, and the current npm security baseline. Local Docker/native-export execution remains Codex execution evidence unless reproduced by an independent runtime.
+- Codex run reference: CR-20260826-004-E2E-CONTRACT-AND-SECURITY-REMEDIATION
 
 ## MR-E2E-001
 
 - milestone: consolidation
 - title: Align stale product E2E contracts with current canonical onboarding and readiness flow
-- status: READY
+- status: REVIEW
 - priority: P0
 - dependencies: MR-AUDIT-001
-- source: .hiveai/prompts/P-20260826-003-E2E-CONTRACT-ALIGNMENT.md; .hiveai/audits/A-20260826-003-CHATGPT-POSTRUN-AUDIT.md
+- source: .hiveai/prompts/P-20260826-003-E2E-CONTRACT-ALIGNMENT.md; .hiveai/audits/A-20260826-004-CHATGPT-POSTRUN-AUDIT.md
 - acceptance criteria: E2E tests use the current 7-step onboarding contract, current readiness entry points, and mandatory readiness-before-new-workout flow; no safety requirement is weakened; full Docker Node suite is rerun with 0 stale-contract failures; matching CR evidence is produced and then separately audited by ChatGPT.
-- evidence: current test source independently confirms stale 22-step onboarding expectations, obsolete readiness labels, and a direct session-start assumption inconsistent with the current readiness gate.
-- Codex run reference: pending
+- evidence: current GitHub source independently shows `Step ${step} of 7` and readiness-first helpers in product UI E2E. P004 execution evidence reports Docker Node 75 passed / 0 failed / 0 skipped; core GitHub CI is green. Final DONE remains subject to the audit layer's acceptance policy.
+- Codex run reference: CR-20260826-004-E2E-CONTRACT-AND-SECURITY-REMEDIATION
 
 ## MR-CONS-001
 
@@ -49,8 +49,8 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - dependencies: MR-CTRL-001
 - source: .hiveai/audits/BRANCH_CONSOLIDATION_AUDIT.md; PRs #1-#11; current origin/main and origin/codex/release-rehearsal
 - acceptance criteria: codex/main-consolidation is based on latest main, contains the full verified release-rehearsal content, preserves the main manifest, has no unresolved conflicts, and is pushed without merging into main.
-- evidence: repository history and consolidation artifacts show main plus release-rehearsal content with the H!veAI manifest retained; ChatGPT audit A-20260826-003 confirms the current branch still requires E2E contract repair and separate security review before merge readiness.
-- Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
+- evidence: repository history and consolidation artifacts show main plus release-rehearsal content with the H!veAI manifest retained. GitHub core CI is currently green, but GitHub Security remains red, so merge readiness is incomplete.
+- Codex run reference: CR-20260826-004-E2E-CONTRACT-AND-SECURITY-REMEDIATION
 
 ## MR-VAL-001
 
@@ -58,11 +58,11 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - title: Validate the consolidated repository and migration lineage
 - status: REVIEW
 - priority: P0
-- dependencies: MR-CONS-001; MR-AUDIT-001; MR-E2E-001
+- dependencies: MR-CONS-001; MR-AUDIT-001; MR-E2E-001; MR-SEC-001
 - source: active H!veAI prompts; docs/RELEASE_REHEARSAL_CHECKLIST.md; docs/STACKED_PR_MERGE_PLAN.md
 - acceptance criteria: applicable format, lint, checklist, typecheck, Node, build, mobile web, ruff, pytest, security, Docker/test profile, Expo, export, migration, and deployment checks are rerun and current evidence is recorded with exact blockers; final advancement requires separate ChatGPT post-run audit.
-- evidence: CR-20260826-002 records broad host/Docker validation claims, but the same run reports five Docker Node product E2E failures. ChatGPT audit A-20260826-003 independently confirms stale E2E expectations remain in current test source.
-- Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
+- evidence: latest GitHub CI independently passes install/format/lint/checklist/typecheck/tests/migration/import/ruff/pytest/build. Security workflow independently fails at npm high audit. P004 records broad Docker/native export execution evidence.
+- Codex run reference: CR-20260826-004-E2E-CONTRACT-AND-SECURITY-REMEDIATION
 
 ## MR-DEV-001
 
@@ -80,13 +80,13 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 
 - milestone: dependency-modernization
 - title: Resolve remaining high and moderate dependency advisories with regression coverage
-- status: REVIEW
-- priority: P1
-- dependencies: MR-AUDIT-001; compatible Next/Expo upgrade plan; native regression environment
-- source: docs/RELEASE_SECURITY_REVIEW.md; docs/CLOSED_BETA_FINAL_SECURITY_REVIEW.md; active H!veAI audit trail
-- acceptance criteria: establish one authoritative current npm audit baseline; then apply compatible dependency updates without force-breaking the Expo/Next graph, make the high audit gate pass, and rerun affected web/native/build checks; final result is separately audited.
-- evidence: CR-20260826-002 reports 24 vulnerabilities (10 moderate, 14 high), but ChatGPT audit A-20260826-003 classifies that exact count as an unverified local execution claim until independently corroborated; no force remediation is authorized.
-- Codex run reference: CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION
+- status: READY
+- priority: P0
+- dependencies: MR-AUDIT-001
+- source: .hiveai/prompts/P-20260826-005-DEPENDENCY-MAJOR-MODERNIZATION.md; .hiveai/audits/A-20260826-004-CHATGPT-POSTRUN-AUDIT.md
+- acceptance criteria: establish one authoritative current npm audit baseline; apply supported dependency upgrades without weakening the security workflow; achieve zero high/critical npm advisories so `npm audit --audit-level=high` and GitHub Security pass; run Python pip-audit; rerun full web/mobile/backend/Docker regression; final result is separately audited.
+- evidence: P004 safely reduced the previous dependency baseline, including Next 15.5.24 and patched transitive packages. GitHub Actions independently confirms the current baseline is 20 vulnerabilities: 11 moderate, 9 high, 0 critical. Remaining high chains are centered on Expo/Metro/image-size and PostCSS/Next, with automatic audit suggestions requiring breaking parent upgrades. P005 explicitly authorizes a controlled supported major modernization rather than suppression.
+- Codex run reference: CR-20260826-004-E2E-CONTRACT-AND-SECURITY-REMEDIATION
 
 ## MR-DEPLOY-001
 
