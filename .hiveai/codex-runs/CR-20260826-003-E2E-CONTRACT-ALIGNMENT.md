@@ -168,7 +168,8 @@ performed in this prompt.
 
 ## Commit and next action
 
-- Final commit SHA: to be recorded after committing this run log and the two test changes.
+- Implementation commit SHA: `7b48e30`.
+- The matching run-log metadata is committed immediately after the implementation commit.
 - Next required action: ChatGPT audit layer must independently inspect this CR and write the
   authoritative post-run audit under the audit-layer path. Do not mark merge readiness DONE from
   this Codex run.
