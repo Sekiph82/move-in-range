@@ -113,11 +113,15 @@ test run --rm tests`, Postgres Alembic head query, and service logs.
 ## 7. GitHub Actions
 
 - Previous implementation SHA `ef798d0`: CI success and Security success.
-- Final implementation SHA `fd3150c`: CI run `32999916044` and Security run
-  `32999916064` were queued/in progress when this log was first written.
-- Final workflow status will be appended after both runs complete. The
-  Security workflow must remain green for MR-SEC-001 to be considered
-  satisfied.
+- Final implementation SHA `fd3150c`: CI run `32999916044` success and
+  Security run `32999916064` success.
+- Final CR commit SHA `373da67`: CI run `33000061437` success and Security run
+  `33000061447` success. Both ran the committed dependency graph and the
+  Security workflow completed `npm audit --audit-level=high`, secret checks,
+  and `pip-audit` successfully.
+- GitHub Actions therefore confirms zero high/critical npm advisories for this
+  graph. The remaining moderate advisory family is recorded above; MR-SEC-001
+  remains for the ChatGPT audit layer to adjudicate.
 
 ## 8. Files changed
 
