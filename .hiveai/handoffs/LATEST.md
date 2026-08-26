@@ -1,33 +1,52 @@
 # Latest Handoff
 
-Run: `CR-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
-Branch: `codex/main-consolidation`
-Starting revision: `c08014027d09f4a7cd4a379e16830e0c23fe32b4`
-Prompt: `P-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
-Audit: `A-20260826-002-INDEPENDENT-AUDIT-DOCKER-VALIDATION`
+Authoritative branch:
+`https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation`
+
+Latest audited Codex run:
+`CR-20260826-005-DEPENDENCY-MAJOR-MODERNIZATION`
+
+Latest authoritative ChatGPT audit:
+`A-20260826-005-CHATGPT-POSTRUN-AUDIT`
+
+Current active prompt:
+`P-20260826-006-FINAL-CONSOLIDATION-READINESS`
 
 ## Current State
 
-- Docker Desktop was started for this run and the Linux engine became ready.
-- Compose config/build/startup passed; Postgres, Redis, Mailpit, API, admin, and product web were healthy.
-- Docker Node suite: `75 tests`, `70 passed`, `5 failed`, `0 skipped`.
-- Docker API pytest: `36 passed`, `0 skipped`; Postgres and Redis integrations executed.
-- Host Node suite: `75 tests`, `65 passed`, `0 failed`, `10 legitimate precondition skips`.
-- Host API pytest: `34 passed`, `2 legitimate precondition skips` for absent host service URLs.
-- Current npm audit baseline: `24 vulnerabilities (10 moderate, 14 high)`.
-- Format, lint, checklist, typecheck, builds, exports, migrations, security scan, and Expo Doctor passed.
-- API Uvicorn access logging was disabled in the image so sensitive one-time query values are not emitted in routine access logs.
-- Compose containers were cleaned after evidence capture and Docker Desktop was stopped because this run started it.
+- GitHub CI is green on `codex/main-consolidation` after the Expo 57 / React Native 0.86 / Next 16 modernization.
+- GitHub Security is green.
+- `npm audit --audit-level=high` passes with zero high/critical npm advisories.
+- GitHub Security also completes repository security scanning and Python `pip-audit` successfully.
+- Remaining npm advisories are moderate-only and tied to Expo tooling/uuid in the currently recorded graph.
+- Mobile dependency line is Expo 57 / React Native 0.86 / React 19.2.
+- Admin dependency line is Next 16 / React 19.2.
+- Current E2E source reflects the seven-step onboarding contract and mandatory readiness-first workout flow.
+- P005 execution evidence reports Docker Node 75/75 pass, Docker API 36/36 pass, one Alembic head, Expo Doctor green, and iOS/Android exports green.
+- ChatGPT independently corroborated GitHub CI/Security and committed dependency state; local Docker/native runtime claims remain execution evidence unless independently reproducible through GitHub-hosted evidence.
 
-## Blockers
+## Source-of-truth rule
 
-- Five Docker product E2E failures are stale contract mismatches: the current onboarding flow is seven steps, readiness uses current labels, and workout start is readiness-gated.
-- The npm high-severity audit gate remains blocked by 14 high advisories and 10 moderate advisories. No force upgrade was applied.
-- Native device, real provider, and public deployment validation remain unverified.
+The authoritative project-control state is GitHub branch `codex/main-consolidation`.
 
-## Next Actions
+ChatGPT writes prompts here:
+`https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation/.hiveai/prompts`
 
-1. Resolve or formally update the five product E2E contracts after confirming the canonical product flow.
-2. Plan a compatible dependency modernization change and rerun all affected gates.
-3. Complete native/provider/deployment acceptance separately.
-4. Open a consolidation PR only after the blocked validation gates are green; do not merge or clean up stacked PRs in this run.
+ChatGPT writes authoritative audits here:
+`https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation/.hiveai/audits`
+
+Codex writes and pushes execution logs here:
+`https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation/.hiveai/codex-runs`
+
+Canonical task tracker:
+`https://github.com/Sekiph82/move-in-range/blob/codex/main-consolidation/TASKS.md`
+
+Codex must read the GitHub control plane first. Local `.hiveai` files are only a checkout/mirror and must not override newer GitHub control state.
+
+## Remaining Work
+
+1. Execute P006 final consolidation-readiness validation from the GitHub-authored prompt.
+2. Reconfirm branch ancestry, CI, Security, migration lineage, Docker, Expo Doctor, exports, and product/safety invariants.
+3. If all automated gates are green, open or update exactly one reviewable PR from `codex/main-consolidation` to `main`; do not merge it.
+4. Keep historical stacked PRs and branches intact until consolidation is merged and separately post-merge verified.
+5. Native physical-device/provider/public-deployment acceptance remains separate work and must not be falsely claimed by the consolidation audit.
