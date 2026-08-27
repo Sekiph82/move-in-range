@@ -40,6 +40,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: npm ci
+      - name: Expo Doctor
+        working-directory: apps/mobile
+        run: npx expo-doctor
+      - name: Expo dependency check
+        working-directory: apps/mobile
+        run: npx expo install --check
       - run: npm run format:check
       - run: npm run lint
       - run: npm run checklist:check
