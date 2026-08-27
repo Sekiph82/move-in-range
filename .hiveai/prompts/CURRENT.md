@@ -3,17 +3,17 @@
 Authoritative repository branch:
 `https://github.com/Sekiph82/move-in-range/tree/main`
 
-Active prompt:
-`P-20260827-010-EXPO-CI-COMPATIBILITY-GATE`
+Active prompt after this control-plane PR is merged:
+`P-20260827-011-POST-CONSOLIDATION-CLEANUP`
 
 Active prompt URL:
-`https://github.com/Sekiph82/move-in-range/blob/main/.hiveai/prompts/P-20260827-010-EXPO-CI-COMPATIBILITY-GATE.md`
+`https://github.com/Sekiph82/move-in-range/blob/main/.hiveai/prompts/P-20260827-011-POST-CONSOLIDATION-CLEANUP.md`
 
 Prompt history directory:
 `https://github.com/Sekiph82/move-in-range/tree/main/.hiveai/prompts`
 
 Expected Codex run log:
-`CR-20260827-010-EXPO-CI-COMPATIBILITY-GATE.md`
+`CR-20260827-011-POST-CONSOLIDATION-CLEANUP.md`
 
 Codex run destination:
 `https://github.com/Sekiph82/move-in-range/tree/main/.hiveai/codex-runs`
@@ -21,4 +21,4 @@ Codex run destination:
 Authoritative ChatGPT post-run audit destination:
 `https://github.com/Sekiph82/move-in-range/tree/main/.hiveai/audits`
 
-Scope: add GitHub-hosted Expo Doctor and Expo dependency-check gates to CI, then remove the current unprotected-main warning by configuring real GitHub `main` branch protection. Required end state: PR-based updates, strict required CI + Security checks, zero required human approvals for routine fully-green automation, force pushes disabled, branch deletion disabled, and GitHub reporting `main` as protected. Do not change product behavior or perform historical branch/PR cleanup.
+Scope: safety-first retirement of obsolete historical stacked PRs and branches now that consolidation, Expo CI compatibility gates, and core main branch protection are verified. No product behavior changes. Protected-main workflow remains mandatory.
