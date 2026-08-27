@@ -1,13 +1,16 @@
 # Latest Handoff
 
-Authoritative branch after consolidation:
+Authoritative branch:
 `https://github.com/Sekiph82/move-in-range/tree/main`
 
 Latest Codex run:
 `CR-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY`
 
 Latest authoritative ChatGPT audit:
-`A-20260827-007-PR13-HUMAN-MERGE-HANDOFF`
+`A-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY`
+
+Current active prompt:
+`P-20260827-009-EXPO57-PATCH-ALIGNMENT`
 
 Merged PR:
 `https://github.com/Sekiph82/move-in-range/pull/13`
@@ -17,31 +20,31 @@ Merge commit:
 
 ## Current State
 
-- PR #13 is merged into `main` by a normal merge commit; `codex/main-consolidation` remains intact.
-- GitHub main CI and Security passed on the merge commit.
-- Local host validation passed; Docker Compose services reached healthy state.
-- Docker test profile passed all 75 Node/Playwright tests and all 36 API tests, including PostgreSQL and Redis integration coverage.
-- Zero high/critical npm advisories remain; the Expo tooling/uuid advisory family is moderate-only residual technical debt.
-- Expo Doctor reported 20/21 checks passed because installed Expo/RN packages are one patch behind the expected SDK versions; iOS and Android exports passed.
+- PR #13 is independently verified merged into `main`; consolidation history is preserved.
+- GitHub CI and Security passed on the merge commit and again on the subsequent P008 CR/control-plane commit.
+- `main` is now the authoritative control-plane branch.
+- High/critical npm security gates remain green; the Expo tooling/uuid advisory family remains moderate-only residual technical debt.
+- P008 records successful host/Docker/live-E2E/API/iOS/Android execution evidence, but ChatGPT does not relabel local runtime claims as independently reproduced proof.
+- One bounded post-merge validation defect is confirmed from P008: Expo Doctor reports `20/21`, caused by patch-level Expo SDK 57 / React Native dependency drift.
+- Current GitHub mobile source still declares Expo `~57.0.16`, React Native `0.86.2`, React/React DOM `19.2.3`, and the older SDK-57 patch package set.
+- P009 is dedicated to supported patch alignment and requires Expo Doctor `21/21` before completion.
+- Historical stacked PRs/branches remain untouched. Do not clean them up before P009 is completed and separately audited.
 - Physical Android/iPhone acceptance and real provider/public-deployment acceptance remain separate external tasks.
-- Historical stacked PRs/branches remain untouched; cleanup is a separate future task.
 
 ## Source-of-truth rule
 
-The authoritative project-control state is now GitHub branch `main`:
-`https://github.com/Sekiph82/move-in-range/tree/main`
+ChatGPT prompts:
+`https://github.com/Sekiph82/move-in-range/tree/main/.hiveai/prompts`
 
-ChatGPT writes authoritative audits here:
+ChatGPT authoritative audits:
 `https://github.com/Sekiph82/move-in-range/tree/main/.hiveai/audits`
 
-Codex writes execution logs here:
+Codex execution logs:
 `https://github.com/Sekiph82/move-in-range/tree/main/.hiveai/codex-runs`
 
 Canonical task tracker:
 `https://github.com/Sekiph82/move-in-range/blob/main/TASKS.md`
 
-## Remaining Work
+## Next Action
 
-1. ChatGPT must independently audit CR-20260827-008 and the merged main state.
-2. Native physical-device and real deployment/provider acceptance remain separate tasks.
-3. Historical PR/branch cleanup may be considered only by a separately authorized future prompt.
+Execute `P-20260827-009-EXPO57-PATCH-ALIGNMENT` from GitHub main, align only the supported Expo SDK 57 patch graph, obtain Expo Doctor `21/21`, rerun required regression/security/Docker/export gates, and push the matching CR log to main. Historical cleanup remains prohibited until the next ChatGPT audit.
