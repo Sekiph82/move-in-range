@@ -156,7 +156,13 @@ PR #15: https://github.com/Sekiph82/move-in-range/pull/15
 - Exact-head CI PR run: https://github.com/Sekiph82/move-in-range/actions/runs/33056070117, success; `validate` passed and visibly included successful `Expo Doctor` and `Expo dependency check` steps.
 - Exact-head Security PR run: https://github.com/Sekiph82/move-in-range/actions/runs/33056070124, success; `security` passed.
 - Duplicate push-triggered runs were also successful: CI `33056060017`, Security `33056060029`.
-- This protected PR contains the matching CR file and final task evidence/status updates; merge result is recorded in the final report after GitHub completes the protected merge.
+- PR #15 merged through the protected path with merge commit `af7d42c920510bab3dbb467730cd9d6453fdb347`.
+
+Post-merge main evidence for `af7d42c920510bab3dbb467730cd9d6453fdb347`:
+
+- CI run https://github.com/Sekiph82/move-in-range/actions/runs/33056546199: success; `validate` passed all steps, including `Expo Doctor` and `Expo dependency check`.
+- Security run https://github.com/Sekiph82/move-in-range/actions/runs/33056546168: success; `security` passed.
+- Main check-run contexts remained exactly `validate` and `security`.
 
 ## Task/control-plane updates
 
@@ -172,4 +178,4 @@ PR #15: https://github.com/Sekiph82/move-in-range/pull/15
 
 ## Next audit action
 
-ChatGPT should independently audit PR #14, protected evidence PR #15, the exact main protection API response, and the resulting main CI/Security run after the evidence PR merge. The remaining host-only skips and stale local SQLite failures should remain classified as environment evidence, not silently promoted to product failures.
+ChatGPT should independently audit PR #14, protected evidence PR #15, the exact main protection API response, and the resulting main CI/Security runs. The remaining host-only skips and stale local SQLite failures should remain classified as environment evidence, not silently promoted to product failures.
