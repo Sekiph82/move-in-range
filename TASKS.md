@@ -88,6 +88,30 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - evidence: Expo-supported patch alignment updated the mobile manifest and root lockfile. Final Expo Doctor reports 21/21 checks passed; host Node/API/build/security gates, iOS/Android exports, Docker health checks, Docker Node 75/75 with 0 skips, and Docker API 36/36 passed. The moderate-only Expo/uuid advisory family remains documented and no force downgrade was applied.
 - Codex run reference: CR-20260827-009-EXPO57-PATCH-ALIGNMENT
 
+## MR-CI-EXPO-001
+
+- milestone: expo-ci-compatibility
+- title: Enforce Expo compatibility checks in GitHub CI
+- status: IN_PROGRESS
+- priority: P0
+- dependencies: MR-EXPO-001; MR-SEC-001
+- source: .hiveai/prompts/P-20260827-010-EXPO-CI-COMPATIBILITY-GATE.md; .hiveai/audits/A-20260827-009-EXPO57-PATCH-ALIGNMENT.md
+- acceptance criteria: GitHub-hosted CI directly executes Expo Doctor and Expo dependency compatibility checks from apps/mobile as real failing gates on relevant pushes and pull requests; both checks visibly pass on the exact final main run without weakening existing CI or Security gates.
+- evidence: implementation and exact final-main evidence are pending in CR-20260827-010-EXPO-CI-COMPATIBILITY-GATE.
+- Codex run reference: CR-20260827-010-EXPO-CI-COMPATIBILITY-GATE
+
+## MR-BRANCH-001
+
+- milestone: repository-governance
+- title: Protect main with pull-request and required CI/Security gates
+- status: IN_PROGRESS
+- priority: P0
+- dependencies: MR-CI-EXPO-001
+- source: .hiveai/prompts/P-20260827-010-EXPO-CI-COMPATIBILITY-GATE.md; .hiveai/audits/A-20260827-009-EXPO57-PATCH-ALIGNMENT.md
+- acceptance criteria: GitHub reports main protected with pull requests required, exact CI and Security contexts required with strict up-to-date enforcement, no unnecessary approving-review requirement, force pushes disabled, and branch deletion disabled; the resulting settings are independently re-fetched and recorded.
+- evidence: initial GitHub API state is unprotected; protection implementation and final verification are pending in CR-20260827-010-EXPO-CI-COMPATIBILITY-GATE.
+- Codex run reference: CR-20260827-010-EXPO-CI-COMPATIBILITY-GATE
+
 ## MR-DEV-001
 
 - milestone: beta-validation
