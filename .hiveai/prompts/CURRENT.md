@@ -21,4 +21,4 @@ Codex run destination:
 Authoritative ChatGPT post-run audit destination:
 `https://github.com/Sekiph82/move-in-range/tree/main/.hiveai/audits`
 
-Scope: add GitHub-hosted Expo Doctor and Expo dependency-check gates to CI so Expo SDK compatibility is independently verifiable from GitHub Actions. Do not change product behavior or perform historical branch/PR cleanup.
+Scope: add GitHub-hosted Expo Doctor and Expo dependency-check gates to CI, then remove the current unprotected-main warning by configuring real GitHub `main` branch protection. Required end state: PR-based updates, strict required CI + Security checks, zero required human approvals for routine fully-green automation, force pushes disabled, branch deletion disabled, and GitHub reporting `main` as protected. Do not change product behavior or perform historical branch/PR cleanup.
