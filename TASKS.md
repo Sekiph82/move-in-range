@@ -76,6 +76,18 @@ Status values: BACKLOG, READY, IN_PROGRESS, BLOCKED, REVIEW, DONE, CANCELLED.
 - evidence: PR #13 was rechecked at exact head 0b4349fd34d01bf72fb37935e2509f40eaa719af with green exact-head CI/Security gates, then merged by normal merge commit d18ce2a06d7dda83f6df7c03fedba119b3e61a88. GitHub main CI/Security and the post-merge host/Docker validation in CR-20260827-008 are green; no historical cleanup was performed.
 - Codex run reference: CR-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY
 
+## MR-EXPO-001
+
+- milestone: expo57-patch-alignment
+- title: Align Expo SDK 57 and React Native dependencies with the supported patch graph
+- status: DONE
+- priority: P0
+- dependencies: MR-MERGE-001; MR-SEC-001
+- source: .hiveai/prompts/P-20260827-009-EXPO57-PATCH-ALIGNMENT.md; .hiveai/audits/A-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY.md
+- acceptance criteria: direct Expo SDK 57 and React Native patch dependencies match Expo compatibility tooling; Expo Doctor reports 21/21 checks passed; host and Docker test/build/security/export/migration gates are rerun without changing product behavior; final result is recorded in the matching Codex run and separately audited by ChatGPT.
+- evidence: Expo-supported patch alignment updated the mobile manifest and root lockfile. Final Expo Doctor reports 21/21 checks passed; host Node/API/build/security gates, iOS/Android exports, Docker health checks, Docker Node 75/75 with 0 skips, and Docker API 36/36 passed. The moderate-only Expo/uuid advisory family remains documented and no force downgrade was applied.
+- Codex run reference: CR-20260827-009-EXPO57-PATCH-ALIGNMENT
+
 ## MR-DEV-001
 
 - milestone: beta-validation
