@@ -4,32 +4,27 @@ Authoritative branch:
 `https://github.com/Sekiph82/move-in-range/tree/main`
 
 Latest Codex run:
-`CR-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY`
+`CR-20260827-009-EXPO57-PATCH-ALIGNMENT`
 
 Latest authoritative ChatGPT audit:
-`A-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY`
+`A-20260827-009-EXPO57-PATCH-ALIGNMENT`
 
 Current active prompt:
-`P-20260827-009-EXPO57-PATCH-ALIGNMENT`
-
-Merged PR:
-`https://github.com/Sekiph82/move-in-range/pull/13`
-
-Merge commit:
-`d18ce2a06d7dda83f6df7c03fedba119b3e61a88`
+`P-20260827-010-EXPO-CI-COMPATIBILITY-GATE`
 
 ## Current State
 
-- PR #13 is independently verified merged into `main`; consolidation history is preserved.
-- GitHub CI and Security passed on the merge commit and again on the subsequent P008 CR/control-plane commit.
-- `main` is now the authoritative control-plane branch.
+- `main` is the authoritative control-plane branch.
+- PR #13 remains merged and consolidation is complete.
+- P009 corrected the bounded Expo SDK 57 / React Native patch drift.
+- Commit `799cbb470a1b37e7421bd07bc51a67b0b7a45e9e` contains the verified dependency alignment and GitHub CI/Security both pass on that exact commit.
+- Current mobile manifest is on Expo `~57.0.17`, React Native `0.86.3`, React/React DOM `19.2.3`, and aligned Expo 57 patch packages.
+- Codex reports Expo Doctor `21/21`, Expo dependency check clean, Docker Node 75/75, Docker API 36/36, and iOS/Android exports passing.
+- ChatGPT independently verified the committed patch graph and exact-commit GitHub CI/Security, but GitHub CI does not currently execute Expo Doctor or `expo install --check`, so those two compatibility claims remain local execution evidence.
+- P010 closes that control-plane evidence gap by making GitHub CI directly enforce both Expo checks.
 - High/critical npm security gates remain green; the Expo tooling/uuid advisory family remains moderate-only residual technical debt.
-- P008 records successful host/Docker/live-E2E/API/iOS/Android execution evidence, but ChatGPT does not relabel local runtime claims as independently reproduced proof.
-- One bounded post-merge validation defect is confirmed from P008: Expo Doctor reports `20/21`, caused by patch-level Expo SDK 57 / React Native dependency drift.
-- Current GitHub mobile source still declares Expo `~57.0.16`, React Native `0.86.2`, React/React DOM `19.2.3`, and the older SDK-57 patch package set.
-- P009 is dedicated to supported patch alignment and requires Expo Doctor `21/21` before completion.
-- Historical stacked PRs/branches remain untouched. Do not clean them up before P009 is completed and separately audited.
 - Physical Android/iPhone acceptance and real provider/public-deployment acceptance remain separate external tasks.
+- Historical stacked PRs/branches remain untouched; cleanup remains separate.
 
 ## Source-of-truth rule
 
@@ -47,4 +42,4 @@ Canonical task tracker:
 
 ## Next Action
 
-Execute `P-20260827-009-EXPO57-PATCH-ALIGNMENT` from GitHub main, align only the supported Expo SDK 57 patch graph, obtain Expo Doctor `21/21`, rerun required regression/security/Docker/export gates, and push the matching CR log to main. Historical cleanup remains prohibited until the next ChatGPT audit.
+Execute `P-20260827-010-EXPO-CI-COMPATIBILITY-GATE` from GitHub `main`, add non-optional Expo Doctor and Expo dependency-check steps to GitHub CI, obtain exact-final-commit green CI/Security with both Expo steps visibly passing, and push the matching CR log. Do not perform historical cleanup in this run.
