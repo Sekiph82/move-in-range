@@ -1,32 +1,31 @@
 # Current Audit Pointer
 
-Authoritative repository branch before merge:
-`https://github.com/Sekiph82/move-in-range/tree/codex/main-consolidation`
+Authoritative repository branch:
+`https://github.com/Sekiph82/move-in-range/tree/main`
 
 Active authoritative audit:
-`A-20260827-007-PR13-HUMAN-MERGE-HANDOFF`
+`A-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY`
 
 Source:
-`https://github.com/Sekiph82/move-in-range/blob/codex/main-consolidation/.hiveai/audits/A-20260827-007-PR13-HUMAN-MERGE-HANDOFF.md`
+`https://github.com/Sekiph82/move-in-range/blob/main/.hiveai/audits/A-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY.md`
 
 Audited Codex run:
-`https://github.com/Sekiph82/move-in-range/blob/codex/main-consolidation/.hiveai/codex-runs/CR-20260827-007-PR13-HUMAN-MERGE-HANDOFF.md`
-
-Target PR:
-`https://github.com/Sekiph82/move-in-range/pull/13`
+`https://github.com/Sekiph82/move-in-range/blob/main/.hiveai/codex-runs/CR-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY.md`
 
 Current authoritative state:
 
-- P007 is accepted as a valid pre-merge handoff record;
-- PR #13 remains OPEN, non-draft, unmerged, and mergeable at the time of the audit;
-- the PR head has advanced after P007 because of control-plane-only commits, so P007 exact-head checks are historical rather than final merge proof;
-- the maintainer has explicitly authorized direct merge without additional human review if the final exact-head required gates are green;
-- `.hiveai/prompts/CURRENT.md` points to `P-20260827-008-PR13-MERGE-AND-POSTMERGE-VERIFY`;
-- P008 must re-check the final exact PR head and GitHub CI/Security before merging;
-- if those gates remain green, Codex is authorized to merge PR #13, switch authority to `main`, and perform post-merge verification;
-- historical PR/branch cleanup remains prohibited until after successful merge and separate ChatGPT post-merge audit.
+- PR #13 is independently verified MERGED into `main` by merge commit `d18ce2a06d7dda83f6df7c03fedba119b3e61a88`;
+- GitHub CI and Security are independently green on the merge commit;
+- the current `main` control-plane/log commit is also green in GitHub CI and Security;
+- `MR-MERGE-001` is accepted as DONE;
+- the consolidation itself is valid and `main` is now authoritative;
+- P008 local Docker/test/export claims remain Codex execution evidence unless independently reproduced by ChatGPT;
+- P008 disclosed a real post-merge validation discrepancy: Expo Doctor is `20/21`, not fully green;
+- current mobile package declarations independently confirm patch-level Expo SDK 57 / React Native drift, including React Native `0.86.2` where Expo Doctor expects the current supported patch line;
+- historical PR/branch cleanup must wait until the Expo 57 patch-alignment follow-up is completed and separately audited;
+- next active prompt is `P-20260827-009-EXPO57-PATCH-ALIGNMENT`.
 
 Audit verdict:
-`VERIFIED_READY_FOR_AUTHORIZED_MERGE_EXECUTION`
+`MERGE_VERIFIED_WITH_POSTMERGE_EXPO_ALIGNMENT_REQUIRED`
 
 Historical audits remain append-only.
